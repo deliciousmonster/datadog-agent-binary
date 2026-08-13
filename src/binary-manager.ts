@@ -68,25 +68,27 @@ export class BinaryManager {
 		// pinned build never creates — and issued a network call on every cache miss.
 		// Observed: the pin was 7.79.1 while the error cited build/7.82.1-macos-arm64.
 		const targetVersion = version ?? (await this.resolvePinnedVersion());
-		const binaryPath = this.getLocalBuildPath(
+		const candidates = this.getLocalBuildPaths(
 			platform,
 			descriptor,
 			targetVersion
 		);
 
-		if (await this.binaryExists(binaryPath)) {
-			logger.info(
-				`Using locally built Datadog ${kind} agent binary: ${binaryPath}`
-			);
-			return binaryPath;
+		for (const candidate of candidates) {
+			if (await this.binaryExists(candidate)) {
+				logger.info(
+					`Using locally built Datadog ${kind} agent binary: ${candidate}`
+				);
+				return candidate;
+			}
 		}
 
 		throw new Error(
 			`Datadog ${kind} agent binary (${descriptor.outputName}) not found for ` +
 				`${platform.getName()}. Checked the optional platform package ` +
 				`${platformPackageName(platform.getName())} (via its ` +
-				`${descriptor.accessorName}() accessor) and the local build path ` +
-				`${binaryPath}; neither resolved a runnable binary.`
+				`${descriptor.accessorName}() accessor) and these local build paths: ` +
+				`${candidates.join(", ")}. None resolved a runnable binary.`
 		);
 	}
 
@@ -180,16 +182,36 @@ export class BinaryManager {
 	}
 
 	/** Where the build-from-source workflow leaves this binary. */
-	private getLocalBuildPath(
+	/**
+	 * Candidate locations for a locally built binary, most likely first.
+	 *
+	 * The first entry is the layout the build actually produces: `cli.ts` passes
+	 * `<output>/<platform>/bin` as the builder's outputDir, and
+	 * `create-platform-packages.js` reads `build/<platform>/bin/<name>` when it
+	 * assembles a package. The resolver used to look ONLY at
+	 * `build/<version>-<platform>/<name>`, a layout nothing has ever written, so the
+	 * build-from-source fallback could never succeed — it reported a path that would
+	 * not have existed even after a successful build. The second entry preserves that
+	 * old layout so a tree built by an older version still resolves.
+	 */
+	private getLocalBuildPaths(
 		platform: Platform,
 		descriptor: AgentBinaryDescriptor,
 		version: string
-	): string {
-		return path.join(
-			this.buildDir,
-			`${version}-${platform.getName()}`,
-			descriptor.outputName
-		);
+	): string[] {
+		return [
+			path.join(
+				this.buildDir,
+				platform.getName(),
+				"bin",
+				descriptor.outputName
+			),
+			path.join(
+				this.buildDir,
+				`${version}-${platform.getName()}`,
+				descriptor.outputName
+			),
+		];
 	}
 
 	private async binaryExists(binaryPath: string): Promise<boolean> {

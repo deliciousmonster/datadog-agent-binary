@@ -5,7 +5,7 @@
 	"type": "module",
 	"description": "Minimal Harper v5 component that emits logs and traces and runs the Datadog core agent and trace-agent as one-per-node singletons.",
 	"dependencies": {
-		"@deliciousmonster/datadog-agent-binary": "^7.75.5",
+		"@deliciousmonster/datadog-agent-binary": "file:..",
 		"dd-trace": "^6.10.0"
 	},
 	"engines": {
