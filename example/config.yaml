@@ -1,15 +1,14 @@
 # Harper component config for the Datadog example application.
 #
-# A component config.yaml replaces Harper's component defaults rather than merging with
-# them, so everything this app needs is declared here.
+# A component config.yaml replaces Harper's component defaults rather than merging with them,
+# so everything this app needs is declared here.
 #
-# `jsResource` is what makes resources.js the component entry, and that matters beyond
-# routing: Harper's application loader compiles the entry and everything it reaches by a
-# relative import, which is what gives dd-supervisor.js the constrained child_process
-# (allowlist + mandatory spawn name + PID-file singleton). A supervisor loaded any other
-# way gets the unconstrained builtin and starts one agent per worker thread.
+# `jsResource` makes resources.js the component entry, which matters beyond routing: Harper's
+# application loader compiles the entry and everything it reaches by a relative import, and
+# that is what gives dd-supervisor.js the constrained child_process (allowlist, mandatory
+# spawn name, PID-file singleton). A supervisor loaded any other way gets the unconstrained
+# builtin and starts one agent per worker thread.
 
-# Generate REST endpoints for every Resource class exported by the files below.
 rest: true
 
 jsResource:

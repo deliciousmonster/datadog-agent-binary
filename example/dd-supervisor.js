@@ -2,31 +2,21 @@
  * Starts the Datadog core agent and the trace-agent as one-process-per-node singletons
  * from inside a Harper v5 component.
  *
- * WHY THIS FILE IS IMPORTED RELATIVELY FROM resources.js
- * ------------------------------------------------------
- * Harper only substitutes its constrained `child_process` for modules its own loader
- * compiles. `security/jsLoader.ts::shouldUseApplicationLoader()` decides that:
+ * resources.js must reach this file by a RELATIVE import. Harper substitutes its constrained
+ * `child_process` only for modules its own loader compiles, and
+ * `shouldUseApplicationLoader()` (security/jsLoader.ts) takes a relative specifier
+ * unconditionally but takes an npm dependency only when that package depends on `harper`. A
+ * supervisor published as an ordinary package gets the real `child_process`: no allowlist, no
+ * mandatory `name`, no PID-file lock. It starts one agent per worker thread and looks like it
+ * worked.
  *
- *     if (specifier.startsWith('.')) return true;           // relative -> always Harper's loader
- *     ...
- *     if (resolvedUrl.includes('/node_modules/'))
- *         return packageDependsOnHarper(resolvedUrl);       // npm dep -> only if it needs Harper
- *     return false;
+ * The import must also stay ESM. Harper's `cjsRequire` forwards anything that is not a
+ * `file:` URL to the real `require` without consulting `REPLACED_BUILTIN_MODULES`, so
+ * `require("node:child_process")` in an app module gets the unconstrained builtin; only the
+ * ESM path runs `checkAllowedModulePath()`.
  *
- * So a supervisor published as an npm package that does not itself depend on `harper` is
- * loaded natively and receives the REAL `child_process`: no allowlist, no mandatory `name`,
- * and critically NO PID-file lock. It would start one agent per worker thread and look like
- * it worked. Reaching this module by a relative specifier from the component's own entry is
- * what keeps the singleton real.
- *
- * The import below must also stay ESM. Harper's CJS shim (`cjsRequire` in jsLoader) forwards
- * anything that is not a `file:` URL straight to the real `require`, without consulting
- * `REPLACED_BUILTIN_MODULES`, so `require("node:child_process")` inside an app module gets
- * the unconstrained builtin. Only the ESM path runs `checkAllowedModulePath()`, which is what
- * returns the constrained module.
- *
- * `assertSpawnInterception()` below turns both of those from assumptions into a startup check,
- * because every failure mode here is silent by default.
+ * `assertSpawnInterception()` turns both assumptions into a startup check, because every
+ * failure mode here is silent by default.
  */
 
 import { spawn } from "node:child_process";
@@ -41,38 +31,30 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-// Resolves the binaries the platform package installed. This is a bare specifier, so Harper
-// loads it natively -- fine, because nothing here spawns anything. The spawn stays in this
-// file, which Harper does instrument.
+// Bare specifier, so Harper loads this natively. Fine: nothing in it spawns. The spawn stays
+// in this file, which Harper does instrument.
 import { BinaryManager } from "@deliciousmonster/datadog-agent-binary";
 
 /**
- * `logger` is a Harper component global: jsLoader seeds every application compartment with it
- * (`getGlobalObject()`), and its entries are written to hdb.log prefixed with an ISO-8601
- * timestamp, which is exactly what the multi_line rule in conf.d keys off. Outside Harper the
- * global does not exist, so fall back to console rather than throwing a ReferenceError -- this
- * module has to survive being loaded natively long enough to report that it was.
+ * Harper seeds every application compartment with `logger`; entries land in hdb.log prefixed
+ * with an ISO-8601 timestamp, which is what the multi_line rule in conf.d keys off. Outside
+ * Harper the global is absent, and this module has to survive a native load long enough to
+ * report that it was loaded natively.
  */
 const log = typeof logger === "undefined" ? console : logger;
 
 /** Default APM receiver port. dd-trace dials the same one with no configuration. */
 const RECEIVER_PORT = Number(process.env.DD_APM_RECEIVER_PORT || 8126);
 
-/**
- * A command that cannot exist on any machine and cannot plausibly appear in an operator's
- * `applications.allowedSpawnCommands`. Used only to observe which `spawn` we are holding.
- */
+/** A command no machine has and no operator would allowlist. Only used to probe `spawn`. */
 const PROBE_COMMAND = "harper-datadog-spawn-probe-must-not-exist";
 
 /**
- * The two processes, and everything that differs between them.
- *
  * `name` is load-bearing twice over: Harper rejects a spawn without it, and it is the PID
- * lock filename (`<rootPath>/pids/<name>.pid`, taken with `openSync(..., "wx")`). Because the
- * lock is a file rather than in-process state it dedupes across worker threads AND across
- * processes sharing a root path, which is the definition of "one per node". Two distinct
- * names mean two independent locks, so the core agent and the trace-agent are each a
- * singleton without either one blocking the other.
+ * lock filename (`<rootPath>/pids/<name>.pid`, taken with `openSync(..., "wx")`). A file lock
+ * dedupes across worker threads and across processes sharing a root path, which is what "one
+ * per node" means. Two names mean two independent locks, so each agent is a singleton without
+ * blocking the other.
  */
 const AGENTS = [
 	{
@@ -80,12 +62,10 @@ const AGENTS = [
 		name: "datadog-trace-agent",
 		title: "trace-agent",
 		resolve: (manager) => manager.ensureTraceAgentBinary(),
-		// The trace-agent's `-c`/`--config` is a FILE path. Its help text reads "path to
-		// directory containing datadog.yaml", but that text is stale: upstream's
-		// `defaultConfigPath` is `<install>/etc/datadog.yaml` on Unix and
-		// `c:\programdata\datadog\datadog.yaml` on Windows (cmd/trace-agent/command).
-		// Handing it the directory the core agent wants is the easiest way to get a
-		// "unable to load Datadog config file" death that reads like a missing file.
+		// The trace-agent's `-c` is a FILE. Its help text says "path to directory containing
+		// datadog.yaml", but that text is stale: upstream's `defaultConfigPath` is
+		// `<install>/etc/datadog.yaml` (cmd/trace-agent/command). Handing it the directory
+		// the core agent wants dies with "unable to load Datadog config file".
 		args: (paths) => ["run", "-c", paths.configFile],
 	},
 	{
@@ -93,9 +73,8 @@ const AGENTS = [
 		name: "datadog-agent",
 		title: "core agent",
 		resolve: (manager) => manager.ensureBinary("core"),
-		// The core agent's `-c`/`--cfgpath` really is a DIRECTORY: verified against the
-		// shipped binary, `datadog-agent run --help` -> "path to directory containing
-		// datadog.yaml". The two binaries genuinely disagree about this flag.
+		// The core agent's `-c`/`--cfgpath` really is a DIRECTORY, verified against the
+		// shipped binary's `run --help`. The two binaries disagree about this flag.
 		args: (paths) => ["run", "-c", paths.runtimeDir],
 	},
 ];
@@ -103,16 +82,13 @@ const AGENTS = [
 /**
  * Prove that the `spawn` bound at the top of this file is Harper's, not Node's.
  *
- * Harper's `createSpawn` checks the allowlist first, before the `name` gate, so an
- * unlistable command throws `Command <x> is not allowed` synchronously and creates no PID
- * file and no process. Node's real `spawn` throws nothing here: it returns a ChildProcess
- * with `pid === undefined` and reports ENOENT asynchronously.
- *
- * That difference is the only cheap way to tell the two apart, and getting it wrong is the
- * entire bug class this component exists to demonstrate: without Harper's spawn there is no
- * PID lock, so every worker thread starts its own pair of agents and the second trace-agent
- * onward dies on EADDRINUSE while the first keeps the port. Nothing in that sequence prints
- * an error by default.
+ * Harper's `createSpawn` checks the allowlist before the `name` gate, so an unlistable
+ * command throws `Command <x> is not allowed` synchronously, creating no PID file and no
+ * process. Node's real `spawn` throws nothing here: it returns a ChildProcess with
+ * `pid === undefined` and reports ENOENT asynchronously. That difference is the only cheap
+ * way to tell the two apart, and without Harper's spawn there is no PID lock: every worker
+ * thread starts its own pair, and every trace-agent after the first dies on EADDRINUSE
+ * without printing anything.
  *
  * @returns {{intercepted: boolean, detail: string}}
  */
@@ -130,9 +106,8 @@ export function assertSpawnInterception() {
 			);
 			return { intercepted: true, detail: error.message };
 		}
-		// Some other synchronous throw. Only Harper's wrapper throws synchronously from
-		// spawn() at all, so this still indicates interception, just not via the path
-		// expected. Report it rather than swallowing it.
+		// Only Harper's wrapper throws synchronously from spawn() at all, so any other
+		// synchronous throw still means interception, just not by the expected path.
 		log.warn(
 			`Datadog supervisor: spawn probe threw an unexpected error: ${error.message}. ` +
 				`Treating interception as active, but verify the Harper version.`
@@ -140,11 +115,11 @@ export function assertSpawnInterception() {
 		return { intercepted: true, detail: error.message };
 	}
 
-	// No throw. We are holding Node's real spawn, and the ENOENT for PROBE_COMMAND is still
-	// in flight as an 'error' event. Node promotes an unhandled 'error' on a ChildProcess to
-	// an uncaught exception, which would kill this worker thread, so absorb it.
-	child?.on?.("error", () => {});
-	child?.unref?.();
+	// No throw: this is Node's real spawn, and the ENOENT for PROBE_COMMAND is still in flight
+	// as an 'error' event. Unhandled, it becomes an uncaught exception and kills this worker
+	// thread.
+	child.on("error", () => {});
+	child.unref();
 
 	log.error(
 		`Datadog supervisor: HARPER'S SPAWN INTERCEPTION IS NOT ACTIVE. Spawning ` +
@@ -165,37 +140,35 @@ export function assertSpawnInterception() {
 }
 
 /**
- * Directory that holds datadog.yaml, conf.d, the auth token, the IPC certificate, and the
- * agent log files.
+ * Directory holding datadog.yaml, conf.d, the auth token, the IPC certificate and the agent
+ * logs. Nothing may land in the Datadog defaults: the deploy target runs as a non-root user
+ * (`USER harperdb` on node:24-trixie) where /etc/datadog-agent, /opt/datadog-agent,
+ * /var/log/datadog and /var/run/datadog are unwritable, and the failures are quiet (an
+ * unwritable config directory makes the trace-agent hang 30 seconds, then die creating its
+ * auth token).
  *
- * Nothing may land in the Datadog defaults. The deploy target runs as a non-root user
- * (`USER harperdb` on node:24-trixie), where /etc/datadog-agent, /opt/datadog-agent,
- * /var/log/datadog and /var/run/datadog are all unwritable, and the resulting failures are
- * mostly quiet: an unwritable config directory makes the trace-agent hang for 30 seconds and
- * then die trying to create its auth token.
- *
- * The component directory is deliberately NOT used: `harper deploy` replaces it, which would
- * delete the run directory out from under a live agent.
+ * The component directory is deliberately not used: `harper deploy` replaces it, deleting the
+ * run directory out from under a live agent.
  */
 function resolveRuntimeDir() {
 	if (process.env.DD_HARPER_RUNTIME_DIR)
 		return process.env.DD_HARPER_RUNTIME_DIR;
-	// ROOTPATH is set explicitly by the harper-pro image and points at the mounted volume,
-	// so this keeps the Datadog tree next to Harper's own state and it survives a restart.
+	// ROOTPATH is set by the harper-pro image and points at the mounted volume, so the
+	// Datadog tree sits next to Harper's own state and survives a restart.
 	if (process.env.ROOTPATH) return join(process.env.ROOTPATH, "datadog");
-	// Harper's default root path is recorded in its boot properties file and is not
-	// derivable from here, so fall back to the one directory that is writable in both the
-	// container (HOME=/home/harperdb) and a developer shell.
+	// Harper's default root path is in its boot properties file and is not derivable from
+	// here. Fall back to a directory writable both in the container (HOME=/home/harperdb) and
+	// in a developer shell.
 	return join(homedir(), ".harper-datadog");
 }
 
 /**
  * Path to Harper's own log file, which the Datadog logs source tails.
  *
- * Harper's default root path lives in `~/.harperdb/hdb_boot.properties` and is not readable
- * from a component, so this is never guessed from the home directory: a guessed path that
- * does not exist produces a logs source that silently tails nothing. Either the operator
- * pins it, or ROOTPATH tells us, or log collection is skipped with an explanation.
+ * Never guessed from the home directory: Harper's root path lives in
+ * `~/.harperdb/hdb_boot.properties`, which a component cannot read, and a guessed path that
+ * does not exist produces a logs source that silently tails nothing. The operator pins it,
+ * ROOTPATH supplies it, or log collection is skipped with an explanation.
  */
 function resolveHarperLogPath() {
 	if (process.env.DD_HARPER_LOG_PATH) return process.env.DD_HARPER_LOG_PATH;
@@ -204,17 +177,16 @@ function resolveHarperLogPath() {
 }
 
 /**
- * Numeric fingerprint of everything that should force a replacement of a running agent.
+ * Numeric fingerprint of everything that should force replacement of a running agent.
  *
  * Harper compares this against line 2 of the PID file and, on a mismatch, SIGTERMs the
- * running process and re-acquires the lock. That is the supported way to replace an agent
- * whose binary or configuration changed, instead of adopting a process left over from a
- * previous boot forever -- a real hazard here, because the PID files sit on a persistent
- * volume and survive the container that created them.
+ * running process and re-acquires the lock. Without it, a process left over from a previous
+ * boot is adopted forever, which is a real hazard here: the PID files sit on a persistent
+ * volume and outlive the container that created them.
  *
  * It must be a NUMBER. Harper reads the recorded value with `parseInt()` and compares with
- * `!==`, so a string version never equals its own recorded value: every thread would decide
- * the running agent is stale, kill it, and respawn, forever.
+ * `!==`, so a string version never equals its own recorded value and every thread would kill
+ * and respawn the agent, forever.
  */
 function configVersion(...parts) {
 	// >>> 1 keeps it inside 2^31 so it round-trips through parseInt() unchanged.
@@ -229,37 +201,33 @@ function yamlString(value) {
 }
 
 /**
- * The datadog.yaml both binaries read.
- *
- * It is rewritten on every start, so it is a projection of this file rather than something to
- * hand-edit. Secrets are not written here: DD_API_KEY and DD_SITE are inherited from the
- * spawning process's environment so they never land on disk in the component's runtime tree.
+ * The datadog.yaml both binaries read. Rewritten on every start, so it is a projection of
+ * this file rather than something to hand-edit. DD_API_KEY and DD_SITE are inherited from the
+ * spawning environment instead, so no secret lands in the runtime tree.
  */
 function renderDatadogYaml(paths) {
 	return [
 		"# GENERATED by dd-supervisor.js on every Harper worker start. Edits are overwritten.",
 		"#",
-		"# Every path below is relocated off the Datadog defaults because the deploy target",
-		"# runs as a non-root user, where /etc/datadog-agent, /opt/datadog-agent,",
-		"# /var/log/datadog and /var/run/datadog are all unwritable.",
+		"# Every path is relocated off the Datadog defaults, which are unwritable for the",
+		"# non-root user the deploy target runs as.",
 		"#",
-		"# api_key and site are intentionally absent: they come from DD_API_KEY / DD_SITE in",
-		"# the environment, which keeps the key out of this file.",
+		"# api_key and site are absent by design: they come from DD_API_KEY / DD_SITE in the",
+		"# environment, which keeps the key out of this file.",
 		"",
 		`confd_path: ${yamlString(paths.confd)}`,
 		`run_path: ${yamlString(paths.run)}`,
 		`auth_token_file_path: ${yamlString(paths.authToken)}`,
 		`ipc_cert_file_path: ${yamlString(paths.ipcCert)}`,
 		"",
-		"# File logging is disabled AND both log paths are relocated. Either alone would do if",
-		"# both binaries honoured disable_file_logging identically; doing both means an agent",
-		"# that ignores the flag still writes somewhere it is allowed to write, instead of",
-		"# emitting one permission-denied line per log line into Harper's own log.",
+		"# File logging is off AND both log paths are relocated. The binaries do not honour",
+		"# disable_file_logging identically, so one that ignores it still writes somewhere it",
+		"# may write, instead of one permission-denied line per log line into Harper's log.",
 		"disable_file_logging: true",
 		"log_to_console: true",
 		`log_file: ${yamlString(paths.coreLog)}`,
 		"",
-		"# Log collection is off by default in the agent; the source itself is in conf.d.",
+		"# Off by default in the agent. The source itself is in conf.d.",
 		"logs_enabled: true",
 		"",
 		"# Loopback only. Nothing here should be reachable from outside the container.",
@@ -268,8 +236,7 @@ function renderDatadogYaml(paths) {
 		"apm_config:",
 		"  enabled: true",
 		`  receiver_port: ${RECEIVER_PORT}`,
-		"  # Leave the receiver on the loopback interface. Turning this on would bind 0.0.0.0",
-		"  # and accept spans from anything that can reach the container.",
+		"  # On, this binds 0.0.0.0 and accepts spans from anything that reaches the container.",
 		"  apm_non_local_traffic: false",
 		`  log_file: ${yamlString(paths.traceLog)}`,
 		"",
@@ -277,11 +244,9 @@ function renderDatadogYaml(paths) {
 }
 
 /**
- * Render the shipped logs source into the runtime conf.d.
- *
- * The template lives in the component (reviewable, version-controlled) but its `path` has to
- * be absolute and machine-specific, so it carries placeholders that are substituted here.
- * See conf.d/harperdb.d/conf.yaml for why the multi_line rule is there.
+ * Render the shipped logs source into the runtime conf.d. The template is version-controlled
+ * with the component, but its `path` is absolute and machine-specific, so it carries
+ * placeholders substituted here. See conf.d/harperdb.d/conf.yaml for the multi_line rule.
  */
 function renderLogsConfig(componentDir, logPath, service) {
 	const template = readFileSync(
@@ -297,17 +262,16 @@ function renderLogsConfig(componentDir, logPath, service) {
  * Everything that has to be true before `spawn` is called.
  *
  * Spawning a missing binary under Harper is worse than not spawning at all. Harper takes the
- * PID lock first, calls the real spawn, and then evaluates `childProcess.pid.toString()` to
- * write the file. For a missing binary `pid` is `undefined`, so that line throws a TypeError
- * out of the spawn call itself -- after the 0-byte lock file already exists, and before any
- * 'exit' handler that would clean it up is attached.
+ * PID lock, calls the real spawn, then evaluates `childProcess.pid.toString()` to write the
+ * file. For a missing binary `pid` is `undefined`, so that throws a TypeError out of the
+ * spawn call: after the 0-byte lock file exists, before the 'exit' handler that would clean
+ * it up is attached.
  */
 function preflightBinary(title, binaryPath) {
-	// Harper's allowlist test is `ALLOWED_COMMANDS.has(command.split(" ")[0])`. Only the
-	// fragment before the first space is ever compared, so a path containing a space can
-	// never be allowlisted, by any config. It is worth failing on this explicitly because
-	// the resulting error otherwise reads as a plain "not allowed" and sends people to edit
-	// a config that cannot help them.
+	// Harper's allowlist test is `ALLOWED_COMMANDS.has(command.split(" ")[0])`, so a path
+	// containing a space can never be allowlisted by any config. Failing on it explicitly,
+	// because otherwise the error reads as a plain "not allowed" and sends people to edit a
+	// config that cannot help them.
 	if (binaryPath.includes(" ")) {
 		throw new Error(
 			`The ${title} binary path contains a space: ${binaryPath}. Harper matches the ` +
@@ -367,11 +331,10 @@ function launchOne(descriptor, binaryPath, paths, version) {
 			name: descriptor.name,
 			// See configVersion(): a number, never a string.
 			version,
-			// Piped rather than inherited, for two reasons. Agent output reaches Harper's
-			// log file, which is what the conf.d source tails. And `!child.stdout` stays a
-			// sound test for Harper's ExistingProcessWrapper below: with stdio "inherit" a
-			// real ChildProcess also has a null stdout, and the test would report every
-			// thread as a loser of the race.
+			// Piped, not inherited. Agent output has to reach Harper's log file, which is
+			// what the conf.d source tails, and `!child.stdout` stays a sound test for the
+			// ExistingProcessWrapper below: under "inherit" a real ChildProcess also has a
+			// null stdout, so every thread would look like a loser of the race.
 			stdio: ["ignore", "pipe", "pipe"],
 			env: process.env,
 		});
@@ -388,12 +351,13 @@ function launchOne(descriptor, binaryPath, paths, version) {
 	}
 
 	state.pid = child.pid;
+	state.started = true;
 
-	// Attached before anything else looks at the child, and before the early return below.
-	// Harper attaches only an 'exit' listener of its own, and Node promotes an unhandled
-	// 'error' on a ChildProcess to an uncaught exception, which takes the worker thread with
-	// it. The event is asynchronous, so any code path that returns from here without a
-	// listener registered is a crash waiting on the next tick.
+	// Attached before anything else touches the child, and before the early return below.
+	// Harper attaches only its own 'exit' listener, and an unhandled 'error' on a
+	// ChildProcess becomes an uncaught exception that takes the worker thread with it. The
+	// event is asynchronous, so returning from here without this listener is a crash waiting
+	// on the next tick.
 	child.on("error", (error) => {
 		log.error(
 			`Datadog supervisor: the ${descriptor.title} failed to execute: ${error.message}`
@@ -401,24 +365,19 @@ function launchOne(descriptor, binaryPath, paths, version) {
 	});
 
 	// Every loser of the PID-file race gets an ExistingProcessWrapper: an EventEmitter with
-	// pid, kill(), unref() and an 'exit' event, and no stdio at all. Touching child.stdout
-	// on those threads is a TypeError.
-	if (!child.stdout) {
-		state.started = true;
-		state.adopted = true;
+	// pid, kill(), unref() and an 'exit' event, and no stdio at all.
+	state.adopted = !child.stdout;
+	if (state.adopted) {
 		log.info(
 			`Datadog supervisor: the ${descriptor.title} is already running on this node ` +
 				`(pid ${child.pid}); this thread joined it instead of starting a second one.`
 		);
-		// The wrapper polls the process once a second on a setInterval it never unref'd, so
-		// without this the worker's event loop is pinned and the thread will not go idle or
-		// shut down cleanly. unref() is what clears that interval.
+		// The wrapper polls the process once a second on a setInterval it never unref'd,
+		// pinning the worker's event loop. unref() is what clears that interval.
 		child.unref();
 		return state;
 	}
 
-	state.started = true;
-	state.adopted = false;
 	log.info(
 		`Datadog supervisor: started the ${descriptor.title} (pid ${child.pid}): ` +
 			`${binaryPath} ${args.join(" ")}`
@@ -468,13 +427,11 @@ function prepareRuntime(componentDir) {
 	mkdirSync(join(paths.confd, "harperdb.d"), { recursive: true });
 
 	// The trace-agent writes its auth token beside the config file. Without write access it
-	// does not fail fast: it hangs for 30 seconds and then dies on "error while creating or
+	// does not fail fast: it hangs for 30 seconds, then dies on "error while creating or
 	// fetching auth token", which reads like a network problem.
 	accessSync(runtimeDir, constants.W_OK);
 
-	// The trace-agent is fatal without a config file that EXISTS. Its contents can be empty;
-	// existence is the requirement. Writing it here is also what makes every relocation above
-	// take effect for both binaries at once.
+	// The trace-agent is fatal without a config file that EXISTS; the contents may be empty.
 	const datadogYaml = renderDatadogYaml(paths);
 	writeFileSync(paths.configFile, datadogYaml, "utf-8");
 
@@ -511,11 +468,10 @@ let started;
 
 /**
  * Start both agents. Safe to call repeatedly: the work happens once per worker thread, and
- * Harper's PID lock collapses the surviving threads down to one process per node.
+ * Harper's PID lock collapses the surviving threads to one process per node.
  *
- * Never rejects. A supervisor that throws at component load takes the whole application down
- * with it, which is a strictly worse outcome than an application running without telemetry
- * and saying so.
+ * Never rejects. A supervisor that throws at component load takes the whole application with
+ * it, which is worse than an application running without telemetry and saying so.
  *
  * @param {string} componentDir absolute path to this component (import.meta.dirname).
  */
@@ -547,10 +503,10 @@ export function startDatadogAgents(componentDir) {
 			status.service = runtime.service;
 
 			const manager = new BinaryManager();
-			// Resolve both paths up front, once. The version has to cover the pair, and each
-			// path is then handed to the spawn that uses it, so the fingerprint can never
-			// describe a different binary from the one actually started. A resolution failure
-			// becomes an empty string here and is reported per-agent by launchOne().
+			// Resolve both paths up front. The version covers the pair, and each path is then
+			// handed to the spawn that uses it, so the fingerprint can never describe a
+			// different binary from the one started. A resolution failure becomes an empty
+			// string and is reported per-agent by launchOne().
 			const binaries = await Promise.all(
 				AGENTS.map((descriptor) =>
 					descriptor.resolve(manager).catch((error) => {
@@ -565,8 +521,8 @@ export function startDatadogAgents(componentDir) {
 			const version = configVersion(runtime.fingerprint, ...binaries);
 			status.version = version;
 
-			// In order, and the trace-agent first: it owns the socket dd-trace is already
-			// trying to reach, and it keeps the startup log readable.
+			// In order, trace-agent first: it owns the socket dd-trace is already trying to
+			// reach.
 			for (const [index, descriptor] of AGENTS.entries()) {
 				status.agents.push(
 					launchOne(descriptor, binaries[index], runtime.paths, version)
