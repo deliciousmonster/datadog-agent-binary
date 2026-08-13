@@ -31,8 +31,6 @@ program
 		const builder = new DatadogAgentBuilder();
 
 		try {
-			let result;
-
 			logger.info("Building for current platform...");
 			const currentPlatform = Platform.current();
 			const outputDir = path.join(
@@ -40,7 +38,7 @@ program
 				currentPlatform.getName(),
 				"bin"
 			);
-			result = await builder.buildForCurrentPlatform({
+			const result = await builder.buildForCurrentPlatform({
 				version: options.datadogVersion,
 				outputDir,
 				buildArgs: options.buildArgs?.split(" "),
@@ -48,9 +46,9 @@ program
 
 			logger.info(`\nBuild Summary:`);
 			if (result.success) {
-				// Report every binary, not just the core agent. A summary that prints one
-				// path when two were built reads as a successful single-binary build, which
-				// is how a missing trace-agent went unnoticed through an entire release.
+				// Report every binary. A summary that prints one path when two were built
+				// reads as a successful single-binary build, which is how a missing
+				// trace-agent went unnoticed through an entire release.
 				const produced = Object.entries(result.outputPaths ?? {});
 				if (produced.length > 0) {
 					for (const [kind, outputPath] of produced) {
@@ -88,9 +86,8 @@ program
 	.action(async () => {
 		const downloader = new DatadogAgentDownloader();
 
-		// The pin is what `build` actually uses, so report it first and report it even
-		// when the network lookup below fails. A command that only printed "latest" told
-		// you the one number the build would not be using.
+		// The pin is what `build` uses, so report it first and report it even when the
+		// network lookup below fails.
 		try {
 			logger.info(
 				`Pinned Datadog Agent version: ${await downloader.getPinnedVersion()}`
@@ -127,9 +124,8 @@ program
 			}
 
 			// Every binary this platform ships, not just the core agent. ensureBinary()
-			// takes the kind first and the version second; the old one-argument call
-			// passed the version into the kind slot, and because commander types its
-			// options as `any` the compiler had nothing to say about it.
+			// takes the kind first and the version second; commander types its options as
+			// `any`, so passing them in the wrong order compiles.
 			const binaries = Platform.current().getBinaries();
 			for (const descriptor of binaries) {
 				const binaryPath = await manager.ensureBinary(

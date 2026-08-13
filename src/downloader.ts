@@ -12,22 +12,20 @@ const GITHUB_API_BASE = "https://api.github.com/repos/DataDog/datadog-agent";
 /**
  * Single source of truth for the upstream Datadog Agent release this package builds.
  *
- * Lives in a plain file at the repo root so CI can read it without Node
- * (`cat .datadog-agent-version`) and the build can read it without duplicating the
- * value in a workflow env block. One pin, one place.
+ * A plain file at the repo root so CI can read it without Node (`cat
+ * .datadog-agent-version`) and the build can read it without duplicating the value in a
+ * workflow env block.
  *
- * This is deliberately NOT the npm package version. The two move on different
- * cadences, and conflating them is what produced the defect described on
- * `resolveVersion()` below.
+ * Deliberately NOT the npm package version: the two move on different cadences, and
+ * conflating them produced the defect described on `resolveVersion()` below.
  */
 const PINNED_VERSION_FILE = ".datadog-agent-version";
 
 export class DatadogAgentDownloader {
 	/**
-	 * The upstream release recorded in `.datadog-agent-version`.
-	 *
-	 * Resolved relative to this module rather than `process.cwd()`, so it works when
-	 * the CLI is invoked from another directory.
+	 * The upstream release recorded in `.datadog-agent-version`. Resolved relative to this
+	 * module rather than `process.cwd()`, so it works when the CLI is invoked from another
+	 * directory.
 	 */
 	async getPinnedVersion(): Promise<string> {
 		const pinPath = path.join(__dirname, "..", PINNED_VERSION_FILE);
@@ -37,7 +35,7 @@ export class DatadogAgentDownloader {
 		} catch (error: any) {
 			throw new Error(
 				`Could not read the pinned Datadog Agent version from ${pinPath}: ` +
-					`${error?.message ?? error}. This file is required — builds must not ` +
+					`${error?.message ?? error}. This file is required: builds must not ` +
 					`silently float to whatever upstream released most recently.`
 			);
 		}
@@ -52,25 +50,21 @@ export class DatadogAgentDownloader {
 
 	/**
 	 * Resolve which upstream version to build, and prove it exists before anything
-	 * expensive happens.
+	 * expensive happens. Two real defects motivate this:
 	 *
-	 * Two real defects motivate this:
+	 *  1. Floating. With no version supplied the build called `getLatestVersion()` and
+	 *     shipped whatever upstream had released that day. The package published as 7.75.5
+	 *     actually contains agent 7.79.2, verifiable with
+	 *     `strings bin/datadog-agent | grep -E '^7\\.[0-9]+\\.[0-9]+$'`. The default is now
+	 *     the pin, never "latest".
 	 *
-	 *  1. Floating. When no version was supplied the build called `getLatestVersion()`
-	 *     and shipped whatever upstream had released that day. The package published as
-	 *     7.75.5 actually contains agent 7.79.2 — verifiable with
-	 *     `strings bin/datadog-agent | grep -E '^7\\.[0-9]+\\.[0-9]+$'`. Nothing compared
-	 *     the two. Now the default is the pin, never "latest".
+	 *  2. Nonexistent tags. `7.75.5` is not a tag on DataDog/datadog-agent (7.75.x stops at
+	 *     7.75.4). The clone fails, the tarball fallback 404s, and the surfaced error is
+	 *     "Failed to download source: Not Found", which points at the network rather than
+	 *     at the bad pin. The ref is now checked up front.
 	 *
-	 *  2. Nonexistent tags. `7.75.5` is not a tag on DataDog/datadog-agent (7.75.x stops
-	 *     at 7.75.4). `git clone --branch 7.75.5` fails, the tarball fallback 404s, and
-	 *     the surfaced error is "Failed to download source: Not Found" — which points at
-	 *     the network rather than at the bad pin. We now check the ref up front and say
-	 *     so plainly.
-	 *
-	 * This matters more with two binaries than it did with one: the core agent and the
-	 * trace-agent share an IPC auth handshake and a config schema, so both must come
-	 * from the same ref. A resolver that can float is a resolver that can mismatch them.
+	 * The core agent and the trace-agent share an IPC auth handshake and a config schema,
+	 * so both must come from the same ref: a resolver that can float can mismatch them.
 	 */
 	async resolveVersion(requested?: string): Promise<string> {
 		if (requested && requested.toLowerCase() === "latest") {
@@ -94,8 +88,8 @@ export class DatadogAgentDownloader {
 	}
 
 	/**
-	 * Fail fast if the tag does not exist upstream, with an error that names the actual
-	 * problem and shows the tags that do exist nearby.
+	 * Fail fast if the tag does not exist upstream, naming the actual problem and showing
+	 * the tags that do exist nearby.
 	 */
 	async assertRefExists(version: string): Promise<void> {
 		const refUrl = `${GITHUB_API_BASE}/git/ref/tags/${encodeURIComponent(version)}`;
@@ -103,8 +97,8 @@ export class DatadogAgentDownloader {
 		try {
 			response = await fetch(refUrl);
 		} catch (error: any) {
-			// A network failure is not the same as a missing tag; do not block the build
-			// on it, since the clone will surface a real error moments later.
+			// A network failure is not a missing tag; do not block the build on it, since the
+			// clone will surface a real error moments later.
 			logger.warn(
 				`Could not verify that Datadog Agent tag ${version} exists ` +
 					`(${error?.message ?? error}). Continuing; the clone will fail if it does not.`
@@ -157,11 +151,8 @@ export class DatadogAgentDownloader {
 	}
 
 	/**
-	 * The most recent upstream release.
-	 *
-	 * Retained for explicit `--datadog-version latest` builds and for the
-	 * build-from-source fallback. It must never be the implicit default: see
-	 * `resolveVersion()`.
+	 * The most recent upstream release. Retained for explicit `--datadog-version latest`
+	 * builds; it must never be the implicit default. See `resolveVersion()`.
 	 */
 	async getLatestVersion(): Promise<string> {
 		logger.info("Fetching latest Datadog Agent version...");
@@ -172,9 +163,7 @@ export class DatadogAgentDownloader {
 		}
 
 		const data = (await response.json()) as { tag_name: string };
-		const version = data.tag_name;
-
-		return version;
+		return data.tag_name;
 	}
 
 	async downloadSource(config: DownloadConfig): Promise<string> {
@@ -183,41 +172,32 @@ export class DatadogAgentDownloader {
 		logger.info(`Downloading Datadog Agent source version ${version}...`);
 
 		await fs.mkdir(path.dirname(extractTo), { recursive: true });
+		await fs.rm(extractTo, { recursive: true, force: true });
 
-		const extractPath = extractTo;
-
-		// Remove existing source directory if it exists
-		await fs.rm(extractPath, { recursive: true, force: true });
-
-		// Clone the repository instead of downloading tarball to preserve git history
 		logger.info("Cloning Datadog Agent repository...");
 
 		const { execSync } = await import("child_process");
 
-		// Tracked separately from the try/catch below: a clone that succeeds but lands on
-		// the wrong ref must be fatal, not a reason to retry via tarball. Asserting inside
-		// the try would let the catch swallow it and silently produce the same mislabelled
-		// artifact this check exists to prevent.
+		// Tracked outside the try/catch: a clone that succeeds but lands on the wrong ref
+		// must be fatal, not a reason to retry via tarball. Asserting inside the try would
+		// let the catch swallow it and silently produce the same mislabelled artifact.
 		let clonedVersion: string | undefined;
 
 		try {
-			// Clone with specific tag
 			execSync(
-				`git clone --depth 1 --branch ${version} ${DATADOG_AGENT_REPO} "${extractPath}"`,
+				`git clone --depth 1 --branch ${version} ${DATADOG_AGENT_REPO} "${extractTo}"`,
 				{
 					stdio: ["inherit", "pipe", "inherit"],
 				}
 			);
 
-			// Ensure we have the correct version information
 			const gitOutput = execSync(
-				`git -C "${extractPath}" describe --tags --always`,
+				`git -C "${extractTo}" describe --tags --always`,
 				{ encoding: "utf8", stdio: ["inherit", "pipe", "inherit"] }
 			);
 			clonedVersion = gitOutput.trim();
 			logger.info(`Repository cloned at version: ${clonedVersion}`);
-		} catch (error) {
-			// Fallback to tarball download if git clone fails
+		} catch {
 			logger.warn("Git clone failed, falling back to tarball download...");
 
 			const tarballUrl = `${DATADOG_AGENT_REPO}/archive/refs/tags/${version}.tar.gz`;
@@ -239,44 +219,44 @@ export class DatadogAgentDownloader {
 
 			logger.info("Extracting source code...");
 
-			await fs.mkdir(extractPath, { recursive: true });
+			await fs.mkdir(extractTo, { recursive: true });
 
 			await tar.extract({
 				file: tarballPath,
-				cwd: extractPath,
+				cwd: extractTo,
 				strip: 1,
 			});
 
 			await fs.unlink(tarballPath);
 
-			// Initialize git repo and set version manually for ldflags
+			// The build's ldflags read the version from `git describe`; a tarball carries no
+			// git metadata, so synthesize it.
 			try {
-				execSync(`git -C "${extractPath}" init`, { stdio: "ignore" });
-				execSync(`git -C "${extractPath}" tag ${version}`, { stdio: "ignore" });
+				execSync(`git -C "${extractTo}" init`, { stdio: "ignore" });
+				execSync(`git -C "${extractTo}" tag ${version}`, { stdio: "ignore" });
 			} catch {
-				// Ignore git errors, version will be set via environment
+				// Best effort; the version also reaches the build through the environment.
 			}
 		}
 
-		// A shallow clone of a tag should describe as exactly that tag. If it does not,
-		// the working tree is not the version we believe we are building and every
-		// artifact produced from it would be mislabelled. That is exactly how a package
-		// published as 7.75.5 came to contain agent 7.79.2. Deliberately outside the
-		// try/catch above so it cannot be mistaken for a clone failure.
+		// A shallow clone of a tag should describe as exactly that tag. If it does not, the
+		// working tree is not the version we believe we are building and every artifact from
+		// it would be mislabelled. That is how a package published as 7.75.5 came to contain
+		// agent 7.79.2.
 		if (clonedVersion !== undefined) {
 			this.assertCheckoutMatches(version, clonedVersion);
 		}
 
-		logger.info(`Source extracted to: ${extractPath}`);
-		return extractPath;
+		logger.info(`Source extracted to: ${extractTo}`);
+		return extractTo;
 	}
 
 	/**
 	 * Compare the requested tag against what git actually checked out.
 	 *
 	 * `git describe --tags --always` on a shallow clone of tag T returns T. It can also
-	 * return `T-<n>-g<sha>` (commits past the tag) or a bare sha (no tag reachable);
-	 * both mean the tree is not the pinned release.
+	 * return `T-<n>-g<sha>` (commits past the tag) or a bare sha (no tag reachable); both
+	 * mean the tree is not the pinned release.
 	 */
 	private assertCheckoutMatches(requested: string, described: string): void {
 		if (described === requested) return;
@@ -302,9 +282,9 @@ export class DatadogAgentDownloader {
 		const missing: string[] = [];
 
 		logger.debug(`checkBuildDependencies PATH: ${process.env.PATH}`);
+		const { execSync } = await import("child_process");
 		for (const tool of platformRequirements) {
 			try {
-				const { execSync } = await import("child_process");
 				execSync(`which ${tool}`, { stdio: "ignore" });
 			} catch {
 				missing.push(tool);
