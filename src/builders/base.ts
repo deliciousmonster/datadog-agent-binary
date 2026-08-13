@@ -17,6 +17,54 @@ export abstract class BaseBuilder {
 
 	abstract build(): Promise<BuildResult>;
 
+	/** Shared build sequence. `preflight` runs before anything is compiled. */
+	protected async runBuild(
+		osLabel: string,
+		preflight?: () => Promise<void>
+	): Promise<BuildResult> {
+		const startTime = Date.now();
+		const { platform } = this.config;
+
+		logger.info(
+			`Building Datadog Agent for ${osLabel} ${platform.getArch()}...`
+		);
+
+		try {
+			await this.ensureOutputDirectory();
+			await preflight?.();
+
+			await this.buildCommon();
+
+			logger.info("Copying binaries to output directory...");
+			const outputPaths = await this.copyBinariesToOutput();
+
+			const duration = Date.now() - startTime;
+
+			logger.info(`Build completed successfully in ${duration}ms`);
+			for (const [kind, binaryPath] of Object.entries(outputPaths)) {
+				logger.info(`Output (${kind}): ${binaryPath}`);
+			}
+
+			return {
+				success: true,
+				platform,
+				outputPath: outputPaths.core,
+				outputPaths,
+				duration,
+			};
+		} catch (error: any) {
+			const duration = Date.now() - startTime;
+			logger.error(`Build failed: ${error.message}`);
+
+			return {
+				success: false,
+				platform,
+				error: error.message,
+				duration,
+			};
+		}
+	}
+
 	protected async buildCommon(): Promise<void> {
 		logger.info("Checking for dda installation...");
 		await this.ensureDdaInstalled();
@@ -24,20 +72,18 @@ export abstract class BaseBuilder {
 		logger.info("Installing Go tools...");
 		await this.executeCommand("dda --no-interactive inv install-tools");
 
-		// One invoke task per binary. `agent.build` produces the core agent and
-		// nothing else: upstream has no bundling flag, so the trace-agent only
-		// exists if `trace-agent.build` is run too. Building just the first entry
-		// here is exactly the defect that shipped a package whose APM receiver
-		// never bound 127.0.0.1:8126.
+		// One invoke task per binary. Upstream has no bundling flag: `agent.build`
+		// produces the core agent and nothing else, so the trace-agent exists only
+		// if `trace-agent.build` runs too. Building just the first entry here is the
+		// defect that shipped a package whose APM receiver never bound 127.0.0.1:8126.
 		for (const binary of this.config.platform.getBinaries()) {
 			const buildArgs = this.getBuildArgs(binary);
 			logger.info(
 				`Building ${binary.kind} agent via ${binary.buildTask}` +
 					`${buildArgs ? ` (args: ${buildArgs})` : ""}...`
 			);
-			// Append args only when non-empty. The command is later split on " "
-			// and spawned without a shell, so a trailing space becomes an empty
-			// argv entry that invoke rejects as an unknown positional argument.
+			// No trailing space: the command is split on " " and spawned without a
+			// shell, so an empty argv entry reaches invoke as an unknown positional.
 			const suffix = buildArgs ? ` ${buildArgs}` : "";
 			await this.executeCommand(
 				`dda --no-interactive inv ${binary.buildTask}${suffix}`
@@ -46,14 +92,9 @@ export abstract class BaseBuilder {
 	}
 
 	/**
-	 * Flags appended to one binary's invoke task.
-	 *
 	 * Per-binary rather than global: the core agent's `--build-exclude=systemd,python`
-	 * would be wrong on the trace-agent, which links neither (see
-	 * `AgentBinaryDescriptor.buildArgs`). Each descriptor names its own override
-	 * env var so CI can iterate on flags for one binary without disturbing the
-	 * other. Args are spawned without a shell, so each token must stand alone
-	 * (no quoted or empty values).
+	 * is wrong on the trace-agent (see `AgentBinaryDescriptor.buildArgs`). Args are
+	 * spawned without a shell, so an override must be plain space-separated tokens.
 	 */
 	protected getBuildArgs(binary: AgentBinaryDescriptor): string {
 		return process.env[binary.buildArgsEnvVar]?.trim() || binary.buildArgs;
@@ -71,36 +112,32 @@ export abstract class BaseBuilder {
 			...this.getEnvironmentVariables(),
 		};
 
-		// For long-running build commands, use streaming output
-		const isBuildCommand = command.includes("dda");
-
-		if (isBuildCommand) {
+		// dda builds run for tens of minutes; stream them instead of buffering.
+		if (command.includes("dda")) {
 			return this.executeCommandWithRollingOutput(command, workingDir, env);
-		} else {
-			// For quick commands, use execSync
-			try {
-				const result = execSync(command, {
-					cwd: workingDir,
-					encoding: "utf8",
-					stdio: ["inherit", "pipe", "pipe"],
-					timeout: 1200000,
-					env,
-				});
-				return result.toString();
-			} catch (error: any) {
-				logger.error(`Command failed: ${command}`);
-				logger.error(`Exit code: ${error.status}`);
-				logger.error(`Error: ${error.message}`);
+		}
 
-				if (error.stdout) {
-					logger.error(`Stdout:\n${error.stdout.toString()}`);
-				}
-				if (error.stderr) {
-					logger.error(`Stderr:\n${error.stderr.toString()}`);
-				}
+		try {
+			return execSync(command, {
+				cwd: workingDir,
+				encoding: "utf8",
+				stdio: ["inherit", "pipe", "pipe"],
+				timeout: 1200000,
+				env,
+			});
+		} catch (error: any) {
+			logger.error(`Command failed: ${command}`);
+			logger.error(`Exit code: ${error.status}`);
+			logger.error(`Error: ${error.message}`);
 
-				throw error;
+			if (error.stdout) {
+				logger.error(`Stdout:\n${error.stdout.toString()}`);
 			}
+			if (error.stderr) {
+				logger.error(`Stderr:\n${error.stderr.toString()}`);
+			}
+
+			throw error;
 		}
 	}
 
@@ -111,19 +148,11 @@ export abstract class BaseBuilder {
 	): Promise<string> {
 		return new Promise((resolve, reject) => {
 			const [cmd, ...args] = command.split(" ");
-			// `name` is set here purely for consistency with the runtime
-			// spawn in `bin/datadog-agent` and the BinaryManager-generated
-			// wrapper. The builder itself is dev/CI-only — it also calls
-			// `execSync` elsewhere in this file, which Harper v5 forbids
-			// outright, so the builder can never run inside a Harper-managed
-			// process regardless of this option. Stock Node.js ignores
-			// `name`, so there is no effect outside Harper either.
 			const child = spawn(cmd, args, {
 				cwd,
 				env,
 				stdio: ["inherit", "pipe", "pipe"],
-				name: `datadog-agent-builder:${cmd}`,
-			} as any);
+			});
 
 			let stdout = "";
 			let stderr = "";
@@ -133,54 +162,42 @@ export abstract class BaseBuilder {
 
 			const updateRollingDisplay = () => {
 				if (rollingDisplayActive) {
-					// Clear only the rolling display lines
 					for (let i = 0; i < Math.min(rollingLines.length, maxLines); i++) {
-						process.stdout.write("\x1b[1A\x1b[2K"); // Move up and clear line
+						process.stdout.write("\x1b[1A\x1b[2K");
 					}
 				} else {
-					// First time - just start the rolling display
 					rollingDisplayActive = true;
 				}
 
-				// Show the last 6 lines
-				const linesToShow = rollingLines.slice(-maxLines);
-				linesToShow.forEach((line: string) => {
+				for (const line of rollingLines.slice(-maxLines)) {
 					process.stdout.write(line + "\n");
-				});
+				}
 			};
 
-			const addLine = (line: string, isStderr = false) => {
-				const prefix = isStderr ? "[stderr] " : "";
-				rollingLines.push(prefix + line.trim());
+			const addLine = (line: string, isStderr: boolean) => {
+				rollingLines.push((isStderr ? "[stderr] " : "") + line.trim());
 				updateRollingDisplay();
 			};
 
-			child.stdout?.on("data", (data) => {
+			const collect = (isStderr: boolean) => (data: Buffer) => {
 				const output = data.toString();
-				stdout += output;
+				if (isStderr) {
+					stderr += output;
+				} else {
+					stdout += output;
+				}
 
-				const lines = output.split("\n");
-				lines.forEach((line: string) => {
+				for (const line of output.split("\n")) {
 					if (line.trim()) {
-						addLine(line, false);
+						addLine(line, isStderr);
 					}
-				});
-			});
+				}
+			};
 
-			child.stderr?.on("data", (data) => {
-				const output = data.toString();
-				stderr += output;
-
-				const lines = output.split("\n");
-				lines.forEach((line: string) => {
-					if (line.trim()) {
-						addLine(line, true);
-					}
-				});
-			});
+			child.stdout?.on("data", collect(false));
+			child.stderr?.on("data", collect(true));
 
 			child.on("close", (code) => {
-				// Leave the final rolling display as-is, just add a newline
 				process.stdout.write("\n");
 
 				if (code === 0) {
@@ -209,23 +226,15 @@ export abstract class BaseBuilder {
 
 	protected getEnvironmentVariables(): Record<string, string> {
 		const { platform } = this.config;
-		let env: Record<string, string> = {};
+		const goPath = path.join(process.cwd(), "build", platform.getName(), "go");
 
-		// Use platform-specific GOPATH
-		const platformName = platform.getName();
-		const goPath = path.join(process.cwd(), "build", platformName, "go");
-		env.GOPATH = goPath;
-		env.PATH = `${goPath}/bin${path.delimiter}${process.env.PATH}`;
-
-		env.GOARCH = platform.getGoArch();
-		env.CGO_ENABLED = "1";
-
-		env = {
-			...env,
+		return {
+			GOPATH: goPath,
+			PATH: `${goPath}/bin${path.delimiter}${process.env.PATH}`,
+			GOARCH: platform.getGoArch(),
+			CGO_ENABLED: "1",
 			...this.getOSEnvironmentVariables(),
 		};
-
-		return env;
 	}
 
 	protected async ensureOutputDirectory(): Promise<void> {
@@ -235,16 +244,15 @@ export abstract class BaseBuilder {
 
 	protected async ensureDdaInstalled(): Promise<void> {
 		try {
-			// Try to run dda --version to check if it's installed
 			await this.executeCommand("dda --version");
 			logger.debug("dda is already installed");
-		} catch (error) {
+		} catch {
 			logger.info("dda not found, installing...");
 			try {
 				await this.executeCommand("which pipx");
 				logger.debug("pipx found, using pipx to install dda");
 				await this.executeCommand("pipx install dda");
-			} catch (pipxError) {
+			} catch {
 				logger.debug("pipx failed, trying pip to install dda");
 				await this.executeCommand("pip install dda");
 			}
@@ -252,28 +260,15 @@ export abstract class BaseBuilder {
 	}
 
 	protected getAbsoluteOutputPath(fileName: string): string {
-		// Ensure output path is absolute and not relative to source directory
-		if (path.isAbsolute(this.config.outputDir)) {
-			return path.join(this.config.outputDir, fileName);
-		} else {
-			// If outputDir is relative, resolve it from the current working directory (project root)
-			const projectRoot = process.cwd();
-			return path.join(projectRoot, this.config.outputDir, fileName);
-		}
+		// A relative outputDir resolves from the project root, never from the agent
+		// source tree the build commands run in.
+		return path.resolve(this.config.outputDir, fileName);
 	}
 
-	/**
-	 * Copy every binary the platform declares into the output directory.
-	 *
-	 * Returns what it copied, keyed by kind, so `build()` reports each path rather
-	 * than asserting a single one.
-	 */
 	protected async copyBinariesToOutput(): Promise<
 		Partial<Record<AgentBinaryKind, string>>
 	> {
 		const { chmod, copyFile, mkdir, stat } = await import("fs/promises");
-
-		// Create platform-specific bin directory
 		const { platform, outputDir } = this.config;
 
 		logger.debug(`Ensuring platform bin directory exists: ${outputDir}`);
@@ -290,11 +285,9 @@ export abstract class BaseBuilder {
 			);
 			const destPath = this.getAbsoluteOutputPath(binary.outputName);
 
-			// Check before copying so an absent binary reports the path it should
-			// have been at, not a bare ENOENT. Publishing a package that is quietly
-			// short one binary is the failure this whole change exists to prevent:
-			// it surfaces only as dd-trace dropping spans into a closed socket in
-			// production, with nothing logged anywhere.
+			// Check first so an absent binary names the path it should have been at
+			// instead of a bare ENOENT. Publishing one binary short surfaces only as
+			// dd-trace dropping spans into a closed socket, with nothing logged.
 			try {
 				await stat(sourcePath);
 			} catch {
@@ -314,10 +307,9 @@ export abstract class BaseBuilder {
 				throw error;
 			}
 
-			// npm carries the mode bits from disk through pack and install, so a
-			// binary copied without the exec bit installs unrunnable and fails at
-			// spawn with EACCES. Set it here as well as in the packaging script so
-			// the builder's own output directory is directly usable.
+			// npm carries mode bits through pack and install: without the exec bit the
+			// binary installs unrunnable and fails at spawn with EACCES. The packaging
+			// script sets it too; this keeps the builder's own output runnable.
 			if (platform.getOS() !== "windows") {
 				await chmod(destPath, 0o755);
 			}
