@@ -5,9 +5,7 @@ import { WindowsBuilder } from "./windows.js";
 import { MacOSBuilder } from "./macos.js";
 
 export function createBuilder(config: BuildConfig): BaseBuilder {
-	const { platform } = config;
-
-	const osName = platform.getOS();
+	const osName = config.platform.getOS();
 	switch (osName) {
 		case "linux":
 			return new LinuxBuilder(config);
