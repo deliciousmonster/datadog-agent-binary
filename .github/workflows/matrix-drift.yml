@@ -1,0 +1,79 @@
+name: Published Matrix Drift
+
+# Checks that what is on the registry still matches what this repo declares.
+#
+# The pre-publish gate in build-release.yml proves the matrix was correct at the moment
+# of publishing. This proves it still is. Those are different claims: a version can be
+# unpublished within 72 hours, deprecated, or have its dist-tags moved, and the main
+# package can be bumped while a platform package is not. None of that touches this repo,
+# so nothing else would ever notice.
+#
+# It is also the check that catches the state this repo is in while the scope is being
+# migrated: optionalDependencies naming packages that do not exist on the registry yet.
+# Because those dependencies are optional, npm skips them without a warning and
+# `npm ci` still exits 0, so a consumer install resolves no binaries and reports nothing.
+# A weekly red build is the only thing that makes that visible.
+#
+# Registry reads only. No build, no publish, no secrets.
+
+on:
+  schedule:
+    # 06:23 UTC Mondays. Off the hour on purpose: scheduled jobs landing exactly on :00
+    # queue behind everyone else's cron.
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to check (default: the version in package.json)"
+        required: false
+      deep:
+        description: "Download each tarball and list bin/ exactly"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  drift:
+    name: registry vs declared
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        # publish-matrix reads SUPPORTED_PLATFORMS from dist/platform.js so the expected
+        # set comes from the same source the build and runtime use.
+        run: npm run build
+
+      - name: Check the published matrix
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="$(node -p "require('./package.json').version")"
+          fi
+          echo "Checking $VERSION"
+          if [ "${{ github.event.inputs.deep }}" = "true" ]; then
+            node scripts/publish-matrix.js --registry "$VERSION" --deep | tee matrix.txt
+          else
+            node scripts/publish-matrix.js --registry "$VERSION" | tee matrix.txt
+          fi
+
+      - name: Publish the matrix to the job summary
+        if: always()
+        run: |
+          {
+            echo '```'
+            cat matrix.txt 2>/dev/null || echo "(no output)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

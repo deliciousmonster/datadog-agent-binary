@@ -680,6 +680,20 @@ jobs:
         run: |
           node scripts/create-platform-packages.js --all
 
+      # THE GATE. This is the last moment the answer can still change anything: the
+      # tarballs exist but nothing is public, so a failure here is free. Once
+      # `npm publish` runs, a version number is burned forever — it can be deprecated
+      # but never replaced.
+      #
+      # Reads the staged npm/ dirs offline and fails on any of the three defects this
+      # project actually shipped: os/cpu carrying our internal names instead of Node's
+      # (so npm can never match the package), a platform declared in
+      # optionalDependencies but never built, and a package missing the trace-agent.
+      # All three fail silently at install time, which is why they need to fail loudly
+      # here.
+      - name: Verify the platform matrix before publishing
+        run: node scripts/publish-matrix.js --local ./npm
+
       - name: Publish platform packages
         run: |
           for platform_dir in npm/*/; do
@@ -705,3 +719,43 @@ jobs:
         run: npm publish --access public --tag ${{ steps.disttag.outputs.tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # The receipt: what actually landed on the registry, not what we believed we sent.
+      #
+      # MATRIX_RETRIES is load-bearing. Publishing is not read-your-writes — a fetch
+      # immediately after `npm publish` can 404 or return stale metadata. Without the
+      # retry this step goes intermittently red for a reason unrelated to the release,
+      # and a check people learn to ignore is worse than no check.
+      #
+      # --deep downloads each tarball and lists bin/ exactly, rather than inferring from
+      # fileCount. It costs a few hundred MB of transfer once per release, which is the
+      # right trade for the one artifact nobody can re-cut.
+      # VERSION is re-derived from the tag rather than carried over: it was a shell
+      # local in "Set package version from tag" and does not survive into later steps.
+      - name: Verify the published matrix
+        env:
+          MATRIX_RETRIES: "12"
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/publish-matrix.js --registry "$VERSION" --deep
+
+      # Render the same table into the job summary and the Release body, so the matrix
+      # lives where someone actually looks rather than only in a log that scrolls away.
+      # Non-blocking: the verification above is the gate, and failing a release over a
+      # notes edit would be the tail wagging the dog.
+      - name: Append the matrix to the release notes
+        continue-on-error: true
+        env:
+          MATRIX_RETRIES: "12"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/publish-matrix.js --registry "$VERSION" --markdown > matrix.md
+          cat matrix.md >> "$GITHUB_STEP_SUMMARY"
+
+          gh release view "$GITHUB_REF_NAME" --json body --jq .body > notes.md
+          printf '\n\n' >> notes.md
+          cat matrix.md >> notes.md
+          gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
