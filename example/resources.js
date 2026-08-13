@@ -2,35 +2,27 @@
  * Harper v5 REST resources that produce logs and traces, and that start the Datadog core
  * agent and trace-agent as one-per-node singletons.
  *
- * The relative import of ./dd-supervisor.js is not a style choice. Harper only hands its
- * constrained child_process (allowlist + mandatory name + PID-file lock) to modules its own
- * loader compiles, and `shouldUseApplicationLoader()` returns true unconditionally for a
- * relative specifier. Move the supervisor into an npm package that does not depend on
- * `harper` and it is loaded natively with the real child_process, which silently removes the
- * singleton. dd-supervisor.js checks for that at startup and says so.
+ * The relative import of ./dd-supervisor.js is load-bearing: Harper hands its constrained
+ * child_process (allowlist, mandatory spawn name, PID-file lock) only to modules its own
+ * loader compiles, and a relative specifier always takes that loader. The same supervisor in
+ * an npm package that does not depend on `harper` is loaded natively with the real
+ * child_process, silently losing the singleton. dd-supervisor.js checks for that at startup.
  */
 
+// Bare specifier, so Harper resolves dd-trace natively, which is required rather than
+// incidental. `threads.preloadRequire: dd-trace/init` initialises the tracer in the worker's
+// CommonJS registry before any module loads, and resolving it natively here returns that same
+// instance. Through Harper's application loader it would be a second copy in a private
+// registry, one that never had init() called on it. An uninitialised dd-trace is not visibly
+// inert: trace() still runs the callback and hands out spans with plausible trace ids, all of
+// them NoopSpans. isTracerLive() separates the two.
 import tracer from "dd-trace";
 import { startDatadogAgents } from "./dd-supervisor.js";
 
 /**
- * `dd-trace` is a bare specifier, so Harper loads it natively -- which is required, not
- * incidental. `threads.preloadRequire: dd-trace/init` initialises the tracer in the worker's
- * CommonJS registry before any Harper or application module loads; resolving it natively here
- * returns that same initialised instance. Loading it through Harper's application loader would
- * evaluate a second copy in a private module registry, and that copy would never have had
- * init() called on it.
- *
- * An uninitialised dd-trace is not inert in a way you would notice. `tracer.trace()` still
- * runs the callback, still hands it a span, and `span.context().toTraceId()` still returns a
- * plausible random id -- it is just a NoopSpan that is never sent anywhere. isTracerLive()
- * below is what separates the two.
- */
-
-/**
- * Kick the agents off at component load rather than on first request, but do not await here.
- * A rejected top-level await would fail the whole component load; startDatadogAgents() never
- * rejects, and holding the promise lets /DatadogStatus/ report the outcome.
+ * Started at component load, not on first request, and deliberately not awaited: a rejected
+ * top-level await would fail the component load. startDatadogAgents() never rejects, and
+ * holding the promise lets /DatadogStatus/ report the outcome.
  */
 const supervisor = startDatadogAgents(import.meta.dirname);
 
@@ -38,23 +30,19 @@ const supervisor = startDatadogAgents(import.meta.dirname);
 const log = typeof logger === "undefined" ? console : logger;
 
 /**
- * Whether the span we were handed came from a real, initialised tracer.
- *
- * The uninitialised tracer's scope never activates anything, so `scope().active()` is null
- * inside its own trace() callback. A live tracer returns the span itself. This uses only the
- * public API and, unlike checking the trace id, it cannot be fooled by the noop path.
+ * Whether the span we were handed came from a real, initialised tracer. The uninitialised
+ * tracer's scope never activates anything, so `scope().active()` is null inside its own
+ * trace() callback while a live tracer returns the span itself. Unlike checking the trace id,
+ * this cannot be fooled by the noop path.
  */
 function isTracerLive(span) {
 	return tracer.scope().active() === span;
 }
 
 /**
- * GET /Work/ -- the endpoint worth tracing.
- *
- * Produces a three-span trace (one manual root, two manual children) so there is real
- * structure in the flame graph, and returns the trace id so the same request can be found in
- * the Datadog UI. The manual spans matter: they are the part of this that does not depend on
- * dd-trace successfully auto-instrumenting Harper's HTTP layer.
+ * GET /Work/ produces a three-span trace and returns its trace id, so the same request can be
+ * found in the Datadog UI. The spans are manual because that path does not depend on dd-trace
+ * auto-instrumenting Harper's HTTP layer.
  */
 export class Work extends Resource {
 	static async get() {
@@ -106,11 +94,9 @@ export class Work extends Resource {
 
 				rootSpan.setTag("work.sum", sum);
 
-				// A deliberate multi-line entry. Harper renders a logged Error with its full
-				// stack across many lines, none of which start with a timestamp, which is
-				// exactly the shape the multi_line rule in conf.d/harperdb.d/conf.yaml exists
-				// to reassemble. Without that rule each `at ...` frame arrives in Datadog as
-				// its own log.
+				// Harper renders a logged Error across many lines, none of which start with a
+				// timestamp: the shape the multi_line rule in conf.d/harperdb.d/conf.yaml
+				// reassembles. Without that rule each `at ...` frame arrives as its own log.
 				log.warn(
 					"Datadog example: emitting a deliberate multi-line log entry to exercise the " +
 						"multi_line processing rule",
@@ -136,10 +122,9 @@ export class Work extends Resource {
 }
 
 /**
- * GET /DatadogStatus/ -- what the supervisor actually did.
- *
- * Reports whether Harper's spawn interception is live, where the runtime tree went, and the
- * PID of each agent. Everything here fails silently by default, so it is worth an endpoint.
+ * GET /DatadogStatus/ reports what the supervisor did: whether Harper's spawn interception is
+ * live, where the runtime tree went, the PID of each agent. Everything here fails silently by
+ * default, which is why it gets an endpoint.
  */
 export class DatadogStatus extends Resource {
 	static async get() {
