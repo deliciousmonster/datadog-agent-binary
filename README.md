@@ -374,7 +374,46 @@ npm run build       # compile TypeScript
 npm run typecheck   # type-check only
 npm run build-agent # build both agent binaries for the current platform
 npm test            # run the tests
+npm run matrix      # what is published, per platform, and whether it is correct
 ```
+
+## Releasing
+
+The git tag is the only input to the publish pipeline. It sets the npm version, and whether it parses as a semver prerelease decides the dist-tag — so a mistyped tag is not a typo, it is a bad default install for every consumer.
+
+### Prereleases (for someone to verify a fix)
+
+Run the **Cut Prerelease** workflow. It asks the registry which `-next.N` versions already exist, computes the next one, and pushes the tag, which triggers the release build. Default is a dry run; re-run with `dry_run=false` to actually push.
+
+Consumers then install it with no dist-tag gymnastics on their side:
+
+```bash
+npm install @deliciousmonster/datadog-agent-binary@next
+```
+
+A prerelease publishes under `next` and cannot move `latest`, with one exception the pipeline guards against explicitly: on the **very first** publish of a package, npm sets `latest` regardless of `--tag`, because a package with no dist-tags needs one. For a new scope whose first release is a prerelease, that would silently make it the default. The publish job asserts afterwards that `latest` is not the prerelease and fails if it is.
+
+### Stable releases
+
+Push a tag with no prerelease segment (`v7.75.6`). It publishes under `latest`.
+
+### What the pipeline enforces
+
+| Stage | Check |
+|---|---|
+| before publish | `npm test`, typecheck, and formatting must pass (the `test` gate job) |
+| before publish | Both binaries built and smoke-tested per platform; the trace-agent must answer `/info` and accept a `v0.4` payload |
+| before publish | `publish-matrix --local` — Node-valid `os`/`cpu`, no platform declared but unbuilt, no package missing the trace-agent |
+| publish order | Platform packages first, then the main package. Reversed, the main package briefly advertises `optionalDependencies` that do not exist, and that failure is silent |
+| publish | Idempotent: already-published versions are skipped, so a partially failed tag can be re-run instead of burned |
+| after publish | `publish-matrix --registry --deep` against the real registry, and the matrix is appended to the release notes |
+
+### Authentication
+
+Two paths, chosen by whether the `NPM_TOKEN` secret exists:
+
+- **Trusted Publishing (preferred).** Configure a trusted publisher on npmjs.com for this repo and `build-release.yml`, and leave `NPM_TOKEN` unset. The workflow has `id-token: write`, so npm exchanges the OIDC token for a short-lived credential and attaches build provenance. Nothing long-lived is stored.
+- **`NPM_TOKEN` (bootstrap only).** A trusted publisher cannot always be configured for a package that does not exist yet, so the first publish under a new scope may need a token. Set it, publish once, configure the trusted publisher, then delete the secret.
 
 ## License
 

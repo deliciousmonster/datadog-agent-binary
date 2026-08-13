@@ -1,0 +1,144 @@
+name: Cut Prerelease
+
+# Creates and pushes the next `-next.N` tag, which triggers build-release.yml.
+#
+# This exists so nobody hand-types a release tag. The tag is the only input to the
+# entire publish pipeline: it sets the npm version, and whether it parses as a semver
+# prerelease decides whether the build lands on `next` or takes over `latest` for every
+# consumer. A typo there is not a typo, it is a bad default install.
+#
+# It computes the next prerelease number by asking the registry what already exists,
+# rather than trusting package.json, because the version in the working tree is whatever
+# the last release set and says nothing about what has been published since.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Base version, e.g. 7.75.6. Default: the version in package.json."
+        required: false
+      channel:
+        description: "Prerelease channel"
+        required: false
+        default: "next"
+        type: choice
+        options:
+          - next
+          - rc
+      dry_run:
+        description: "Compute and print the tag without creating it"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  cut:
+    name: compute and push the tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Compute the next prerelease version
+        id: next
+        run: |
+          set -euo pipefail
+
+          BASE="${{ github.event.inputs.base }}"
+          if [ -z "$BASE" ]; then
+            BASE=$(node -p "require('./package.json').version.split('-')[0]")
+          fi
+          CHANNEL="${{ github.event.inputs.channel }}"
+          PKG=$(node -p "require('./package.json').name")
+
+          echo "Package: $PKG"
+          echo "Base:    $BASE"
+          echo "Channel: $CHANNEL"
+
+          # Ask the registry, not the working tree. A 404 (scope not published yet) is
+          # the normal bootstrap case and means we start at .0.
+          PUBLISHED=$(npm view "$PKG" versions --json 2>/dev/null || echo "[]")
+
+          NEXT=$(node -e '
+            const [base, channel, publishedJson] = process.argv.slice(1);
+            let published = [];
+            try {
+              const parsed = JSON.parse(publishedJson);
+              published = Array.isArray(parsed) ? parsed : [parsed];
+            } catch { /* nothing published yet */ }
+
+            const prefix = `${base}-${channel}.`;
+            const used = published
+              .filter((v) => typeof v === "string" && v.startsWith(prefix))
+              .map((v) => Number(v.slice(prefix.length)))
+              .filter((n) => Number.isInteger(n));
+
+            const n = used.length ? Math.max(...used) + 1 : 0;
+            process.stdout.write(`${base}-${channel}.${n}`);
+          ' "$BASE" "$CHANNEL" "$PUBLISHED")
+
+          echo "Next version: $NEXT"
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEXT" >> "$GITHUB_OUTPUT"
+
+      # A tag that already exists would either be rejected by the push or, worse,
+      # silently do nothing and leave someone waiting for a release that never runs.
+      - name: Check the tag is free
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.next.outputs.tag }}"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Tag $TAG already exists locally."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists on the remote."
+            exit 1
+          fi
+          echo "OK: $TAG is free."
+
+      - name: Summary
+        run: |
+          {
+            echo "### Prerelease"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Version | \`${{ steps.next.outputs.version }}\` |"
+            echo "| Tag | \`${{ steps.next.outputs.tag }}\` |"
+            echo "| npm dist-tag | \`${{ github.event.inputs.channel }}\` |"
+            echo "| Dry run | \`${{ github.event.inputs.dry_run }}\` |"
+            echo ""
+            echo "Consumers install it with:"
+            echo ""
+            echo '```bash'
+            echo "npm install $(node -p "require('./package.json').name")@${{ github.event.inputs.channel }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create and push the tag
+        if: github.event.inputs.dry_run != 'true'
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.next.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Prerelease $TAG"
+          git push origin "$TAG"
+          echo "Pushed $TAG. build-release.yml will now build and publish it."
+
+      - name: Dry run notice
+        if: github.event.inputs.dry_run == 'true'
+        run: |
+          echo "Dry run: nothing was created."
+          echo "Re-run with dry_run=false to push ${{ steps.next.outputs.tag }}."

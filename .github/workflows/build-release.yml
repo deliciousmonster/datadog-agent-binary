@@ -612,6 +612,14 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      # Required for npm Trusted Publishing (OIDC). With a trusted publisher
+      # configured on npmjs.com for this repo + workflow, `npm publish` mints a
+      # short-lived token from this ID token and no NPM_TOKEN secret is needed. It also
+      # attaches build provenance, so the registry records which commit and workflow
+      # produced each tarball.
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -653,6 +661,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Trusted Publishing (OIDC) needs npm >= 11.5.1. The npm bundled with Node 22 is
+      # older, so upgrade the CLI rather than the runtime: bumping Node here would
+      # change the interpreter the build ran under.
+      - name: Upgrade npm for trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
       - name: Build TypeScript
         run: npm run build
 
@@ -666,15 +682,63 @@ jobs:
           echo "Setting npm package version to $VERSION"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
-      # Prerelease tags (anything with a hyphen, e.g. v7.75.5-next.4) publish
-      # under the `next` dist-tag so they do NOT move `latest`. Stable tags
-      # publish under `latest` as usual.
+      # A prerelease publishes under `next` so it cannot move `latest`; a stable release
+      # publishes under `latest`.
+      #
+      # Decided by parsing semver rather than by looking for a hyphen. The two agree for
+      # `7.75.6-next.0`, but "contains a hyphen" is not what prerelease means, and this
+      # is the switch that decides whether an untested build becomes the default install
+      # for every consumer. It is worth being exact about.
       - name: Determine npm dist-tag
         id: disttag
         run: |
-          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then TAG=next; else TAG=latest; fi
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          TAG=$(node -e '
+            const v = process.argv[1];
+            // Full semver, capturing the optional prerelease segment.
+            const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(v);
+            if (!m) {
+              console.error(`::error::Tag "${v}" is not valid semver; refusing to publish.`);
+              process.exit(1);
+            }
+            process.stdout.write(m[4] ? "next" : "latest");
+          ' "$VERSION")
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Publishing under npm dist-tag: $TAG"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing $VERSION under npm dist-tag: $TAG"
+
+      # Authentication. Two supported paths, and the choice is made by whether the
+      # secret exists:
+      #
+      #   Trusted Publishing (preferred) — configure a trusted publisher on npmjs.com
+      #     for this repo and workflow, leave NPM_TOKEN unset, and npm exchanges the
+      #     OIDC token above for a short-lived credential. Nothing long-lived is stored.
+      #
+      #   NPM_TOKEN (bootstrap) — a trusted publisher cannot always be configured for a
+      #     package that does not exist yet, so the FIRST publish of a new scope may
+      #     need a token. Set NPM_TOKEN, publish once, configure the trusted publisher,
+      #     then delete the secret.
+      #
+      # Writing an .npmrc with an empty token would break OIDC, so the file is only
+      # written when the secret is actually set.
+      - name: Configure npm authentication
+        id: npmauth
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
+            echo "Using NPM_TOKEN (bootstrap path)."
+            echo "mode=token" >> "$GITHUB_OUTPUT"
+          else
+            echo "No NPM_TOKEN set; relying on Trusted Publishing (OIDC)."
+            echo "If this fails with ENEEDAUTH, either configure a trusted publisher on"
+            echo "npmjs.com for ${GITHUB_REPOSITORY} / $(basename "$GITHUB_WORKFLOW"), or"
+            echo "set NPM_TOKEN for the first publish."
+            echo "mode=oidc" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Prepare platform packages with binaries
         run: |
@@ -694,31 +758,88 @@ jobs:
       - name: Verify the platform matrix before publishing
         run: node scripts/publish-matrix.js --local ./npm
 
+      # Platform packages publish FIRST, always. The main package's
+      # optionalDependencies name them at this exact version, so a main package that
+      # lands first briefly advertises dependencies that do not exist — and because
+      # optional dependency failures are silent, anyone installing in that window gets
+      # no binaries and no error.
+      #
+      # Idempotent by design. A partial failure (say the third of four) previously left
+      # the tag unrepeatable: re-running died on the first package with EPUBLISHCONFLICT,
+      # and the only way forward was a new version number. Already-published versions are
+      # now skipped, so re-running a tag finishes the job.
       - name: Publish platform packages
         run: |
+          set -euo pipefail
+          DIST_TAG="${{ steps.disttag.outputs.tag }}"
+          VERSION="${{ steps.disttag.outputs.version }}"
+
           for platform_dir in npm/*/; do
             platform=$(basename "$platform_dir")
-            echo "Publishing platform package: $platform"
+            pkg_name=$(node -p "require('./$platform_dir/package.json').name")
 
-            cd "$platform_dir"
-
-            # Check if binaries exist
-            if [ -d "bin" ] && [ "$(ls -A bin)" ]; then
-              npm publish --access public --tag ${{ steps.disttag.outputs.tag }}
-              echo "Published @deliciousmonster/datadog-agent-binary-$platform"
-            else
-              echo "Skipping $platform - no binaries found"
+            # The matrix gate above already proved every platform has both binaries, so
+            # an empty bin/ here means the two disagree. Fail rather than skip: a
+            # silently incomplete publish is the failure mode this whole pipeline exists
+            # to prevent.
+            if [ ! -d "$platform_dir/bin" ] || [ -z "$(ls -A "$platform_dir/bin")" ]; then
+              echo "::error::$pkg_name has no binaries, but the pre-publish matrix check passed. Refusing to publish an incomplete set."
+              exit 1
             fi
 
-            cd - > /dev/null
+            if npm view "$pkg_name@$VERSION" version >/dev/null 2>&1; then
+              echo "$pkg_name@$VERSION is already published; skipping."
+              continue
+            fi
+
+            echo "Publishing $pkg_name@$VERSION under dist-tag $DIST_TAG"
+            (cd "$platform_dir" && npm publish --access public --provenance --tag "$DIST_TAG")
           done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish main package
-        run: npm publish --access public --tag ${{ steps.disttag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          DIST_TAG="${{ steps.disttag.outputs.tag }}"
+          VERSION="${{ steps.disttag.outputs.version }}"
+          PKG=$(node -p "require('./package.json').name")
+
+          if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
+            echo "$PKG@$VERSION is already published; skipping."
+            exit 0
+          fi
+
+          echo "Publishing $PKG@$VERSION under dist-tag $DIST_TAG"
+          npm publish --access public --provenance --tag "$DIST_TAG"
+
+      # A prerelease must never become the default install. `npm publish --tag next`
+      # already avoids moving `latest`, but npm makes an exception that bites exactly
+      # once: on the very first publish of a package, `latest` is set regardless of
+      # --tag, because a package with no dist-tags needs one. For a new scope whose
+      # first release is a prerelease, that silently makes it the default.
+      - name: Assert a prerelease did not become `latest`
+        if: steps.disttag.outputs.tag == 'next'
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          MATRIX_RETRIES: "12"
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.disttag.outputs.version }}"
+          PKG=$(node -p "require('./package.json').name")
+
+          # Registry reads are not immediately consistent after a publish.
+          for _ in $(seq 1 12); do
+            LATEST=$(npm view "$PKG" dist-tags.latest 2>/dev/null || echo "")
+            [ -n "$LATEST" ] && break
+            sleep 5
+          done
+
+          echo "dist-tags after publish:"
+          npm view "$PKG" dist-tags || true
+
+          if [ "$LATEST" = "$VERSION" ]; then
+            echo "::error::Prerelease $VERSION became dist-tag \`latest\`. Every consumer installing without a tag now gets a prerelease. Fix with: npm dist-tag add $PKG@<last stable> latest"
+            exit 1
+          fi
+          echo "OK: latest is \"${LATEST:-<unset>}\", not the prerelease $VERSION."
 
       # The receipt: what actually landed on the registry, not what we believed we sent.
       #
