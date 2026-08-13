@@ -46,6 +46,26 @@ npm install @deliciousmonster/datadog-agent-binary
 
 Installing pulls in the pre-built binaries for your platform automatically via `optionalDependencies`; only the package whose `os`/`cpu` match your machine is fetched, and it carries both the core agent and the trace-agent.
 
+> **Bootstrap: the `@deliciousmonster` platform packages are not published yet.**
+>
+> `optionalDependencies` names all five under the new scope, and none of them exist on the
+> registry today. Because the dependencies are *optional*, **npm skips them silently and
+> `npm ci` still exits 0** — `node_modules/@deliciousmonster/` is simply never created. There
+> is no warning at install time. The first symptom is at runtime, where `BinaryManager` finds
+> no packaged binary and falls through to the build-from-source path.
+>
+> Confirm with:
+>
+> ```bash
+> npm ci && ls node_modules/@deliciousmonster/     # expect: no such directory, today
+> ```
+>
+> Until the platform packages are published under this scope, either publish them first (the
+> release workflow already publishes platform packages before the main package, so the
+> ordering is handled) or point `optionalDependencies` back at a scope that exists. Regenerate
+> `package-lock.json` after the first publish so the lock carries real integrity hashes instead
+> of the `{ "optional": true }` placeholders npm records for an unresolvable package.
+
 ## Usage
 
 ### Running the agents
@@ -324,7 +344,16 @@ Upstream writes the results to `<sourceDir>/bin/agent/agent` and `<sourceDir>/bi
 
 ### Build requirements
 
-Go (match the agent's `go.mod`, so 7.79.x needs Go 1.25.x), Node 18+, Python 3.12, CMake, Git, plus a C toolchain per platform: GCC (Linux), Xcode Command Line Tools (macOS), MinGW-w64 GCC (Windows). The Python and CMake requirements come from the core agent's build only; `trace-agent.build` needs neither.
+Go (match the agent's `go.mod`, so 7.79.x needs Go 1.25.x), Node 18+, Python 3.12, CMake, Git, plus a C toolchain per platform: GCC (Linux), Xcode Command Line Tools (macOS), MinGW-w64 GCC (Windows).
+
+Python appears twice here and the two uses are unrelated:
+
+- **Build-time Python is required for both binaries.** `dda` is a Python CLI and Datadog's build system is invoke-based, so every `dda inv <task>` needs it. `trace-agent.build` is no exception: at 7.79.1 it runs `go generate -mod=<mode> <repo>/pkg/trace/info` before compiling (`tasks/trace_agent.py:59`). Building the trace-agent without Python means bypassing the invoke task and running the underlying `go build` directly.
+
+  Install `dda` into a **virtualenv or via pipx**, not with a bare `pip install --user`. A user-site install resolves its data directory to the interpreter prefix while pip writes to `~/.local/share`, so every command then dies with `FileNotFoundError: .../share/dda-data/uv.lock`. On a PEP-668 Debian or Ubuntu image, `pip install dda` outside a venv fails outright with `externally-managed-environment`.
+- **Python must not end up inside the core agent binary.** That is what `--build-exclude=systemd,python` prevents. The `python` build tag links librtloader and an embedded CPython by an rpath into the build tree, producing a binary that only runs on the build machine. The trace-agent has no such tag and needs no such exclusion.
+
+CMake is genuinely core-agent-only: it builds rtloader, which the trace-agent does not link. The trace-agent's compile step is a plain `go build` of `./cmd/trace-agent` with the `TRACE_AGENT_TAGS` set.
 
 Both binaries are dynamically linked against glibc on Linux. The trace-agent's tag set includes `netcgo`, so it is not a static binary either; the glibc floor applies to it exactly as it does to the core agent, and CI checks both.
 

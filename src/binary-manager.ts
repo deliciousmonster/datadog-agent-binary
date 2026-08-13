@@ -58,12 +58,16 @@ export class BinaryManager {
 		// Fall back to a locally built binary (build-from-source workflow).
 		logger.warn(
 			`No packaged ${kind} binary resolved for ${platform.getName()}; falling back to ` +
-				`the build-from-source lookup. This needs a network call to GitHub and ` +
-				`a binary under ${this.buildDir}. In a Harper runtime this almost always ` +
-				`means the optional platform package ` +
+				`the build-from-source lookup under ${this.buildDir}. In a Harper runtime this ` +
+				`almost always means the optional platform package ` +
 				`${platformPackageName(platform.getName())} was not installed.`
 		);
-		const targetVersion = version || (await this.getLatestVersion());
+
+		// Resolve the version from the pin, not from upstream "latest". Using "latest"
+		// here made the fallback look under build/<latest>-<platform>/ — a directory the
+		// pinned build never creates — and issued a network call on every cache miss.
+		// Observed: the pin was 7.79.1 while the error cited build/7.82.1-macos-arm64.
+		const targetVersion = version ?? (await this.resolvePinnedVersion());
 		const binaryPath = this.getLocalBuildPath(
 			platform,
 			descriptor,
@@ -197,16 +201,18 @@ export class BinaryManager {
 		}
 	}
 
-	private async getLatestVersion(): Promise<string> {
-		const response = await fetch(
-			"https://api.github.com/repos/DataDog/datadog-agent/releases/latest"
-		);
-		if (!response.ok) {
-			throw new Error(`Failed to fetch latest version: ${response.statusText}`);
-		}
-
-		const data = (await response.json()) as { tag_name: string };
-		return data.tag_name;
+	/**
+	 * The pinned upstream version, for locating a locally built binary.
+	 *
+	 * Reads `.datadog-agent-version`, the same single source of truth the builder uses,
+	 * so the lookup path matches what a pinned build actually produced. Runtime resolution
+	 * must never depend on a network call: this runs inside a Harper worker, where a
+	 * request to the GitHub API is both a startup-latency risk and a silent failure mode
+	 * on an egress-restricted node.
+	 */
+	private async resolvePinnedVersion(): Promise<string> {
+		const { DatadogAgentDownloader } = await import("./downloader.js");
+		return new DatadogAgentDownloader().getPinnedVersion();
 	}
 
 	/**
