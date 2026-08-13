@@ -3,15 +3,12 @@ name: Check for New Datadog Agent Releases
 # DISABLED, and do not re-enable without fixing this first: the job tags the npm
 # package `v<upstream release>` but never writes .datadog-agent-version, which is
 # what src/downloader.ts actually builds from. Running it today would publish a
-# package labelled with one Datadog Agent release built from another — the exact
+# package labelled with one Datadog Agent release built from another, the exact
 # mislabelling that produced a package versioned 7.75.5 containing agent 7.79.2.
 # Whatever bumps the tag must bump the pin in the same commit.
 
 on:
-  #schedule:
-  # Disabled for now until / unless we revisit using this
-  # Run daily at 10:00 UTC
-  #- cron: "0 10 * * *"
+  # Intended cadence when re-enabled: schedule, cron "0 10 * * *".
   workflow_dispatch:
 
 env:
@@ -39,23 +36,10 @@ jobs:
       - name: Check for new upstream release
         id: check
         run: |
-          # Get latest Datadog Agent release with error handling
           echo "Fetching latest Datadog Agent release..."
           RESPONSE=$(curl -s https://api.github.com/repos/DataDog/datadog-agent/releases/latest)
 
-          # Check if curl succeeded
-          if [ $? -ne 0 ]; then
-            echo "Error: Failed to fetch release data from GitHub API"
-            exit 1
-          fi
-
-          # Debug: show the response
-          echo "API Response: $RESPONSE"
-
-          # Extract tag name
           LATEST_RELEASE=$(echo "$RESPONSE" | jq -r '.tag_name')
-
-          # Check if jq extraction succeeded
           if [ "$LATEST_RELEASE" = "null" ] || [ -z "$LATEST_RELEASE" ]; then
             echo "Error: Failed to extract tag_name from API response"
             echo "Response was: $RESPONSE"
@@ -64,7 +48,6 @@ jobs:
 
           echo "Latest upstream release: $LATEST_RELEASE"
 
-          # Check if we already have this version tagged (with v prefix)
           if git tag --list | grep -q "^v${LATEST_RELEASE}$"; then
             echo "Version v$LATEST_RELEASE already exists"
           else

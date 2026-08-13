@@ -2,49 +2,38 @@
 #
 # Drop this into the Agent's conf.d as `harperdb.d/conf.yaml` (point the Agent
 # at it with `confd_path`/`DD_CONFD_PATH`, or copy it into the Agent's own
-# conf.d). Requires log collection to be on: `logs_enabled: true` in
-# datadog.yaml, or `DD_LOGS_ENABLED=true`.
+# conf.d). Needs log collection on: `logs_enabled: true` in datadog.yaml, or
+# `DD_LOGS_ENABLED=true`.
 #
-# WHY THE multi_line RULE
-# -----------------------
-# Harper writes hdb.log as plain text, NOT JSON. A single event starts with an
-# ISO-8601 timestamp and its stack traces / pretty-printed error objects spill
-# onto many following lines that do NOT start with a timestamp, e.g.:
+# Harper writes hdb.log as plain text, not JSON. One event starts with an
+# ISO-8601 timestamp and its stack traces and pretty-printed error objects spill
+# onto following lines that do not:
 #
 #   2026-05-22T22:28:41.020Z [main/0] [warn] [analytics]: Error ... ENOENT ...
 #       at Object.readdirSync (node:fs:1583:26)
-#       at storeDBSizeMetrics (.../analytics/write.ts:327:31)
 #     code: 'ENOENT',
 #   }
 #
-# By default the Agent tails one physical line = one log, so every `at ...` /
-# `code:` line arrives in Datadog as its own entry. That is the "logs coming in
-# line by line" problem.
+# The Agent tails one physical line per log by default, so every `at ...` line
+# arrives in Datadog as its own entry. The multi_line rule below says a new log
+# begins only at a timestamp and appends everything else to the entry above it.
+# Against a real hdb.log, 185,440 physical lines collapse to 15,952 events with
+# no continuation line wrongly treated as a new one.
 #
-# The multi_line rule below tells the Agent that a NEW log begins only when a
-# line starts with a timestamp; every other line is appended to the entry
-# above it. Verified against a real hdb.log: 185,440 physical lines collapse to
-# 15,952 actual events, with no continuation line wrongly treated as a new one.
-#
-# NOTE: `source` is intentionally omitted. These logs are not JSON, so there is
-# no JSON pipeline to hit; setting `source: harperdb` only routes them to a
-# pipeline that does not match. Multi-line aggregation is what fixes the
-# splitting, and it happens here in the Agent regardless of source.
+# `source` is omitted deliberately. These logs are not JSON, so `source: harperdb`
+# only routes them to a pipeline that does not match them.
 
 logs:
   - type: file
-    # {ROOTPATH}/log/hdb.log — set to your Harper log path.
+    # {ROOTPATH}/log/hdb.log - set to your Harper log path.
     path: "/path/to/harper/log/hdb.log"
-    # `service` correlates these logs with APM traces / RUM. Use the same value
-    # as DD_SERVICE / the tracer's service name.
+    # Correlates these logs with APM traces and RUM. Use the same value as
+    # DD_SERVICE / the tracer's service name.
     service: "harper"
     log_processing_rules:
-      # A new log entry starts with an ISO-8601 timestamp; everything else
-      # (stack frames, error-object lines) is appended to the entry above it.
-      # The pattern is auto-anchored to the start of the line by Datadog — do
-      # not add a leading '^'. Single-quoted so YAML keeps the backslashes.
+      # Datadog auto-anchors the pattern to the start of the line, so no leading
+      # '^'. Single-quoted so YAML keeps the backslashes.
       - type: multi_line
         name: harper_new_log_starts_with_timestamp
         pattern: '\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'
-    # env / version are inherited globally from DD_ENV / DD_VERSION (or the
-    # Agent config) — no need to set them per source here.
+    # env / version are inherited globally from DD_ENV / DD_VERSION.

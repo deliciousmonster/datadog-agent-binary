@@ -1,7 +1,6 @@
-# Dockerfile for cross-compiling Datadog Agent to Windows
+# Cross-compile the Datadog Agent to Windows.
 FROM golang:1.23
 
-# Install MinGW cross-compilation tools for Windows
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
@@ -18,15 +17,10 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Set Go environment for Windows
 ENV CGO_ENABLED=1
 ENV GOOS=windows
 
-# Create working directory
+# Source and build script are mounted at runtime.
 WORKDIR /workspace
 
-# Copy source code will be mounted at runtime
-# Build script will be provided at runtime
-
-# Default command
 CMD ["/bin/bash"]

@@ -3,13 +3,13 @@ name: Cut Prerelease
 # Creates and pushes the next `-next.N` tag, which triggers build-release.yml.
 #
 # This exists so nobody hand-types a release tag. The tag is the only input to the
-# entire publish pipeline: it sets the npm version, and whether it parses as a semver
+# publish pipeline: it sets the npm version, and whether it parses as a semver
 # prerelease decides whether the build lands on `next` or takes over `latest` for every
-# consumer. A typo there is not a typo, it is a bad default install.
+# consumer. A typo there is a bad default install, not a typo.
 #
-# It computes the next prerelease number by asking the registry what already exists,
-# rather than trusting package.json, because the version in the working tree is whatever
-# the last release set and says nothing about what has been published since.
+# The next prerelease number comes from the registry rather than package.json, because
+# the version in the working tree is whatever the last release set and says nothing
+# about what has been published since.
 
 on:
   workflow_dispatch:
@@ -91,8 +91,8 @@ jobs:
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"
           echo "tag=v$NEXT" >> "$GITHUB_OUTPUT"
 
-      # A tag that already exists would either be rejected by the push or, worse,
-      # silently do nothing and leave someone waiting for a release that never runs.
+      # An existing tag is either rejected by the push or silently does nothing,
+      # leaving someone waiting for a release that never runs.
       - name: Check the tag is free
         run: |
           set -euo pipefail
