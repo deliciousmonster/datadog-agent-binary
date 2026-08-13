@@ -1,4 +1,9 @@
-import { Architecture, OS } from "./types";
+import {
+	AgentBinaryDescriptor,
+	AgentBinaryKind,
+	Architecture,
+	OS,
+} from "./types";
 
 export abstract class Platform {
 	protected readonly arch: Architecture;
@@ -50,15 +55,77 @@ export abstract class Platform {
 	}
 
 	abstract getOS(): OS;
-	abstract getBinaryName(): string;
+
+	/**
+	 * Filename of the core agent binary.
+	 *
+	 * Retained so existing consumers keep working. Prefer `getBinaries()`, which
+	 * describes every binary this package ships.
+	 */
+	getBinaryName(): string {
+		return this.getBinary("core").outputName;
+	}
+
+	/** Filename of the trace-agent (APM receiver) binary. */
+	getTraceAgentBinaryName(): string {
+		return this.getBinary("trace").outputName;
+	}
+
+	/** Executable extension for this platform (`.exe` on Windows). Mirrors upstream `bin_name()`. */
+	protected getExecutableExtension(): string {
+		return "";
+	}
+
+	/**
+	 * Every agent binary this package builds and ships for this platform.
+	 *
+	 * Callers iterate this rather than hardcoding a single binary. Adding a future
+	 * sub-agent is a new entry here, not a change to five call sites.
+	 */
+	getBinaries(): AgentBinaryDescriptor[] {
+		const ext = this.getExecutableExtension();
+		return [
+			{
+				kind: "core",
+				buildTask: "agent.build",
+				buildDir: "agent",
+				buildName: `agent${ext}`,
+				outputName: `datadog-agent${ext}`,
+				// See AgentBinaryDescriptor.buildArgs for why the core agent needs these.
+				buildArgs: "--build-exclude=systemd,python",
+				buildArgsEnvVar: "DD_AGENT_BUILD_ARGS",
+				accessorName: "getBinaryPath",
+				processName: "datadog-agent",
+			},
+			{
+				kind: "trace",
+				buildTask: "trace-agent.build",
+				buildDir: "trace-agent",
+				buildName: `trace-agent${ext}`,
+				outputName: `trace-agent${ext}`,
+				// Deliberately empty; the core agent's excludes do not apply here.
+				buildArgs: "",
+				buildArgsEnvVar: "DD_TRACE_AGENT_BUILD_ARGS",
+				accessorName: "getTraceAgentBinaryPath",
+				processName: "datadog-trace-agent",
+			},
+		];
+	}
+
+	/** Look up one descriptor by kind. Throws if the kind is not defined for this platform. */
+	getBinary(kind: AgentBinaryKind): AgentBinaryDescriptor {
+		const found = this.getBinaries().find((b) => b.kind === kind);
+		if (!found) {
+			throw new Error(
+				`No ${kind} binary is defined for platform ${this.getName()}`
+			);
+		}
+		return found;
+	}
 }
 
 abstract class Unix extends Platform {
 	abstract getOS(): OS;
-
-	getBinaryName(): string {
-		return "datadog-agent";
-	}
 }
 
 class Linux extends Unix {
@@ -78,8 +145,8 @@ class Windows extends Platform {
 		return "windows";
 	}
 
-	getBinaryName(): string {
-		return "datadog-agent.exe";
+	protected getExecutableExtension(): string {
+		return ".exe";
 	}
 }
 
@@ -88,8 +155,8 @@ class Unknown extends Platform {
 		throw new Error("Unknown OS");
 	}
 
-	getBinaryName(): string {
-		throw new Error("Unknown binary name");
+	getBinaries(): AgentBinaryDescriptor[] {
+		throw new Error("Unknown platform: no agent binaries are defined");
 	}
 }
 
