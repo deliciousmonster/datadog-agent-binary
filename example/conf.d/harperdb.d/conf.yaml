@@ -1,0 +1,27 @@
+# Datadog log source for Harper's hdb.log, as a template.
+#
+# dd-supervisor.js reads this file, substitutes the two placeholders below, and writes the
+# result to <runtime dir>/conf.d/harperdb.d/conf.yaml, which is where confd_path in the
+# generated datadog.yaml points. The substitution exists because `path` has to be absolute
+# and machine-specific while this file is version-controlled with the component.
+#
+# The multi_line rule is the load-bearing part. Its rationale, and the measured effect of
+# leaving it out, are in ../../../conf.d/harperdb.d/conf.yaml.example at the root of this
+# package. Read that file before changing anything here.
+#
+# It applies unchanged to this component: Harper writes every entry prefixed with an
+# ISO-8601 timestamp (`${new Date().toISOString()} ...`), and a logged Error spills its
+# stack across following lines that carry no timestamp. GET /Work/ deliberately logs such
+# an Error so this rule is exercised on the first request.
+
+logs:
+  - type: file
+    # Substituted from DD_HARPER_LOG_PATH, or <ROOTPATH>/log/hdb.log.
+    path: "__HDB_LOG_PATH__"
+    # Substituted from DD_SERVICE. Must match the tracer's service name for logs and APM
+    # traces to correlate; dd-trace reads the same DD_SERVICE.
+    service: "__DD_SERVICE__"
+    log_processing_rules:
+      - type: multi_line
+        name: harper_new_log_starts_with_timestamp
+        pattern: '\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'

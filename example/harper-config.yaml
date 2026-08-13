@@ -1,0 +1,70 @@
+# Node-level Harper configuration for the Datadog example.
+#
+# THIS IS NOT A DROP-IN FILE. It is the set of keys to add to, or change in, the
+# harperdb-config.yaml Harper generates at <ROOTPATH>/harperdb-config.yaml on first run.
+# Copy the blocks below into that file rather than replacing it, because Harper does not
+# fall back to defaultConfig.yaml for keys that a hand-written config omits: it reads the
+# file it finds. A config containing only the `applications` block below would leave every
+# other setting undefined.
+#
+# Every value here is node-level. None of it belongs in the component's own config.yaml.
+# Restart Harper after editing: the spawn allowlist is captured once at module load
+# (`const ALLOWED_COMMANDS = new Set(...)` in security/jsLoader.ts), so an edit without a
+# restart changes nothing and looks like the edit was ignored.
+
+applications:
+  # Harper permits a spawn only when the command matches an entry here EXACTLY, by absolute
+  # path. The test is `ALLOWED_COMMANDS.has(command.split(" ")[0])` -- a Set lookup on the
+  # fragment before the first space. No prefix matching, no basename, no realpath, and a
+  # path containing a space can never match at all.
+  #
+  # Both agents need an entry. Allowlisting the core agent says nothing about the
+  # trace-agent, and the trace-agent is the process that binds 127.0.0.1:8126 and receives
+  # spans -- without it, dd-trace connects to a closed port and drops every span silently.
+  #
+  # These two paths are machine-specific. Print the real ones with:
+  #
+  #   node -e "const {BinaryManager}=require('@harperfast/datadog-agent-binary'); \
+  #     const m=new BinaryManager(); \
+  #     m.ensureBinary('core').then(console.log); \
+  #     m.ensureTraceAgentBinary().then(console.log);"
+  #
+  # Harper's own defaults are `npm` and `node`. Listing your own entries replaces that list
+  # rather than extending it, so they are repeated here; drop them only deliberately.
+  allowedSpawnCommands:
+    - npm
+    - node
+    - /REPLACE/WITH/ABSOLUTE/PATH/TO/bin/datadog-agent
+    - /REPLACE/WITH/ABSOLUTE/PATH/TO/bin/trace-agent
+
+threads:
+  # BOTH entries are required, and neither substitutes for the other.
+  #
+  # preloadRequire -> --require. This is the one that actually starts the tracer:
+  # `dd-trace/init` is a CommonJS module whose body calls `require("dd-trace").init()`.
+  # Without it the tracer stays a no-op proxy, and the no-op is not obviously broken --
+  # tracer.trace() still runs your callback, still hands you a span, and
+  # span.context().toTraceId() still returns a plausible random id. It is a NoopSpan and
+  # nothing is ever sent. GET /Work/ reports `tracerInitialized` so this is visible.
+  preloadRequire: dd-trace/init
+
+  # preload -> --import. `dd-trace/register.js` installs the ESM loader hooks that let
+  # dd-trace instrument modules loaded through import, which is what produces the automatic
+  # http spans. It does NOT call init() -- on its own it initialises nothing.
+  preload: dd-trace/register.js
+
+logging:
+  # The Datadog log source tails this file, so it has to exist and its path has to be known
+  # to the component. Pin it here and export the same value as DD_HARPER_LOG_PATH, or set
+  # ROOTPATH and let both derive <ROOTPATH>/log/hdb.log.
+  file: true
+  path: /REPLACE/WITH/ABSOLUTE/PATH/TO/harper/log/hdb.log
+
+  # The supervisor forwards each agent's stdout and stderr into this log at info and warn.
+  # At Harper's default level of `warn` the agents' startup lines are dropped, which is the
+  # difference between diagnosing a failure in one command and guessing at it.
+  level: info
+
+  # Optional. Harper's container image sets this so logs also reach the container's stdout.
+  # It is independent of `file` above: both can be on, and the Datadog source needs `file`.
+  stdStreams: false

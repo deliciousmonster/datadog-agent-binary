@@ -24,8 +24,12 @@ export class DatadogAgentBuilder {
 			buildArgs?: string[];
 		} = {}
 	): Promise<BuildResult> {
-		const version =
-			options.version || (await this.downloader.getLatestVersion());
+		// resolveVersion falls back to the pin in .datadog-agent-version, never to
+		// upstream "latest", and proves the tag exists before we clone. Both agent
+		// binaries are built from this one ref: the core agent and trace-agent share an
+		// IPC auth handshake and a config schema, so a mismatched pair fails at the
+		// handshake with nothing in the error naming the cause.
+		const version = await this.downloader.resolveVersion(options.version);
 		const platformName = platform.getName();
 		const outputDir = options.outputDir || "./build";
 

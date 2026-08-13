@@ -3,6 +3,8 @@ import * as path from "path";
 import fetch from "node-fetch";
 import { logger } from "./logger.js";
 import { Platform } from "./platform.js";
+import { PACKAGE_NAME, platformPackageName } from "./package-identity.js";
+import { AgentBinaryDescriptor, AgentBinaryKind } from "./types.js";
 
 export interface BinaryInfo {
 	version: string;
@@ -21,77 +23,143 @@ export class BinaryManager {
 		this.binDir = path.join(__dirname, "..", "bin");
 	}
 
-	async ensureBinary(version?: string): Promise<string> {
+	/**
+	 * Resolve one agent binary for the current platform.
+	 *
+	 * `kind` leads the parameter list because it is the axis every caller now varies;
+	 * it defaults to `core` so the zero-arg call in existing consumers is unchanged.
+	 */
+	async ensureBinary(
+		kind: AgentBinaryKind = "core",
+		version?: string
+	): Promise<string> {
 		const platform = Platform.current();
+		const descriptor = this.getDescriptor(platform, kind);
 		logger.info(
-			`Resolving Datadog Agent binary for platform ${platform.getName()} ` +
+			`Resolving Datadog ${kind} agent binary (${descriptor.outputName}) for platform ` +
+				`${platform.getName()} ` +
 				`(process.platform=${process.platform}, process.arch=${process.arch})`
 		);
 
 		// Prefer a prebuilt binary shipped via the optional platform package
-		// (e.g. @harperfast/datadog-agent-binary-linux-x86_64). This is the
+		// (e.g. <package name>-linux-x86_64). This is the
 		// path used when the package is installed from npm.
-		const packagedBinary = await this.resolveFromPlatformPackage(platform);
+		const packagedBinary = await this.resolveFromPlatformPackage(
+			platform,
+			descriptor
+		);
 		if (packagedBinary) {
-			logger.info(`Using packaged Datadog Agent binary: ${packagedBinary}`);
+			logger.info(
+				`Using packaged Datadog ${kind} agent binary: ${packagedBinary}`
+			);
 			return packagedBinary;
 		}
 
 		// Fall back to a locally built binary (build-from-source workflow).
 		logger.warn(
-			`No packaged binary resolved for ${platform.getName()}; falling back to ` +
+			`No packaged ${kind} binary resolved for ${platform.getName()}; falling back to ` +
 				`the build-from-source lookup. This needs a network call to GitHub and ` +
 				`a binary under ${this.buildDir}. In a Harper runtime this almost always ` +
 				`means the optional platform package ` +
-				`@harperfast/datadog-agent-binary-${platform.getName()} was not installed.`
+				`${platformPackageName(platform.getName())} was not installed.`
 		);
 		const targetVersion = version || (await this.getLatestVersion());
-		const binaryPath = await this.getBinaryPath(platform, targetVersion);
+		const binaryPath = this.getLocalBuildPath(
+			platform,
+			descriptor,
+			targetVersion
+		);
 
 		if (await this.binaryExists(binaryPath)) {
-			logger.info(`Using locally built Datadog Agent binary: ${binaryPath}`);
+			logger.info(
+				`Using locally built Datadog ${kind} agent binary: ${binaryPath}`
+			);
 			return binaryPath;
 		}
 
 		throw new Error(
-			`Datadog Agent binary not found for ${platform.getName()}. Checked the ` +
-				`optional platform package ` +
-				`@harperfast/datadog-agent-binary-${platform.getName()} and the local ` +
-				`build path ${binaryPath}; neither resolved a runnable binary.`
+			`Datadog ${kind} agent binary (${descriptor.outputName}) not found for ` +
+				`${platform.getName()}. Checked the optional platform package ` +
+				`${platformPackageName(platform.getName())} (via its ` +
+				`${descriptor.accessorName}() accessor) and the local build path ` +
+				`${binaryPath}; neither resolved a runnable binary.`
 		);
 	}
 
 	/**
-	 * Attempts to resolve the agent binary from the optional platform package
-	 * for the current platform. Returns the binary path if the package is
-	 * installed and the binary exists, otherwise null.
+	 * The trace-agent: the process that binds 127.0.0.1:8126 and receives spans.
+	 * A named accessor so it is findable by anyone grepping for APM, rather than
+	 * hidden behind a string argument.
+	 */
+	async ensureTraceAgentBinary(version?: string): Promise<string> {
+		return this.ensureBinary("trace", version);
+	}
+
+	private getDescriptor(
+		platform: Platform,
+		kind: AgentBinaryKind
+	): AgentBinaryDescriptor {
+		// ensureBinary() gained a leading `kind` parameter. A caller written against
+		// the old one-arg signature passes a version string here, which would
+		// otherwise surface as an opaque "No 7.75.5 binary is defined".
+		if (kind !== "core" && kind !== "trace") {
+			throw new Error(
+				`ensureBinary() received "${String(kind)}" as its first argument. That ` +
+					`parameter is now the binary kind ("core" | "trace") and the version moved ` +
+					`to the second argument: call ensureBinary("core", version).`
+			);
+		}
+		return platform.getBinary(kind);
+	}
+
+	/**
+	 * Attempts to resolve the given agent binary from the optional platform package
+	 * for the current platform. Returns the binary path if the package is installed
+	 * and the binary exists, otherwise null.
 	 */
 	private async resolveFromPlatformPackage(
-		platform: Platform
+		platform: Platform,
+		descriptor: AgentBinaryDescriptor
 	): Promise<string | null> {
-		const packageName = `@harperfast/datadog-agent-binary-${platform.getName()}`;
-		logger.debug(`Attempting to resolve platform package ${packageName}`);
+		const packageName = platformPackageName(platform.getName());
+		logger.debug(
+			`Attempting to resolve the ${descriptor.kind} binary from platform package ` +
+				`${packageName} via ${descriptor.accessorName}()`
+		);
 		try {
-			const pkg = (await import(packageName)) as {
-				default?: { getBinaryPath?: () => string };
-				getBinaryPath?: () => string;
+			type PackageExports = Record<string, unknown> & {
+				default?: Record<string, unknown>;
 			};
-			const getBinaryPath = pkg.getBinaryPath || pkg.default?.getBinaryPath;
-			if (typeof getBinaryPath !== "function") {
+			const pkg = (await import(packageName)) as PackageExports;
+			const accessor = (pkg[descriptor.accessorName] ??
+				pkg.default?.[descriptor.accessorName]) as (() => string) | undefined;
+			if (typeof accessor !== "function") {
+				// The main package and the platform packages are version-locked, but
+				// they are published as separate artifacts and are installed
+				// independently, so a rollout goes through a window where a new main
+				// package sits on top of an old platform package. Missing accessor is
+				// exactly that skew, and naming the accessor makes it diagnosable from
+				// this one line.
 				logger.warn(
-					`Platform package ${packageName} loaded but does not export a ` +
-						`getBinaryPath() function — cannot resolve the agent binary from it.`
+					`Platform package ${packageName} loaded but exports no ` +
+						`${descriptor.accessorName}() function, so the ${descriptor.kind} binary ` +
+						`cannot be resolved from it. That platform package is almost certainly ` +
+						`older than ${PACKAGE_NAME} itself and predates the ` +
+						`${descriptor.kind} binary. The two are version-locked: install ` +
+						`${packageName} at the same version as the main package.`
 				);
 				return null;
 			}
-			const binaryPath = getBinaryPath();
-			logger.debug(`${packageName} reports binary path: ${binaryPath}`);
+			const binaryPath = accessor();
+			logger.debug(
+				`${packageName} reports ${descriptor.kind} binary path: ${binaryPath}`
+			);
 			if (await this.binaryExists(binaryPath)) {
 				return binaryPath;
 			}
 			logger.warn(
-				`Platform package ${packageName} resolved but its binary is missing ` +
-					`at ${binaryPath}.`
+				`Platform package ${packageName} resolved but its ${descriptor.kind} binary ` +
+					`is missing at ${binaryPath}.`
 			);
 			return null;
 		} catch (error: any) {
@@ -107,15 +175,16 @@ export class BinaryManager {
 		}
 	}
 
-	private async getBinaryPath(
+	/** Where the build-from-source workflow leaves this binary. */
+	private getLocalBuildPath(
 		platform: Platform,
+		descriptor: AgentBinaryDescriptor,
 		version: string
-	): Promise<string> {
-		const fileName = platform.getBinaryName();
+	): string {
 		return path.join(
 			this.buildDir,
 			`${version}-${platform.getName()}`,
-			fileName
+			descriptor.outputName
 		);
 	}
 
@@ -140,66 +209,60 @@ export class BinaryManager {
 		return data.tag_name;
 	}
 
-	async createBinaryWrapper(): Promise<void> {
-		const wrapperPath = path.join(this.binDir, "datadog-agent");
+	/**
+	 * Write the launcher for one binary into `bin/`.
+	 *
+	 * The generated file is the same one-line shim that ships in `bin/` — both hand
+	 * off to `dist/agent-launcher.js` — so regenerating over a shipped shim is a
+	 * no-op rather than a downgrade that loses its startup diagnostics.
+	 */
+	async createBinaryWrapper(descriptor?: AgentBinaryDescriptor): Promise<void> {
 		const platform = Platform.current();
-
-		let wrapperContent: string;
+		const target = descriptor ?? platform.getBinary("core");
+		// datadog-agent[.exe] -> bin/datadog-agent, trace-agent[.exe] -> bin/trace-agent.
+		// The extension is stripped so the wrapper name matches the shipped shim (and
+		// the package.json "bin" entry) on every platform.
+		const wrapperPath = path.join(
+			this.binDir,
+			path.basename(target.outputName, path.extname(target.outputName))
+		);
 
 		if (platform.getOS() === "windows") {
-			wrapperContent = this.createWindowsWrapper();
-			await fs.writeFile(wrapperPath + ".cmd", wrapperContent);
+			await fs.writeFile(
+				wrapperPath + ".cmd",
+				this.createWindowsWrapper(target)
+			);
 		} else {
-			wrapperContent = this.createUnixWrapper();
-			await fs.writeFile(wrapperPath, wrapperContent);
+			await fs.writeFile(wrapperPath, this.createUnixWrapper(target));
 			await fs.chmod(wrapperPath, 0o755);
 		}
 
-		logger.debug(`Created binary wrapper: ${wrapperPath}`);
+		logger.debug(`Created ${target.kind} binary wrapper: ${wrapperPath}`);
 	}
 
-	private createUnixWrapper(): string {
+	/** Write a launcher for every binary this platform ships. */
+	async createBinaryWrappers(): Promise<void> {
+		for (const descriptor of Platform.current().getBinaries()) {
+			await this.createBinaryWrapper(descriptor);
+		}
+	}
+
+	private createUnixWrapper(descriptor: AgentBinaryDescriptor): string {
 		return `#!/usr/bin/env node
 
-const { BinaryManager } = require('../dist/binary-manager.js');
-const { spawn } = require('child_process');
-const path = require('path');
-
-async function main() {
-  try {
-    const manager = new BinaryManager();
-    const binaryPath = await manager.ensureBinary();
-
-    // Harper v5 requires \`name\` on spawn options when invoked from inside a
-    // Harper application — it lets Harper dedupe the child across worker
-    // threads. The option is silently ignored by stock Node.js, so this is
-    // safe outside Harper too.
-    const child = spawn(binaryPath, process.argv.slice(2), {
-      stdio: 'inherit',
-      env: process.env,
-      name: 'datadog-agent'
-    });
-
-    child.on('exit', (code) => {
-      process.exit(code || 0);
-    });
-
-  } catch (error) {
-    console.error('Failed to run datadog-agent:', error.message);
-    process.exit(1);
-  }
-}
-
-main();
+// Generated by BinaryManager.createBinaryWrapper(), and identical to the shim
+// committed at bin/. All launcher behaviour (env diagnostics, preflight checks,
+// Harper spawn semantics) lives in dist/agent-launcher.js so the launchers for
+// the core agent and the trace-agent cannot drift apart.
+require("../dist/agent-launcher.js").launchAgent("${descriptor.kind}");
 `;
 	}
 
-	private createWindowsWrapper(): string {
+	private createWindowsWrapper(descriptor: AgentBinaryDescriptor): string {
 		// The original cmd wrapper invoked `dist/binary-manager.js` directly,
 		// but that file is a module — it has no top-level main and never
-		// spawned the agent. Delegate to the same Node wrapper logic used on
-		// Unix so the agent binary is actually launched (with the v5-required
-		// `name` option).
+		// spawned the agent. Delegate to the same launcher used on Unix so the
+		// agent binary is actually launched (with the v5-required `name` option).
 		//
 		// Three Windows-specific gotchas the implementation works around:
 		//   1. Inlining %~dp0 into the JS string literal corrupts the path —
@@ -211,19 +274,30 @@ main();
 		//      makes the trailing char `.`, which path.join normalizes away.
 		//   3. With `node -e "<code>" "<path>" <args...>`, there is no script
 		//      slot in argv — the path lands at argv[1] and user args start at
-		//      argv[2] (unlike `node script.js` where argv[1] is the script).
+		//      argv[2], which is the same index launchAgent() slices from when
+		//      invoked as `node bin/<wrapper> <args...>`.
 		return `@echo off
-node -e "const path=require('path');const{spawn}=require('child_process');(async()=>{try{const{BinaryManager}=require(path.join(process.argv[1],'..','dist','binary-manager.js'));const m=new BinaryManager();const b=await m.ensureBinary();const c=spawn(b,process.argv.slice(2),{stdio:'inherit',env:process.env,name:'datadog-agent'});c.on('exit',code=>process.exit(code||0));}catch(e){console.error('Failed to run datadog-agent:',e.message);process.exit(1);}})()" "%~dp0." %*
+node -e "const path=require('path');require(path.join(process.argv[1],'..','dist','agent-launcher.js')).launchAgent('${descriptor.kind}');" "%~dp0." %*
 `;
 	}
 
 	async installForCurrentPlatform(): Promise<void> {
 		const platform = Platform.current();
-		logger.info(`Installing Datadog Agent binary for ${platform.getName()}...`);
+		const binaries = platform.getBinaries();
+		logger.info(
+			`Installing Datadog Agent binaries for ${platform.getName()}: ` +
+				binaries.map((b) => `${b.kind}=${b.outputName}`).join(", ")
+		);
 
 		try {
-			await this.ensureBinary();
-			await this.createBinaryWrapper();
+			// Every binary is required, not best-effort. A partial install that
+			// resolves the core agent and quietly skips the trace-agent is precisely
+			// the failure this package shipped once already: APM looks configured,
+			// nothing listens on 8126, and every span is dropped without an error.
+			for (const descriptor of binaries) {
+				await this.ensureBinary(descriptor.kind);
+			}
+			await this.createBinaryWrappers();
 			logger.info("Installation completed successfully");
 		} catch (error: any) {
 			logger.error(`Installation failed: ${error.message}`);

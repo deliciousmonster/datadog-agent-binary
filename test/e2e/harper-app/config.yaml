@@ -1,7 +1,0 @@
-# Harper component config for the integration-test app.
-# A config.yaml replaces Harper's default config entirely (no merge), so we
-# declare exactly what this app needs: REST endpoints generated from the
-# Resource classes exported by resources.js.
-rest: true
-jsResource:
-  files: resources.js

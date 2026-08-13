@@ -1,0 +1,11 @@
+# A config.yaml replaces Harper's default component config entirely (no merge),
+# so this declares exactly what the probe needs: load resources.js as JavaScript.
+#
+# There is deliberately no `rest: true` and no exported Resource. Every probe
+# runs at module load, which happens once in each worker thread; an HTTP-driven
+# probe would only ever reach the one thread that served the request, and on
+# macOS and Windows that is always the same thread (without SO_REUSEPORT the
+# main thread binds the ports and serves alone). Load time is the only place a
+# test can observe all N threads racing for the same PID lock.
+jsResource:
+  files: resources.js

@@ -1,6 +1,11 @@
 import { execSync, spawn } from "child_process";
 import * as path from "path";
-import { BuildConfig, BuildResult } from "../types.js";
+import {
+	AgentBinaryDescriptor,
+	AgentBinaryKind,
+	BuildConfig,
+	BuildResult,
+} from "../types.js";
 import { logger } from "../logger.js";
 
 export abstract class BaseBuilder {
@@ -19,40 +24,39 @@ export abstract class BaseBuilder {
 		logger.info("Installing Go tools...");
 		await this.executeCommand("dda --no-interactive inv install-tools");
 
-		const buildArgs = this.getAgentBuildArgs();
-		logger.info(`Building agent (args: ${buildArgs})...`);
-		await this.executeCommand(
-			`dda --no-interactive inv agent.build ${buildArgs}`
-		);
+		// One invoke task per binary. `agent.build` produces the core agent and
+		// nothing else: upstream has no bundling flag, so the trace-agent only
+		// exists if `trace-agent.build` is run too. Building just the first entry
+		// here is exactly the defect that shipped a package whose APM receiver
+		// never bound 127.0.0.1:8126.
+		for (const binary of this.config.platform.getBinaries()) {
+			const buildArgs = this.getBuildArgs(binary);
+			logger.info(
+				`Building ${binary.kind} agent via ${binary.buildTask}` +
+					`${buildArgs ? ` (args: ${buildArgs})` : ""}...`
+			);
+			// Append args only when non-empty. The command is later split on " "
+			// and spawned without a shell, so a trailing space becomes an empty
+			// argv entry that invoke rejects as an unknown positional argument.
+			const suffix = buildArgs ? ` ${buildArgs}` : "";
+			await this.executeCommand(
+				`dda --no-interactive inv ${binary.buildTask}${suffix}`
+			);
+		}
 	}
 
 	/**
-	 * Flags passed to `dda inv agent.build`.
+	 * Flags appended to one binary's invoke task.
 	 *
-	 * IMPORTANT: by default the agent is built with the embedded Python runtime,
-	 * which makes the binary dynamically link `libdatadog-agent-rtloader` (and an
-	 * embedded interpreter) by an rpath pointing into the build tree. That binary
-	 * does NOT run on any machine other than the build server — it can't find
-	 * those libraries. To ship a relocatable binary via npm, the agent must be
-	 * built self-contained (no embedded Python), which is sufficient for the
-	 * log/metric forwarding use case.
-	 *
-	 * The exact flag to disable Python varies by `dda`/invoke version, so this is
-	 * overridable via the DD_AGENT_BUILD_ARGS environment variable — set it in CI
-	 * to iterate on the right flag without a code change. Note: args are spawned
-	 * without a shell, so each token must stand alone (no quoted/empty values).
+	 * Per-binary rather than global: the core agent's `--build-exclude=systemd,python`
+	 * would be wrong on the trace-agent, which links neither (see
+	 * `AgentBinaryDescriptor.buildArgs`). Each descriptor names its own override
+	 * env var so CI can iterate on flags for one binary without disturbing the
+	 * other. Args are spawned without a shell, so each token must stand alone
+	 * (no quoted or empty values).
 	 */
-	protected getAgentBuildArgs(): string {
-		const override = process.env.DD_AGENT_BUILD_ARGS;
-		if (override && override.trim()) {
-			return override.trim();
-		}
-		// Exclude the `python` build tag: it's what links librtloader (the cgo
-		// Python bridge), which is the non-relocatable dependency that prevents
-		// the binary from running off the build machine. Dropping it yields a
-		// self-contained binary and only removes Python-based integration checks,
-		// which aren't needed for log/metric forwarding.
-		return "--build-exclude=systemd,python";
+	protected getBuildArgs(binary: AgentBinaryDescriptor): string {
+		return process.env[binary.buildArgsEnvVar]?.trim() || binary.buildArgs;
 	}
 
 	protected async executeCommand(
@@ -258,16 +262,16 @@ export abstract class BaseBuilder {
 		}
 	}
 
-	protected getBuildBinaryName(): string {
-		return "agent";
-	}
-
-	protected getOutputBinaryName(): string {
-		return "datadog-agent";
-	}
-
-	protected async copyBinariesToOutput(): Promise<void> {
-		const { copyFile, mkdir } = await import("fs/promises");
+	/**
+	 * Copy every binary the platform declares into the output directory.
+	 *
+	 * Returns what it copied, keyed by kind, so `build()` reports each path rather
+	 * than asserting a single one.
+	 */
+	protected async copyBinariesToOutput(): Promise<
+		Partial<Record<AgentBinaryKind, string>>
+	> {
+		const { chmod, copyFile, mkdir, stat } = await import("fs/promises");
 
 		// Create platform-specific bin directory
 		const { platform, outputDir } = this.config;
@@ -275,25 +279,53 @@ export abstract class BaseBuilder {
 		logger.debug(`Ensuring platform bin directory exists: ${outputDir}`);
 		await mkdir(outputDir, { recursive: true });
 
-		const sourceFileName = this.getBuildBinaryName();
-		const sourcePath = path.join(
-			this.config.sourceDir,
-			"bin",
-			"agent",
-			sourceFileName
-		);
+		const outputPaths: Partial<Record<AgentBinaryKind, string>> = {};
 
-		const outputBinaryName = this.getOutputBinaryName();
-		const destPath = path.join(outputDir, outputBinaryName);
-
-		try {
-			await copyFile(sourcePath, destPath);
-			logger.debug(
-				`Copied ${sourceFileName} to platform bin directory: ${destPath}`
+		for (const binary of platform.getBinaries()) {
+			const sourcePath = path.join(
+				this.config.sourceDir,
+				"bin",
+				binary.buildDir,
+				binary.buildName
 			);
-		} catch (error: any) {
-			logger.debug(`Failed to copy ${sourceFileName}: ${error.message}`);
-			throw error;
+			const destPath = this.getAbsoluteOutputPath(binary.outputName);
+
+			// Check before copying so an absent binary reports the path it should
+			// have been at, not a bare ENOENT. Publishing a package that is quietly
+			// short one binary is the failure this whole change exists to prevent:
+			// it surfaces only as dd-trace dropping spans into a closed socket in
+			// production, with nothing logged anywhere.
+			try {
+				await stat(sourcePath);
+			} catch {
+				throw new Error(
+					`Missing ${binary.kind} agent binary: expected ${sourcePath}. ` +
+						`It is produced by \`dda --no-interactive inv ${binary.buildTask}\`; ` +
+						`check that task ran and succeeded.`
+				);
+			}
+
+			try {
+				await copyFile(sourcePath, destPath);
+			} catch (error: any) {
+				logger.error(
+					`Failed to copy ${binary.kind} agent ${sourcePath} -> ${destPath}: ${error.message}`
+				);
+				throw error;
+			}
+
+			// npm carries the mode bits from disk through pack and install, so a
+			// binary copied without the exec bit installs unrunnable and fails at
+			// spawn with EACCES. Set it here as well as in the packaging script so
+			// the builder's own output directory is directly usable.
+			if (platform.getOS() !== "windows") {
+				await chmod(destPath, 0o755);
+			}
+
+			outputPaths[binary.kind] = destPath;
+			logger.debug(`Copied ${binary.kind} agent to ${destPath}`);
 		}
+
+		return outputPaths;
 	}
 }

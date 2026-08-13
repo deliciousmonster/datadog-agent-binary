@@ -12,16 +12,22 @@ on:
       agent_build_args:
         description: "Override args for `dda inv agent.build` (e.g. to build a self-contained, Python-free binary). Leave blank for default."
         required: false
+      trace_agent_build_args:
+        description: "Override args for `dda inv trace-agent.build`. Leave blank for default (the trace-agent needs no build excludes)."
+        required: false
 
 env:
   NODE_VERSION: "22"
-  # Must satisfy the agent's go.mod `go` directive — agent 7.79.x needs Go 1.25.x.
+  # Must satisfy the go.mod `go` directive of the agent release pinned in
+  # .datadog-agent-version — 7.79.x needs Go 1.25.x. Bump this when the pin moves
+  # across a Go requirement.
   GO_VERSION: "1.25.8"
-  # The Datadog Agent version this package BUNDLES. This is independent of the
-  # package's own release version (the git tag / npm version). Set it to the
-  # upstream Datadog Agent release you want to ship; bump it on its own cadence.
-  # A workflow_dispatch `datadog_version` input overrides it for one-off builds.
-  DATADOG_AGENT_VERSION: "7.79.1"
+  # The Datadog Agent version this package BUNDLES is NOT set here. It lives in
+  # .datadog-agent-version at the repo root, which src/downloader.ts reads when no
+  # --datadog-version is passed. It used to be duplicated in this file, and two
+  # copies of a pin are two pins: the workflow builds one release while the repo
+  # claims another, and nothing compares them. A workflow_dispatch
+  # `datadog_version` input still overrides it for one-off builds.
 
 jobs:
   build:
@@ -39,16 +45,22 @@ jobs:
         include:
           # Linux builds
           #
-          # glibc floor: the agent binary links against whatever glibc the
-          # build runner ships, and glibc is backward-compatible only upward
-          # (a binary built on an older glibc runs on newer ones, not vice
-          # versa). The Harper Pro runtime image is Debian 12 (glibc 2.36), so
-          # we must build on a runner whose glibc is <= 2.36 or the binary
-          # won't load there (it would reference GLIBC_2.38/2.39 symbols that
-          # don't exist on the image). ubuntu-latest is now Ubuntu 24.04
-          # (glibc 2.39), so we pin to ubuntu-22.04 (glibc 2.35). The agent
-          # does not actually require any newer glibc feature; upstream
-          # Datadog builds against an even older glibc for portability.
+          # glibc floor: both shipped binaries (datadog-agent and trace-agent)
+          # link against whatever glibc the build runner ships, and glibc is
+          # backward-compatible only upward (a binary built on an older glibc
+          # runs on newer ones, not vice versa). The trace-agent is no
+          # exception; its build tags include netcgo, so it is dynamically
+          # linked exactly like the core agent.
+          #
+          # The oldest runtime we have to load on is the OSS Harper image,
+          # still Debian 12 / glibc 2.36. (harper-pro has moved to
+          # node:24-trixie, glibc 2.41, so it is no longer what sets this
+          # floor.) We must therefore build on a runner whose glibc is <= 2.36
+          # or the binaries won't load there: they would reference
+          # GLIBC_2.38/2.39 symbols the image doesn't have. ubuntu-latest is
+          # now Ubuntu 24.04 (glibc 2.39), so we pin to ubuntu-22.04 (glibc
+          # 2.35). The agent does not actually require any newer glibc feature;
+          # upstream Datadog builds against an even older glibc for portability.
           - os: ubuntu-22.04
             platform: linux-x86_64
           # GitHub-hosted arm64 runner on Ubuntu 22.04 (glibc 2.35), the arm
@@ -118,35 +130,39 @@ jobs:
         run: npm run build
 
       # The agent version to BUILD is independent of the package release version
-      # (the git tag). It comes from a workflow_dispatch input if given,
-      # otherwise the DATADOG_AGENT_VERSION env above. The tag only drives the
-      # npm package version (set in the publish job).
+      # (the git tag). The tag only drives the npm package version, set in the
+      # publish job.
+      #
+      # Only a workflow_dispatch override is resolved here. Left empty, the build
+      # step passes no --datadog-version and src/downloader.ts falls back to the
+      # pin in .datadog-agent-version — the one place the bundled release is
+      # recorded. The pin is echoed first so the build log states which upstream
+      # release this artifact came from even on the default path.
       - name: Resolve Datadog Agent version to build (Unix)
         if: runner.os != 'Windows'
         id: extract_version_unix
         run: |
-          if [ -n "${{ github.event.inputs.datadog_version }}" ]; then
-            echo "version=${{ github.event.inputs.datadog_version }}" >> $GITHUB_OUTPUT
-          else
-            echo "version=${DATADOG_AGENT_VERSION}" >> $GITHUB_OUTPUT
-          fi
+          echo "Pinned in .datadog-agent-version: $(cat .datadog-agent-version)"
+          echo "version=${{ github.event.inputs.datadog_version }}" >> $GITHUB_OUTPUT
 
       - name: Resolve Datadog Agent version to build (Windows)
         if: runner.os == 'Windows'
         id: extract_version_windows
         run: |
-          if ("${{ github.event.inputs.datadog_version }}" -ne "") {
-            echo "version=${{ github.event.inputs.datadog_version }}" >> $env:GITHUB_OUTPUT
-          } else {
-            echo "version=$env:DATADOG_AGENT_VERSION" >> $env:GITHUB_OUTPUT
-          }
+          echo "Pinned in .datadog-agent-version: $(Get-Content .datadog-agent-version)"
+          echo "version=${{ github.event.inputs.datadog_version }}" >> $env:GITHUB_OUTPUT
         shell: pwsh
 
+      # One build step produces BOTH binaries: src/builders/base.ts iterates
+      # platform.getBinaries() and runs `dda inv <buildTask>` per descriptor. Each
+      # descriptor names its own override env var, so core and trace-agent flags
+      # cannot be aimed at the wrong target.
       - name: Build ${{ matrix.platform }} (Unix)
         if: runner.os != 'Windows'
         env:
           DEBUG: true
           DD_AGENT_BUILD_ARGS: ${{ github.event.inputs.agent_build_args }}
+          DD_TRACE_AGENT_BUILD_ARGS: ${{ github.event.inputs.trace_agent_build_args }}
         run: |
           if [ -n "${{ steps.extract_version_unix.outputs.version }}" ]; then
             node dist/cli.js build --datadog-version ${{ steps.extract_version_unix.outputs.version }}
@@ -160,6 +176,7 @@ jobs:
         env:
           DEBUG: true
           DD_AGENT_BUILD_ARGS: ${{ github.event.inputs.agent_build_args }}
+          DD_TRACE_AGENT_BUILD_ARGS: ${{ github.event.inputs.trace_agent_build_args }}
         run: |
           if ("${{ steps.extract_version_windows.outputs.version }}" -ne "") {
             node dist/cli.js build --datadog-version ${{ steps.extract_version_windows.outputs.version }}
@@ -168,67 +185,243 @@ jobs:
           }
         shell: pwsh
 
-      # Prove the binary actually runs as a standalone file BEFORE we ship it.
-      # We hide the build tree first so a binary that still links libraries by
-      # their build-time path (e.g. librtloader) can't be satisfied — that's the
-      # exact failure that only shows up on a user's machine. A self-contained
-      # binary runs fine; a non-relocatable one fails here and blocks the
-      # release instead of publishing something that won't start.
-      - name: Smoke test ${{ matrix.platform }} runs standalone (Unix)
+      # Prove every binary we ship actually runs as a standalone file BEFORE we
+      # ship it. We hide the build tree first so a binary that still links
+      # libraries by their build-time path (e.g. librtloader) can't be
+      # satisfied; that's the exact failure that only shows up on a user's
+      # machine. A self-contained binary runs fine; a non-relocatable one fails
+      # here and blocks the release instead of publishing something that won't
+      # start.
+      #
+      # The loop over BOTH binaries is load-bearing. The package once shipped
+      # with the core agent only: nothing bound 127.0.0.1:8126, dd-trace got
+      # ECONNREFUSED, and every span was dropped in silence. A missing binary is
+      # a hard failure here, not a warning.
+      - name: Smoke test ${{ matrix.platform }} binaries run standalone (Unix)
         if: runner.os != 'Windows'
+        shell: bash
         run: |
           set -e
-          bin="build/${{ matrix.platform }}/bin/datadog-agent"
+          bindir="build/${{ matrix.platform }}/bin"
           src="build/${{ matrix.platform }}/src"
           [ -d "$src" ] && mv "$src" "${src}.hidden" || true
-          echo "Running: $bin version (build tree hidden)"
-          "$bin" version
-          [ -d "${src}.hidden" ] && mv "${src}.hidden" "$src" || true
 
-      # Guard against the symbol floor creeping back up. The Harper Pro runtime
-      # image (Debian 12) provides glibc 2.36 (libc.so.6) AND libstdc++
-      # GLIBCXX_3.4.30 (from GCC 12). These are two SEPARATE libraries: the
-      # glibc floor is set by the runner's Ubuntu version, the GLIBCXX floor by
-      # its GCC version. The agent binary must not reference a symbol newer than
-      # either, or it fails to load on the image with "version `GLIBC_2.xx' not
-      # found" or "version `GLIBCXX_3.4.xx' not found" — the latter is the exact
-      # error the Macy's deploy hit on rocksdb-js. Building on ubuntu-22.04
-      # (glibc 2.35, GCC 11 -> GLIBCXX_3.4.29) keeps both under the limit. This
-      # step fails the build loudly if either floor is exceeded, so we catch it
-      # in CI instead of on a customer's instance.
+          rc=0
+          for name in datadog-agent trace-agent; do
+            bin="$bindir/$name"
+            if [ ! -x "$bin" ]; then
+              echo "::error::$bin was not built. Both the core agent and the trace-agent must ship; without trace-agent nothing listens on 8126 and every span is dropped silently."
+              rc=1
+              continue
+            fi
+            echo "Running: $bin version (build tree hidden)"
+            "$bin" version || { echo "::error::$bin failed to run standalone."; rc=1; }
+          done
+
+          [ -d "${src}.hidden" ] && mv "${src}.hidden" "$src" || true
+          exit "$rc"
+
+      # `version` only proves the file loads. This proves the APM receiver
+      # actually works: start the trace-agent, wait for it to bind
+      # 127.0.0.1:8126, and submit a trace payload the way dd-trace does. The
+      # original defect shipped a package where nothing ever listened on 8126,
+      # and every "is the file there" check passed anyway.
+      #
+      # The trace-agent dies at startup unless datadog.yaml EXISTS (0 bytes is
+      # enough; every setting below arrives through the environment) and its
+      # config and run directories are writable, so the whole run lives in one
+      # temp dir. Nothing leaves the runner: the hostname is pinned so no cloud
+      # metadata is probed, remote config is off, and the trace writer points at
+      # a dead local port, so submitted payloads are accepted by the receiver
+      # and then fail to forward, which is all this test needs.
+      - name: Verify APM receiver accepts traces (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$PWD/build/${{ matrix.platform }}/bin/trace-agent"
+          work="$(mktemp -d)"
+          pid=""
+
+          dump_logs() {
+            echo "--- trace-agent console ---"
+            cat "$work/console.log" 2>/dev/null || echo "(none)"
+            echo "--- trace-agent log file ---"
+            cat "$work/trace-agent.log" 2>/dev/null || echo "(none)"
+          }
+          cleanup() {
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+              kill "$pid" 2>/dev/null || true
+              wait "$pid" 2>/dev/null || true
+            fi
+            rm -rf "$work"
+          }
+          trap cleanup EXIT
+
+          mkdir -p "$work/conf.d" "$work/run"
+          : > "$work/datadog.yaml"
+
+          export DD_API_KEY=dummy
+          export DD_HOSTNAME=ci-apm-smoke
+          export DD_CONFD_PATH="$work/conf.d"
+          export DD_RUN_PATH="$work/run"
+          export DD_AUTH_TOKEN_FILE_PATH="$work/auth_token"
+          export DD_IPC_CERT_FILE_PATH="$work/ipc_cert.pem"
+          export DD_LOG_FILE="$work/trace-agent.log"
+          export DD_BIND_HOST=127.0.0.1
+          export DD_APM_ENABLED=true
+          export DD_APM_RECEIVER_PORT=8126
+          export DD_REMOTE_CONFIGURATION_ENABLED=false
+          export DD_APM_DD_URL=http://127.0.0.1:1
+
+          "$bin" run -c "$work/datadog.yaml" > "$work/console.log" 2>&1 &
+          pid=$!
+          echo "trace-agent running as pid $pid out of $work"
+
+          # 60 * 0.5s = 30s ceiling. Bail the moment the process dies so a
+          # startup failure reports in a second instead of after the timeout.
+          ready=0
+          for _ in $(seq 1 60); do
+            # No -S here: a connection refused on every attempt until the
+            # listener is up is expected, and printing it 60 times buries the
+            # real failure when there is one.
+            if curl -fs --max-time 2 http://127.0.0.1:8126/info -o "$work/info.json"; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "::error::trace-agent exited before it bound 127.0.0.1:8126."
+              dump_logs
+              exit 1
+            fi
+            sleep 0.5
+          done
+
+          if [ "$ready" -ne 1 ]; then
+            echo "::error::trace-agent never answered http://127.0.0.1:8126/info within 30s."
+            dump_logs
+            exit 1
+          fi
+
+          echo "--- /info ---"
+          cat "$work/info.json"
+          echo
+
+          # Parse the JSON rather than grepping it: the point is that the
+          # receiver ADVERTISES the endpoint dd-trace posts to, not that the
+          # string appears somewhere in the response.
+          python3 - "$work/info.json" <<'PY'
+          import json, sys
+
+          with open(sys.argv[1]) as fh:
+              info = json.load(fh)
+          endpoints = info.get("endpoints") or []
+          if "/v0.4/traces" not in endpoints:
+              print(f"::error::/info does not advertise /v0.4/traces (endpoints: {endpoints})")
+              sys.exit(1)
+          print(f"/info advertises /v0.4/traces (trace-agent version {info.get('version')})")
+          PY
+
+          code=$(curl -sS -o "$work/put.out" -w '%{http_code}' --max-time 10 \
+            -X PUT -H 'Content-Type: application/json' --data '[]' \
+            http://127.0.0.1:8126/v0.4/traces)
+          echo "PUT /v0.4/traces -> HTTP $code, body: $(cat "$work/put.out")"
+          if [ "$code" != "200" ]; then
+            echo "::error::PUT /v0.4/traces returned HTTP $code, expected 200."
+            dump_logs
+            exit 1
+          fi
+
+          echo "OK: trace-agent bound 127.0.0.1:8126 and accepted a trace payload."
+
+      # Guard against the symbol floor creeping back up, for EVERY binary we
+      # ship. The trace-agent carries the netcgo build tag, so it is dynamically
+      # linked against glibc just like the core agent and has to clear the same
+      # floor; checking datadog-agent alone would let through a trace-agent that
+      # cannot load on the image.
+      #
+      # The floor is 2.36 because the OSS Harper image is Debian 12. This step's
+      # older rationale named the Harper Pro image as the constraint, which is
+      # now stale (harper-pro runs node:24-trixie, glibc 2.41). The number is
+      # unchanged; the reason for it is not.
+      #
+      # glibc and libstdc++ are two SEPARATE libraries: the glibc floor is set
+      # by the runner's Ubuntu version, the GLIBCXX floor by its GCC version. A
+      # binary must not reference a symbol newer than either, or it fails to
+      # load with "version `GLIBC_2.xx' not found" or "version `GLIBCXX_3.4.xx'
+      # not found". The latter is the exact error the Macy's deploy hit on
+      # rocksdb-js. Building on ubuntu-22.04 (glibc 2.35, GCC 11 ->
+      # GLIBCXX_3.4.29) keeps both under the limit, and this step fails the
+      # build loudly if either floor is exceeded so we catch it in CI instead of
+      # on a customer's instance.
       - name: Verify glibc / libstdc++ floor (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -e
-          bin="build/${{ matrix.platform }}/bin/datadog-agent"
 
           check() {
-            label="$1"; prefix="$2"; limit="$3"
+            local binpath="$1" label="$2" prefix="$3" limit="$4" max
             # GLIBC_ won't match GLIBCXX_ (char after GLIBC is X, not _), so the
             # two families are counted independently.
-            max=$(strings -a "$bin" | grep -o "${prefix}_[0-9.]\+" | sed "s/${prefix}_//" | sort -uV | tail -1)
-            echo "${label}: binary references up to ${prefix}_${max:-<none>}; image provides ${prefix}_${limit}"
+            max=$(strings -a "$binpath" | grep -o "${prefix}_[0-9.]\+" | sed "s/${prefix}_//" | sort -uV | tail -1)
+            echo "$(basename "$binpath") ${label}: references up to ${prefix}_${max:-<none>}; image provides ${prefix}_${limit}"
             if [ -n "$max" ] && [ "$(printf '%s\n%s\n' "$limit" "$max" | sort -V | tail -1)" != "$limit" ]; then
-              echo "::error::Binary requires ${prefix}_${max} but the Harper Pro runtime image only provides ${prefix}_${limit}. Build on an older toolchain (glibc <= 2.36, GCC <= 12) so the agent loads on the image."
+              echo "::error::$(basename "$binpath") requires ${prefix}_${max} but the oldest Harper runtime image only provides ${prefix}_${limit}. Build on an older toolchain (glibc <= 2.36, GCC <= 12) so it loads on the image."
               return 1
             fi
             return 0
           }
 
+          bindir="build/${{ matrix.platform }}/bin"
           rc=0
-          check "glibc"     "GLIBC"    "2.36"   || rc=1
-          check "libstdc++" "GLIBCXX"  "3.4.30" || rc=1
+          for name in datadog-agent trace-agent; do
+            bin="$bindir/$name"
+            if [ ! -f "$bin" ]; then
+              echo "::error::$bin is missing, so its symbol floor was never checked."
+              rc=1
+              continue
+            fi
+            check "$bin" "glibc"     "GLIBC"    "2.36"   || rc=1
+            check "$bin" "libstdc++" "GLIBCXX"  "3.4.30" || rc=1
+          done
           if [ "$rc" -eq 0 ]; then
-            echo "OK: binary stays within the Harper Pro image's glibc and libstdc++ versions."
+            echo "OK: every shipped binary stays within the oldest Harper image's glibc and libstdc++ versions."
           fi
           exit "$rc"
 
+      # The artifact is the whole bin/ directory, which is how both binaries
+      # travel to the release and publish jobs. Assert they are both present
+      # first: Windows has no smoke test above, so a half-empty bin/ would sail
+      # through here and only surface as a missing trace-agent at install time.
+      - name: Verify both binaries are present for upload
+        shell: bash
+        run: |
+          set -e
+          bindir="build/${{ matrix.platform }}/bin"
+          ext=""
+          if [ "${RUNNER_OS:-}" = "Windows" ]; then ext=".exe"; fi
+          ls -l "$bindir"
+          rc=0
+          for name in datadog-agent trace-agent; do
+            if [ ! -f "$bindir/${name}${ext}" ]; then
+              echo "::error::$bindir/${name}${ext} is missing; the ${{ matrix.platform }} artifact would ship incomplete."
+              rc=1
+            fi
+          done
+          exit "$rc"
+
+      # Uploading the directory (not a single file) is what carries the core
+      # agent AND the trace-agent, plus anything else the build drops in bin/.
+      # if-no-files-found: error stops a build that produced nothing from
+      # publishing an empty artifact that the publish job would then skip in
+      # silence.
       - name: Upload ${{ matrix.platform }} artifacts
         uses: actions/upload-artifact@v4
         with:
           name: agent-${{ matrix.platform }}
           path: build/${{ matrix.platform }}/bin/
+          if-no-files-found: error
           retention-days: 90
 
   release:
@@ -311,9 +504,14 @@ jobs:
           files: |
             release-assets/*
           body: |
-            # @harperfast/datadog-agent-binary ${{ github.ref_name }}
+            # @deliciousmonster/datadog-agent-binary ${{ github.ref_name }}
 
             Pre-compiled Datadog Agent binaries for all supported platforms.
+
+            Every archive carries BOTH processes: `datadog-agent` (the core
+            agent) and `trace-agent` (the APM receiver that binds
+            127.0.0.1:8126). Tracing needs the trace-agent, not the core agent,
+            so an archive with only `datadog-agent` in it is broken.
 
             ## Supported Platforms
 
@@ -326,7 +524,7 @@ jobs:
             ## NPM Package
 
             ```bash
-            npm install @harperfast/datadog-agent-binary
+            npm install @deliciousmonster/datadog-agent-binary
             ```
 
             ## Verification
@@ -418,7 +616,7 @@ jobs:
             # Check if binaries exist
             if [ -d "bin" ] && [ "$(ls -A bin)" ]; then
               npm publish --access public --tag ${{ steps.disttag.outputs.tag }}
-              echo "Published @harperfast/datadog-agent-binary-$platform"
+              echo "Published @deliciousmonster/datadog-agent-binary-$platform"
             else
               echo "Skipping $platform - no binaries found"
             fi

@@ -1,5 +1,12 @@
 name: Check for New Datadog Agent Releases
 
+# DISABLED, and do not re-enable without fixing this first: the job tags the npm
+# package `v<upstream release>` but never writes .datadog-agent-version, which is
+# what src/downloader.ts actually builds from. Running it today would publish a
+# package labelled with one Datadog Agent release built from another — the exact
+# mislabelling that produced a package versioned 7.75.5 containing agent 7.79.2.
+# Whatever bumps the tag must bump the pin in the same commit.
+
 on:
   #schedule:
   # Disabled for now until / unless we revisit using this

@@ -1,8 +1,12 @@
 name: Test
 
 on:
+  # Every push to every branch, not just main. These tests are hermetic (no
+  # network, no agent binary), so there is no reason to let a branch sit unbuilt
+  # until it opens a PR. "**" matches branches only, so release tag pushes stay
+  # with build-release.yml instead of running this workflow twice.
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
 
@@ -13,7 +17,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        node: ["20", "22"]
+        # Harper v5 declares engines.node "^22.18.0 || >=24.0.0", so it cannot
+        # install on Node 20 at all, and the image the component actually
+        # deploys onto is node:24-trixie. Node 20 was testing a version nothing
+        # runs on; 22 and 24 are the two that exist in the field.
+        node: ["22", "24"]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -34,7 +42,67 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
-      # `npm test` runs the TypeScript build and then the hermetic Harper
-      # component contract test (no network, no real agent binary required).
-      - name: Run tests
+      # `npm test` is `node --test "test/**/*.test.js"`: the pattern is quoted so
+      # node expands it itself rather than the shell, which is what makes the
+      # same script work on the Windows leg. A new test file under test/ runs
+      # here with no edit to package.json and no edit to this workflow.
+      #
+      # The glob deliberately matches *.test.js only. test/integration/*.test.ts
+      # boots a real Harper via @harperfast/integration-testing and is run by
+      # `npm run test:integration`, not here.
+      - name: Run npm test
         run: npm test
+
+      # node --test exits 0 when its pattern matches nothing, so a rename or a
+      # moved directory would turn the step above into a no-op that reports
+      # success. Count the files independently and fail on zero. This is a
+      # guard, not a second run.
+      - name: Guard against an empty test glob
+        shell: bash
+        run: |
+          set -e
+          count=$(find test -type f -name '*.test.js' | wc -l | tr -d ' ')
+          echo "Found $count *.test.js file(s) under test/:"
+          find test -type f -name '*.test.js' | sort | sed 's/^/  /'
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No *.test.js files under test/; npm test ran nothing."
+            exit 1
+          fi
+
+  # Separate job because it is the only one that boots a real database. Everything
+  # in `test` is hermetic; this one installs Harper 5.2.1 and runs it, which is the
+  # only way to prove the two claims the whole singleton design rests on: Harper
+  # actually enforces `applications.allowedSpawnCommands` and the `name` option,
+  # and two distinct names take two independent PID-file locks (one core agent and
+  # one trace-agent per node, not one process total).
+  #
+  # ubuntu only. The suite itself skips win32, and macOS needs loopback aliases
+  # (`npx harper-integration-test-setup-loopback`, which wants sudo) before the
+  # harness can hand out addresses. Linux routes all of 127.0.0.0/8 by default.
+  integration:
+    name: integration (harper v5, ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # The image the component deploys onto is node:24-trixie.
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        # The suite resolves binaries through dist/binary-manager.js.
+        run: npm run build
+
+      # The Datadog-binary suite inside this file skips itself with a reason when
+      # the platform package has no built binaries, so this job passes on a
+      # checkout that has never run a release build. The Harper-enforcement suite
+      # uses its own stub and always runs.
+      - name: Run Harper integration tests
+        run: npm run test:integration

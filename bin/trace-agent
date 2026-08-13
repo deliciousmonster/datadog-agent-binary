@@ -4,4 +4,4 @@
 // committed at bin/. All launcher behaviour (env diagnostics, preflight checks,
 // Harper spawn semantics) lives in dist/agent-launcher.js so the launchers for
 // the core agent and the trace-agent cannot drift apart.
-require("../dist/agent-launcher.js").launchAgent("core");
+require("../dist/agent-launcher.js").launchAgent("trace");

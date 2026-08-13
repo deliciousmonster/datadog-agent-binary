@@ -1,4 +1,3 @@
-import * as path from "path";
 import { BuildResult } from "../types.js";
 import { logger } from "../logger.js";
 import { BaseBuilder } from "./base.js";
@@ -16,18 +15,22 @@ export class LinuxBuilder extends BaseBuilder {
 			await this.buildCommon();
 
 			logger.info("Copying binaries to output directory...");
-			await this.copyBinariesToOutput();
+			const outputPaths = await this.copyBinariesToOutput();
 
-			const outputPath = this.getAbsoluteOutputPath(this.getOutputBinaryName());
 			const duration = Date.now() - startTime;
 
 			logger.info(`Build completed successfully in ${duration}ms`);
-			logger.info(`Output: ${outputPath}`);
+			for (const [kind, binaryPath] of Object.entries(outputPaths)) {
+				logger.info(`Output (${kind}): ${binaryPath}`);
+			}
 
 			return {
 				success: true,
 				platform,
-				outputPath,
+				// Core path stays on `outputPath` for existing callers; `outputPaths`
+				// carries every binary the build produced.
+				outputPath: outputPaths.core,
+				outputPaths,
 				duration,
 			};
 		} catch (error: any) {
