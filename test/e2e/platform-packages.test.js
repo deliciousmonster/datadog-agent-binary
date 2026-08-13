@@ -19,8 +19,7 @@ function findRepoRoot(start) {
 
 const REPO_ROOT = findRepoRoot(__dirname);
 const mainPkg = require(path.join(REPO_ROOT, "package.json"));
-// Derived, never hardcoded: package.json's `name` is the single source of truth for the
-// scope, so a re-scope cannot leave this test asserting the old one.
+// Derived, never hardcoded: a re-scope must not leave this test asserting the old one.
 const PACKAGE_NAME = mainPkg.name;
 
 // Every published binary, per platform: the accessor the platform package must
@@ -31,27 +30,22 @@ const PACKAGE_NAME = mainPkg.name;
 const CORE = { kind: "core", accessor: "getBinaryPath" };
 const TRACE = { kind: "trace", accessor: "getTraceAgentBinaryPath" };
 
-function unixBinaries() {
-	return [
-		{ ...CORE, file: "datadog-agent" },
-		{ ...TRACE, file: "trace-agent" },
-	];
-}
-
-function windowsBinaries() {
-	return [
-		{ ...CORE, file: "datadog-agent.exe" },
-		{ ...TRACE, file: "trace-agent.exe" },
-	];
-}
+const UNIX_BINARIES = [
+	{ ...CORE, file: "datadog-agent" },
+	{ ...TRACE, file: "trace-agent" },
+];
+const WINDOWS_BINARIES = [
+	{ ...CORE, file: "datadog-agent.exe" },
+	{ ...TRACE, file: "trace-agent.exe" },
+];
 
 // What each generated platform package's os/cpu MUST be (Node's values), and
 // what its index.js must resolve.
 const EXPECTED = {
-	"linux-x86_64": { os: "linux", cpu: "x64", binaries: unixBinaries() },
-	"linux-arm64": { os: "linux", cpu: "arm64", binaries: unixBinaries() },
-	"macos-arm64": { os: "darwin", cpu: "arm64", binaries: unixBinaries() },
-	"windows-x86_64": { os: "win32", cpu: "x64", binaries: windowsBinaries() },
+	"linux-x86_64": { os: "linux", cpu: "x64", binaries: UNIX_BINARIES },
+	"linux-arm64": { os: "linux", cpu: "arm64", binaries: UNIX_BINARIES },
+	"macos-arm64": { os: "darwin", cpu: "arm64", binaries: UNIX_BINARIES },
+	"windows-x86_64": { os: "win32", cpu: "x64", binaries: WINDOWS_BINARIES },
 };
 
 let workDir;
@@ -144,18 +138,17 @@ test("all platform packages are pinned to the main package version", () => {
 			`${name} version should equal main package version ${mainPkg.version}`
 		);
 	}
-	// optionalDependencies must also all reference that same version.
 	for (const [dep, range] of Object.entries(mainPkg.optionalDependencies)) {
 		assert.equal(range, mainPkg.version, `${dep} should be ${mainPkg.version}`);
 	}
 });
 
 test("os/cpu never leak this project's internal platform names", () => {
-	// The macos-x86_64 platform package shipped with os "macos" and
-	// cpu "x86_64", our own names. npm compares those fields against
-	// process.platform/process.arch ("darwin"/"x64"), so that package could never
-	// install anywhere and the optional dependency was skipped in silence, which
-	// looks identical to "the platform isn't supported".
+	// The macos-x86_64 platform package shipped with os "macos" and cpu "x86_64",
+	// our own names. npm compares those against process.platform/process.arch
+	// ("darwin"/"x64"), so that package could never install anywhere and the
+	// optional dependency was skipped in silence, which looks identical to "the
+	// platform isn't supported".
 	const INTERNAL_NAMES = new Set(["macos", "windows", "x86_64"]);
 	for (const [name, pkg] of Object.entries(readGenerated())) {
 		for (const value of [...pkg.os, ...pkg.cpu]) {
@@ -239,23 +232,11 @@ test("index.js exports the accessors and the binaries map, and nothing else", ()
 	}
 });
 
-test("--dummy mode still generates both accessors", () => {
-	// The whole suite runs the generator with --dummy (no built binaries needed),
-	// so every assertion above already exercises that mode. Stated explicitly
-	// because --dummy is the only path CI can run without a Go toolchain: if it
-	// ever regressed to emitting a single accessor, this suite would be testing
-	// something that never ships.
-	for (const [name, expected] of Object.entries(EXPECTED)) {
-		const index = loadIndex(name);
-		assert.equal(expected.binaries.length, 2);
-		for (const binary of expected.binaries) {
-			assert.equal(
-				typeof index[binary.accessor],
-				"function",
-				`${name}/${binary.kind}`
-			);
-		}
-		// --dummy never populates bin/; the accessors are still expected to exist.
+test("--dummy generates the package layout with no bin/ at all", () => {
+	// --dummy is the only mode CI can run without a Go toolchain, so every
+	// assertion above already exercises it; what is specific to it is that the
+	// accessors exist while the binaries they point at do not.
+	for (const name of Object.keys(EXPECTED)) {
 		assert.ok(!fs.existsSync(path.join(npmDir, name, "bin")));
 	}
 });

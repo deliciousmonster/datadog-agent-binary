@@ -3,12 +3,12 @@
 /**
  * Descriptor correctness for every supported platform.
  *
- * `AgentBinaryDescriptor` is the single source of truth the builders, the
- * packaging script, and the runtime resolver all read. When it was implicit (one
- * hardcoded binary name threaded through five call sites), the trace-agent
- * went missing from every one of them at once and nothing failed. These
- * assertions are written out as literals rather than derived from
- * `getBinaries()`, so changing the contract requires restating it here.
+ * `AgentBinaryDescriptor` is what the builders, the packaging script, and the
+ * runtime resolver all read. Back when it was implicit (one hardcoded binary
+ * name threaded through five call sites) the trace-agent went missing from all
+ * of them at once and nothing failed. The expectations below are literals rather
+ * than derived from `getBinaries()`, so changing the contract means restating it
+ * here.
  */
 
 const { test } = require("node:test");
@@ -33,15 +33,14 @@ const { Platform, SUPPORTED_PLATFORMS, getAllSupportedPlatforms } = require(
 
 /**
  * The `python` build tag links librtloader and an embedded CPython by an rpath
- * into the build tree, producing a core agent that only runs on the machine
- * that built it. `systemd` pulls in libsystemd.
+ * into the build tree, producing a core agent that only runs on the machine that
+ * built it. `systemd` pulls in libsystemd.
  */
 const CORE_BUILD_ARGS = "--build-exclude=systemd,python";
 
 /**
- * Per-kind expectations. `buildStem`/`outputStem` are the extension-free names;
- * the tests append `.exe` themselves on Windows so the extension rule is
- * asserted rather than assumed.
+ * `buildStem`/`outputStem` are extension-free; the tests append `.exe` on
+ * Windows themselves, so the extension rule is asserted rather than assumed.
  */
 const EXPECTED = {
 	core: {
@@ -49,7 +48,6 @@ const EXPECTED = {
 		buildDir: "agent",
 		buildStem: "agent",
 		outputStem: "datadog-agent",
-		buildArgs: CORE_BUILD_ARGS,
 		buildArgsEnvVar: "DD_AGENT_BUILD_ARGS",
 		accessorName: "getBinaryPath",
 		processName: "datadog-agent",
@@ -59,7 +57,6 @@ const EXPECTED = {
 		buildDir: "trace-agent",
 		buildStem: "trace-agent",
 		outputStem: "trace-agent",
-		buildArgs: "",
 		buildArgsEnvVar: "DD_TRACE_AGENT_BUILD_ARGS",
 		accessorName: "getTraceAgentBinaryPath",
 		processName: "datadog-trace-agent",
@@ -171,12 +168,11 @@ test("the core agent carries the rtloader/CPython build excludes", () => {
 test("the trace-agent carries NO build args at all", () => {
 	for (const platform of SUPPORTED_PLATFORMS) {
 		const trace = platform.getBinary("trace");
-		// Spelled as an equality against "" rather than a falsiness check: the
-		// regression this guards against is someone "helpfully" forwarding the core
-		// agent's excludes to trace-agent.build. `tasks/trace_agent.py::build()` is a
-		// plain go_build with no embedded_path/rtloader_root/exclude_rtloader
-		// parameter, and TRACE_AGENT_TAGS contains neither `python` nor `systemd`, so
-		// those flags are wrong here, not merely redundant.
+		// Equality against "" rather than a falsiness check: the regression is
+		// someone forwarding the core agent's excludes here. `tasks/trace_agent.py`
+		// builds with a plain go_build that takes no rtloader parameters, and
+		// TRACE_AGENT_TAGS contains neither `python` nor `systemd`, so those flags
+		// are wrong here rather than merely redundant.
 		assert.equal(
 			trace.buildArgs,
 			"",
@@ -250,11 +246,11 @@ test("getBinary() returns the descriptor from getBinaries() and throws on an unk
 });
 
 test("nothing packaging keys off collides between the two descriptors", () => {
-	// scripts/create-platform-packages.js has its own guard for this because a
-	// collision is silent: two descriptors sharing an accessorName collapse into
+	// A collision is silent: two descriptors sharing an accessorName collapse into
 	// one property in the generated index.js, and two sharing an outputName have
-	// one overwrite the other in bin/. Both look like "the trace-agent is
-	// missing" at runtime. Assert it at the source too.
+	// one overwrite the other in bin/. Both look like "the trace-agent is missing"
+	// at runtime. scripts/create-platform-packages.js guards this too; assert it at
+	// the source as well.
 	const unique = [
 		"accessorName",
 		"outputName",
@@ -275,8 +271,8 @@ test("nothing packaging keys off collides between the two descriptors", () => {
 });
 
 test("getBinaries() hands out a fresh array each call", () => {
-	// Callers iterate, filter, and sort this list. A shared array would let one
-	// consumer's mutation leak into the next platform-package build.
+	// Callers iterate, filter, and sort this list; a shared array would leak one
+	// consumer's mutation into the next platform-package build.
 	const platform = SUPPORTED_PLATFORMS[0];
 	const first = platform.getBinaries();
 	first.length = 0;

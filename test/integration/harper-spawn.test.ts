@@ -5,31 +5,20 @@
  * *v4*. v4's default config has no `applications` block and therefore no
  * `allowedSpawnCommands`, and v4 does not replace `node:child_process` for
  * component code at all. That script passed because nothing was checking, while
- * printing "executed under Harper v5 spawn enforcement". A test that passes
- * because enforcement is absent is indistinguishable from one that passes
- * because the allowlist is right, so the first two assertions here are
- * NEGATIVE: they fail on any runtime that is not enforcing, which is what makes
- * every later assertion mean something.
+ * printing "executed under Harper v5 spawn enforcement". A suite that passes
+ * because enforcement is absent is indistinguishable from one that passes because
+ * the allowlist is right, so the first two assertions here are NEGATIVE: they
+ * fail on any runtime that is not enforcing, which is what makes every later
+ * assertion mean something.
  *
- * The harness is Harper's own first-party one (@harperfast/integration-testing):
- * a temporary install dir, a loopback address from a cross-process pool, and a
- * real `harper` process per suite.
+ * The harness is Harper's own (@harperfast/integration-testing): a temporary
+ * install dir, a loopback address from a cross-process pool, and a real `harper`
+ * process per suite.
  *
- * What is proven here, in order:
- *   a. spawn without a `name` option throws
- *   b. spawn of a non-allowlisted absolute path throws
- *   c. spawn of an allowlisted path with a name runs
- *   d. the same name from N worker threads yields ONE OS process and one
- *      <rootPath>/pids/<name>.pid holding a live PID
- *   e. the loser of that race gets an object with .pid but no .stdout
- *      (ExistingProcessWrapper)
- *   f. two distinct names yield two processes and two PID files; this is the
- *      mechanism that lets the core agent and the trace-agent coexist
- *   g. killing the child unlinks its PID file
- *
- * The second suite repeats (b) and (c) against the real Datadog binaries and
- * skips cleanly when they have not been built, so the hermetic suites under
- * test/unit and test/e2e still cover a machine that has never run a build.
+ * The second suite repeats the allowlist assertions against the real Datadog
+ * binaries and skips cleanly when they have not been built, so the hermetic
+ * suites under test/unit and test/e2e still cover a machine that has never run a
+ * build.
  */
 import { suite, test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -66,7 +55,7 @@ const FIXTURE_PATH = join(
  * The `harper` package's exports map only exposes ".", so the harness's
  * auto-resolution of 'harper/dist/bin/harper.js' fails with
  * ERR_PACKAGE_PATH_NOT_EXPORTED. Resolve the package entry (which the map does
- * expose) and walk to the bin script from there. This is the same workaround
+ * expose) and walk to the bin script from there. Same workaround
  * harperfast/application-template carries in its own tests.
  */
 function resolveHarperBinPath(): string | null {
@@ -82,12 +71,11 @@ const harperBinPath = resolveHarperBinPath();
 /**
  * Worker threads to ask for. macOS and Windows *default* to 1 (without
  * SO_REUSEPORT extra HTTP workers cannot share the server ports), and `harper
- * dev` forces 1 outright via DEV_MODE. An explicit threads.count still wins,
- * and the harness runs plain `harper`, not `harper dev`. The probe runs at
- * component load, which happens in every thread regardless of how HTTP traffic
- * is routed, so this is meaningful on macOS too. If the runtime still gives us a
- * single thread, the singleton test skips with the count rather than passing
- * vacuously against a race that never happened.
+ * dev` forces 1 outright via DEV_MODE. An explicit threads.count still wins, and
+ * the harness runs plain `harper`. The probe runs at component load, which
+ * happens in every thread regardless of how HTTP traffic is routed. If the
+ * runtime still gives us a single thread, the singleton test skips with the count
+ * rather than passing vacuously against a race that never happened.
  */
 const REQUESTED_THREAD_COUNT = 4;
 
@@ -99,8 +87,6 @@ const SKIP_REASON: string | false =
 			? "the `harper` package is not installed; add harper and " +
 				"@harperfast/integration-testing to devDependencies"
 			: false;
-
-// --- probe scaffolding ------------------------------------------------------
 
 type ProbeRow = {
 	threadId: number;
@@ -115,9 +101,9 @@ type ProbeRow = {
 };
 
 /**
- * A workspace holding the stub executables and the probe's output. Kept outside
- * the Harper install dir so teardown (which deletes that dir) cannot race the
- * assertions that read the results back.
+ * The stub executables and the probe's output. Kept outside the Harper install
+ * dir so teardown (which deletes that dir) cannot race the assertions that read
+ * the results back.
  */
 type Workspace = {
 	dir: string;
@@ -142,8 +128,8 @@ function createWorkspace(): Workspace {
 	);
 	chmodSync(longLivedCommand, 0o755);
 
-	// Executable and runnable, and deliberately left out of the allowlist, so a
-	// rejection can only be the allowlist and not an exec failure.
+	// Runnable, and deliberately left out of the allowlist, so a rejection can only
+	// be the allowlist and not an exec failure.
 	const deniedCommand = join(dir, "denied-stub");
 	writeFileSync(deniedCommand, "#!/usr/bin/env node\nprocess.exit(0);\n");
 	chmodSync(deniedCommand, 0o755);
@@ -156,6 +142,27 @@ function createWorkspace(): Workspace {
 	};
 }
 
+/**
+ * Kill any stub still holding its event loop open before the install dir (and its
+ * PID files) go away, so nothing outlives the suite.
+ */
+async function teardown(
+	ctx: ContextWithHarper,
+	workspace: Workspace | undefined
+): Promise<void> {
+	if (workspace) {
+		for (const pid of processesMatching(workspace.dir)) {
+			try {
+				process.kill(pid, "SIGKILL");
+			} catch {
+				// already gone
+			}
+		}
+	}
+	await teardownHarper(ctx);
+	if (workspace) rmSync(workspace.dir, { recursive: true, force: true });
+}
+
 function readProbeRows(resultsFile: string): ProbeRow[] {
 	if (!existsSync(resultsFile)) return [];
 	return readFileSync(resultsFile, "utf8")
@@ -165,8 +172,8 @@ function readProbeRows(resultsFile: string): ProbeRow[] {
 			try {
 				return [JSON.parse(line) as ProbeRow];
 			} catch {
-				// A record is written in a single appendFileSync, so a torn line
-				// should be impossible; tolerate one rather than failing on it.
+				// A record is written in a single appendFileSync, so a torn line should
+				// be impossible; tolerate one rather than failing on it.
 				return [];
 			}
 		});
@@ -235,8 +242,8 @@ function isAlive(pid: number): boolean {
 
 /** PIDs of every live process whose command line contains `marker`. */
 function processesMatching(marker: string): number[] {
-	// -ww disables ps(1)'s width truncation, which would otherwise cut the
-	// mkdtemp path we are matching on.
+	// -ww disables ps(1)'s width truncation, which would otherwise cut the mkdtemp
+	// path we are matching on.
 	const output = execFileSync("ps", ["-ww", "-Ao", "pid=,command="], {
 		encoding: "utf8",
 	});
@@ -267,8 +274,6 @@ async function waitUntil(
 function allowlist(...commands: string[]): string[] {
 	return ["npm", "node", ...commands];
 }
-
-// --- suite 1: Harper's enforcement and singleton mechanics ------------------
 
 const CORE_PROBE_NAME = "datadog-agent-probe";
 const TRACE_PROBE_NAME = "datadog-trace-agent-probe";
@@ -311,21 +316,7 @@ suite(
 			rows = await waitForProbeResults(workspace.resultsFile);
 		});
 
-		after(async () => {
-			// Kill any stub still holding the event loop open before the install dir
-			// (and its PID files) go away, so nothing outlives the suite.
-			if (workspace) {
-				for (const pid of processesMatching(workspace.dir)) {
-					try {
-						process.kill(pid, "SIGKILL");
-					} catch {
-						// already gone
-					}
-				}
-			}
-			await teardownHarper(ctx);
-			if (workspace) rmSync(workspace.dir, { recursive: true, force: true });
-		});
+		after(() => teardown(ctx, workspace));
 
 		test("the component loaded and probed", () => {
 			assert.ok(
@@ -446,8 +437,7 @@ suite(
 				assert.ok(isAlive(filePid!), `${name}: pid ${filePid} is not running`);
 			}
 
-			// The filesystem check above is Harper's own bookkeeping. This one asks
-			// the OS.
+			// The check above is Harper's own bookkeeping. This one asks the OS.
 			const running = processesMatching(workspace.longLivedCommand);
 			assert.equal(
 				running.length,
@@ -548,13 +538,11 @@ suite(
 	}
 );
 
-// --- suite 2: the real Datadog binaries under the same enforcement ----------
-
 /**
  * Resolve both agent binaries the way a Harper application would. A version is
- * passed so the not-found path stops at the local build lookup instead of
- * falling through to getLatestVersion(), which calls the GitHub API; a skip must
- * not depend on the network.
+ * passed so the not-found path stops at the local build lookup instead of falling
+ * through to getLatestVersion(), which calls the GitHub API; a skip must not
+ * depend on the network.
  */
 async function resolveAgentBinaries(): Promise<
 	{ core: string; trace: string } | { error: string }
@@ -598,10 +586,10 @@ suite(
 				harperBinPath: harperBinPath!,
 				config: {
 					threads: { count: REQUESTED_THREAD_COUNT },
-					// Only the core agent is allowlisted alongside the probe command.
-					// The trace-agent's rejection below is the assertion; the
-					// deployment bug this package shipped was exactly an app that
-					// allowlisted the one path it knew about.
+					// Only the core agent is allowlisted alongside the probe command. The
+					// trace-agent's rejection below is the assertion; the deployment bug
+					// this package shipped was exactly an app that allowlisted the one
+					// path it knew about.
 					applications: {
 						allowedSpawnCommands: allowlist(
 							workspace.longLivedCommand,
@@ -625,19 +613,7 @@ suite(
 			rows = await waitForProbeResults(workspace.resultsFile);
 		});
 
-		after(async () => {
-			if (workspace) {
-				for (const pid of processesMatching(workspace.dir)) {
-					try {
-						process.kill(pid, "SIGKILL");
-					} catch {
-						// already gone
-					}
-				}
-			}
-			await teardownHarper(ctx);
-			if (workspace) rmSync(workspace.dir, { recursive: true, force: true });
-		});
+		after(() => teardown(ctx, workspace));
 
 		test("both resolved paths are absolute and free of whitespace", () => {
 			for (const [kind, binaryPath] of Object.entries(binaries)) {
@@ -673,8 +649,8 @@ suite(
 		test("the trace-agent is rejected when only the core agent is allowlisted", () => {
 			// The two paths are checked independently by exact string equality.
 			// Allowlisting the agent says nothing about the APM receiver, and the
-			// failure mode when it is missed is silence: dd-trace connects to a
-			// closed socket and drops every span without an error.
+			// failure mode when it is missed is silence: dd-trace connects to a closed
+			// socket and drops every span without an error.
 			const observed = rowsFor(rows, "not-allowlisted");
 			assert.ok(observed.length > 0, "the trace-agent probe never ran");
 			for (const row of observed) {

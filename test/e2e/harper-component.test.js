@@ -4,24 +4,10 @@
  * Resolution and launch behaviour, exercised against a stub platform package in
  * a throwaway sandbox.
  *
- * Two things changed from the version of this file that only knew about the core
- * agent:
- *
- *  1. The fixture no longer writes into the repo's own node_modules. It used to
- *     move the real platform package aside and restore it in an `after()` hook,
- *     so a crashed run left a stub "agent" in the developer's tree and the real
- *     package parked under a .real-backup suffix. The sandbox below is a temp
- *     directory holding copies of dist/ and bin/ plus its own node_modules, so
- *     resolution happens entirely inside it and a hard kill leaves the repo
- *     untouched.
- *
- *  2. The Harper spawn model matches security/jsLoader.ts instead of
- *     approximating it: the allowlist is a Set keyed on `command.split(' ')[0]`,
- *     checked before the `name` requirement.
- *
- * This file does NOT boot Harper. Real spawn enforcement, the PID-file
- * singleton, and ExistingProcessWrapper are covered against a real Harper v5
- * instance in test/integration/harper-spawn.test.ts.
+ * This file does NOT boot Harper: `assertHarperSpawnAllowed` below is a
+ * transcription of v5's spawn gate, not the gate itself. Real enforcement, the
+ * PID-file singleton, and ExistingProcessWrapper are covered against a live
+ * Harper v5 in test/integration/harper-spawn.test.ts.
  */
 
 const { test, before, after } = require("node:test");
@@ -44,15 +30,14 @@ function findRepoRoot(start) {
 }
 
 const REPO_ROOT = findRepoRoot(__dirname);
-const REPO_VERSION = require(path.join(REPO_ROOT, "package.json")).version;
+const mainPkg = require(path.join(REPO_ROOT, "package.json"));
 const { Platform } = require(path.join(REPO_ROOT, "dist", "platform.js"));
 
 const platform = Platform.current();
 const platformName = platform.getName();
-// Derived from the manifest, not hardcoded: the package scope is a single source of
-// truth in package.json, and a test that pins the old scope would pass against a stale
-// assumption after a re-scope.
-const PACKAGE_NAME = require(path.join(REPO_ROOT, "package.json")).name;
+// Derived from the manifest, not hardcoded: a test pinning the old scope would
+// keep passing against a stale assumption after a re-scope.
+const PACKAGE_NAME = mainPkg.name;
 const PACKAGE_SCOPE = PACKAGE_NAME.startsWith("@")
 	? PACKAGE_NAME.split("/")[0]
 	: "";
@@ -70,12 +55,9 @@ let traceConfigPath;
 
 /**
  * Symlink every top-level entry of the repo's node_modules into the sandbox so
- * dist/ can load its runtime dependencies (chalk, node-fetch) from there, then
- * shadow the package scope with a real directory holding only our stub.
- *
- * Shadowing the scope rather than symlinking it is the point: on a machine where
- * the real platform package is installed, symlinking the scope would let the
- * real package win and the stub would never be exercised.
+ * dist/ can load chalk and node-fetch, then shadow the package scope with a real
+ * directory holding only our stub. Symlinking the scope instead would let a real
+ * installed platform package win, and the stub would never be exercised.
  */
 function linkRuntimeDependencies(sourceModules, targetModules) {
 	fs.mkdirSync(targetModules, { recursive: true });
@@ -93,10 +75,10 @@ function linkRuntimeDependencies(sourceModules, targetModules) {
 }
 
 /**
- * A stub platform package with the exact shape scripts/create-platform-packages.js
+ * A stub platform package with the shape scripts/create-platform-packages.js
  * generates: one accessor per binary plus the enumerable `binaries` map. Both
- * "binaries" are shebang'd Node scripts that echo a marker, their kind, and their
- * arguments, so an assertion can prove which one actually ran.
+ * "binaries" echo a marker, their kind, and their arguments, so an assertion can
+ * prove which one actually ran.
  */
 function createStubPlatformPackage(packageDir) {
 	const binDir = path.join(packageDir, "bin");
@@ -107,7 +89,7 @@ function createStubPlatformPackage(packageDir) {
 		JSON.stringify(
 			{
 				name: platformPkgName,
-				version: REPO_VERSION,
+				version: mainPkg.version,
 				main: "index.js",
 				os: [process.platform],
 				cpu: [process.arch],
@@ -166,8 +148,8 @@ function runToCompletion(child) {
 	return new Promise((resolve, reject) => {
 		let stdout = "";
 		let stderr = "";
-		if (child.stdout) child.stdout.on("data", (d) => (stdout += d));
-		if (child.stderr) child.stderr.on("data", (d) => (stderr += d));
+		child.stdout.on("data", (d) => (stdout += d));
+		child.stderr.on("data", (d) => (stderr += d));
 		child.on("error", reject);
 		child.on("exit", (code) => resolve({ code, stdout, stderr }));
 	});
@@ -190,12 +172,7 @@ before(() => {
 		path.join(sandbox, "node_modules")
 	);
 	sandboxBinaries = createStubPlatformPackage(
-		path.join(
-			sandbox,
-			"node_modules",
-			PACKAGE_SCOPE,
-			`datadog-agent-binary-${platformName}`
-		)
+		path.join(sandbox, "node_modules", ...platformPkgName.split("/"))
 	);
 
 	// The trace launcher refuses to start without an existing config file in a
@@ -219,12 +196,11 @@ after(() => {
  *   if (!ALLOWED_COMMANDS.has(command.split(' ')[0])) throw ...
  *   if (!options?.name) throw ...
  *
- * ALLOWED_COMMANDS is `new Set(applications.allowedSpawnCommands ?? [])`. Two
- * details this reproduces that an `Array.includes(command)` approximation gets
- * wrong: the lookup is a Set membership test on the FIRST WHITESPACE-SEPARATED
- * TOKEN of the command (so a binary path containing a space can never match),
- * and the allowlist is checked BEFORE the `name` requirement, so a command that
- * fails both reports the allowlist error.
+ * Two details an `Array.includes(command)` approximation gets wrong: the lookup
+ * is a Set membership test on the FIRST WHITESPACE-SEPARATED TOKEN of the command
+ * (so a binary path containing a space can never match), and the allowlist is
+ * checked BEFORE the `name` requirement, so a command failing both reports the
+ * allowlist error.
  */
 function assertHarperSpawnAllowed(command, options, allowedSpawnCommands) {
 	const allowed = new Set(allowedSpawnCommands);
@@ -249,8 +225,8 @@ test("BinaryManager resolves the core agent from the installed platform package"
 test("BinaryManager resolves the trace-agent from the same platform package", async () => {
 	// The defect this package shipped: the platform package installed cleanly,
 	// getBinaryPath() resolved, and nothing ever asked for the APM receiver. A
-	// core-only resolution now has to fail here rather than at span-flush time,
-	// where it produces no error at all.
+	// core-only resolution now fails here rather than at span-flush time, where it
+	// produces no error at all.
 	const manager = new BinaryManager();
 	const byKind = await manager.ensureBinary("trace");
 	assert.equal(byKind, sandboxBinaries.trace);
@@ -414,12 +390,12 @@ test("end-to-end: the trace-agent shim resolves and executes the trace-agent", a
 });
 
 /**
- * Run `launchAgent` with `child_process.spawn` replaced, and with `process.exit`
+ * Run `launchAgent` with `child_process.spawn` replaced, and `process.exit`
  * replaced by a throw so a launcher bailout surfaces as a test failure instead of
  * killing the test runner.
  *
  * The compiled launcher calls `(0, child_process_1.spawn)(...)`, a property read
- * at call time, so patching the builtin module object here is enough.
+ * at call time, so patching the builtin module object is enough.
  */
 async function withStubbedSpawn(fakeChild, run) {
 	const realSpawn = child_process.spawn;
@@ -442,18 +418,15 @@ async function withStubbedSpawn(fakeChild, run) {
 }
 
 /** Minimal stand-in for a real ChildProcess. `spawnargs` is what marks it as one. */
-function fakeChildProcess(pid = 4242) {
+function fakeChildProcess() {
 	const child = new EventEmitter();
-	child.pid = pid;
+	child.pid = 4242;
 	child.spawnargs = [];
 	child.unref = () => child;
 	return child;
 }
 
 test("launchAgent spawns with Harper's required `name`, distinct per binary", async () => {
-	// This is the assertion the shipped wrappers used to carry as a source grep
-	// for the literal `name: "datadog-agent"`. Executing the launcher covers the
-	// same regression and keeps working when the value stops being a literal.
 	const port = await findFreePort();
 	const previousPort = process.env.DD_APM_RECEIVER_PORT;
 	process.env.DD_APM_RECEIVER_PORT = String(port);
@@ -501,8 +474,6 @@ test("launchAgent unrefs and returns when Harper hands back an existing process"
 		unrefCalls++;
 		return wrapper;
 	};
-	assert.equal(wrapper.spawnargs, undefined);
-	assert.equal(wrapper.stdout, undefined);
 
 	const calls = await withStubbedSpawn(wrapper, () =>
 		launchAgent("core", ["run"])

@@ -1,21 +1,18 @@
 /**
- * `preflightTraceAgentConfig()` — the check that runs before the trace-agent is
- * spawned.
+ * `preflightTraceAgentConfig()`, the check that runs before the trace-agent is
+ * spawned. Both of the trace-agent's pre-bind failures are illegible from its own
+ * output: a missing datadog.yaml kills it instantly with "unable to load Datadog
+ * config file", and an unwritable config directory hangs it for 30 seconds before
+ * it dies writing its auth_token.
  *
- * It exists because both of the trace-agent's pre-bind failures are illegible from
- * its own output: a missing datadog.yaml kills it instantly with "unable to load
- * Datadog config file", and an unwritable config directory hangs it for 30 seconds
- * before it dies writing its auth_token.
- *
- * The load-bearing distinction tested here is EXPLICIT vs INFERRED. The trace-agent
- * does not read the core agent's /etc/datadog-agent/datadog.yaml; its default is
+ * The load-bearing distinction here is EXPLICIT vs INFERRED. The trace-agent does
+ * not read the core agent's /etc/datadog-agent/datadog.yaml; its default is
  * `filepath.Join(setup.InstallPath, "etc/datadog.yaml")`, and `osinit()` rewrites
- * InstallPath from the location of the running executable — which, for a binary npm
- * unpacked into node_modules, is a directory that will not contain a datadog.yaml.
- * A preflight that failed closed on that guess would convert a working launch into
- * a refused one, so an inferred path may only warn. A path the caller stated is a
- * different matter: there the check knows what the agent will read and failing
- * costs one log line instead of half a minute.
+ * InstallPath from the location of the running executable, which for a binary npm
+ * unpacked into node_modules is a directory with no datadog.yaml in it. Failing
+ * closed on that guess would turn a working launch into a refused one, so an
+ * inferred path may only warn. A path the caller stated is different: there the
+ * check knows what the agent will read.
  *
  * Hermetic: temp dirs and a zero-byte stub, no agent binary, no network.
  */
@@ -52,6 +49,18 @@ function stubBinary(root) {
 	return binaryPath;
 }
 
+function captureWarnings(fn) {
+	const warnings = [];
+	const realWarn = console.warn;
+	console.warn = (...args) => warnings.push(args.join(" "));
+	try {
+		fn();
+	} finally {
+		console.warn = realWarn;
+	}
+	return warnings;
+}
+
 test("an explicitly named config file that does not exist is fatal", () => {
 	withTempDir((dir) => {
 		assert.throws(
@@ -65,8 +74,7 @@ test("an explicitly named config file that does not exist is fatal", () => {
 test("an explicitly named config file that exists passes", () => {
 	withTempDir((dir) => {
 		const configPath = path.join(dir, "datadog.yaml");
-		// Zero bytes on purpose: the file only has to exist. The agent's own
-		// requirement is presence, not content.
+		// Zero bytes on purpose: the agent's requirement is presence, not content.
 		fs.writeFileSync(configPath, "");
 		assert.doesNotThrow(() =>
 			preflightTraceAgentConfig(["-c", configPath, "run"])
@@ -76,8 +84,8 @@ test("an explicitly named config file that exists passes", () => {
 
 test("every spelling of the config flag is recognised, including the = form", () => {
 	withTempDir((dir) => {
-		fs.writeFileSync(path.join(dir, "datadog.yaml"), "");
 		const configPath = path.join(dir, "datadog.yaml");
+		fs.writeFileSync(configPath, "");
 		for (const argv of [
 			["-c", configPath],
 			["--config", configPath],
@@ -107,17 +115,11 @@ test("a config flag pointing at a directory resolves to <dir>/datadog.yaml", () 
 test("an inferred config path that does not exist warns instead of refusing", () => {
 	withTempDir((dir) => {
 		const binaryPath = stubBinary(dir);
-		const warnings = [];
-		const realWarn = console.warn;
-		console.warn = (...args) => warnings.push(args.join(" "));
-		try {
-			// No config flag. The path is derived from the binary's own location, so
-			// it is a guess; blocking the launch on a guess is the regression this
-			// asserts against.
-			assert.doesNotThrow(() => preflightTraceAgentConfig(["run"], binaryPath));
-		} finally {
-			console.warn = realWarn;
-		}
+		// No config flag, so the path is derived from the binary's own location.
+		// Blocking a launch on that guess is the regression this asserts against.
+		const warnings = captureWarnings(() =>
+			assert.doesNotThrow(() => preflightTraceAgentConfig(["run"], binaryPath))
+		);
 		assert.equal(warnings.length, 1, "the guess must be reported, not silent");
 		assert.match(
 			warnings[0],
@@ -135,19 +137,13 @@ test("the inferred path is derived from the binary, not from /etc/datadog-agent"
 	withTempDir((dir) => {
 		const binaryPath = stubBinary(dir);
 		// <root>/etc/datadog.yaml is what upstream's InstallPath resolves to once
-		// osinit() rewrites it from the executable location. Placing the file there
-		// has to satisfy the check; if the launcher were still checking the core
-		// agent's /etc/datadog-agent/datadog.yaml this would warn.
+		// osinit() rewrites it from the executable location. A launcher still
+		// checking the core agent's /etc/datadog-agent/datadog.yaml would warn here.
 		fs.mkdirSync(path.join(dir, "etc"), { recursive: true });
 		fs.writeFileSync(path.join(dir, "etc", "datadog.yaml"), "");
-		const warnings = [];
-		const realWarn = console.warn;
-		console.warn = (...args) => warnings.push(args.join(" "));
-		try {
-			assert.doesNotThrow(() => preflightTraceAgentConfig(["run"], binaryPath));
-		} finally {
-			console.warn = realWarn;
-		}
+		const warnings = captureWarnings(() =>
+			assert.doesNotThrow(() => preflightTraceAgentConfig(["run"], binaryPath))
+		);
 		assert.deepEqual(warnings, []);
 	});
 });
