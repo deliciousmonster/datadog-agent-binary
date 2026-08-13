@@ -10,8 +10,7 @@ const { getAllSupportedPlatforms } = require("../dist/platform.js");
 const platforms = getAllSupportedPlatforms();
 
 // Platform sub-packages are named `<this package>-<platform>`, derived from the
-// manifest rather than hardcoded, so re-scoping the project is a one-line edit to
-// package.json's `name` and every derived name follows.
+// manifest so re-scoping is a one-line edit to package.json's `name`.
 const packageName = packageJson.name;
 if (!packageName) {
 	throw new Error(
@@ -19,7 +18,6 @@ if (!packageName) {
 	);
 }
 
-// Update optionalDependencies to use the same version as the main package
 packageJson.optionalDependencies = {};
 platforms.forEach((platform) => {
 	packageJson.optionalDependencies[`${packageName}-${platform}`] =
