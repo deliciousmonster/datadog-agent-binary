@@ -1,40 +1,25 @@
 #!/usr/bin/env node
 
 /**
- * Print and verify the per-platform package matrix.
+ * Print and verify the per-platform package matrix. See --help for the modes.
  *
- * Three of this project's defects were each a single wrong field that no page
- * anywhere renders:
+ * Each defect this project shipped was one wrong field in metadata the registry
+ * stores and npmjs.com does not render:
  *
- *   - macos-x86_64 was published with os "macos" / cpu "x86_64". npm compares those
- *     against process.platform / process.arch ("darwin" / "x64"), so the package could
- *     never install. Because optionalDependencies failures are silent, the consumer got
- *     no binaries and no error.
- *   - macos-x86_64 was declared in optionalDependencies while no CI leg built it: five
- *     declared, four published. Same silent outcome.
- *   - Every package shipped the core agent alone and no trace-agent, so nothing bound
- *     127.0.0.1:8126 and every span was dropped.
+ *   - macos-x86_64 published with os "macos" / cpu "x86_64". npm compares those
+ *     against process.platform / process.arch ("darwin" / "x64"), so the package
+ *     could never install.
+ *   - macos-x86_64 declared in optionalDependencies while no CI leg built it:
+ *     five declared, four published.
+ *   - Every package shipped the core agent alone, so nothing bound 127.0.0.1:8126
+ *     and every span was dropped.
  *
- * All three are visible in metadata the registry already stores and npmjs.com does not
- * show. This turns "the release looks fine" into something that exits non-zero.
+ * optionalDependencies failures are silent, so all three reached consumers as no
+ * binaries and no error. This exits non-zero instead.
  *
- * Two modes, one output format:
- *
- *   --local <dir>          read staged package dirs (default ./npm). Offline.
- *                          Run this BEFORE `npm publish`: it is the last moment the
- *                          answer can still change anything, since a published version
- *                          number can be deprecated but never replaced.
- *
- *   --registry [version]   read the public registry (default: this package's version).
- *                          Run this AFTER publishing as a receipt, and on a schedule to
- *                          catch drift, since packages can be unpublished or deprecated
- *                          after the fact.
- *
- * Flags:
- *   --deep                 registry mode: download each tarball and list bin/ exactly,
- *                          rather than inferring from fileCount.
- *   --markdown             emit a GitHub-flavoured table (for a Release body or summary).
- *   --json                 emit the raw rows.
+ * Run --local BEFORE `npm publish`: it is the last moment the answer can change
+ * anything, since a published version can be deprecated but never replaced. Run
+ * --registry after, and on a schedule, since packages can be unpublished later.
  */
 
 "use strict";
@@ -49,8 +34,8 @@ const REPO_ROOT = path.join(__dirname, "..");
 const mainPkg = require(path.join(REPO_ROOT, "package.json"));
 
 // The generator and the runtime both derive platform package names from the main
-// package name, so this must too. Hardcoding the scope here is how a re-scope leaves a
-// checker validating the wrong namespace.
+// package name, so this must too, or a re-scope leaves the checker validating the
+// wrong namespace.
 const PACKAGE_NAME = mainPkg.name;
 const PACKAGE_VERSION = mainPkg.version;
 
@@ -58,11 +43,14 @@ const { SUPPORTED_PLATFORMS } = require(
 	path.join(REPO_ROOT, "dist", "platform.js")
 );
 
-/** npm matches these against process.platform / process.arch, not our internal names. */
+// npm matches os/cpu against process.platform / process.arch. Anything outside
+// these sets, our own "macos"/"windows"/"x86_64" included, can never install.
 const NODE_OS = new Set(["linux", "darwin", "win32"]);
 const NODE_CPU = new Set(["x64", "arm64"]);
-/** Our own vocabulary. Finding any of these in os/cpu means the package cannot install. */
-const INTERNAL_NAMES = new Set(["macos", "windows", "x86_64"]);
+const NODE_FIELDS = [
+	["os", "platform", NODE_OS],
+	["cpu", "arch", NODE_CPU],
+];
 
 function parseArgs(argv) {
 	const opts = {
@@ -99,16 +87,11 @@ function expectedPackages() {
 	return SUPPORTED_PLATFORMS.map((platform) => ({
 		platform: platform.getName(),
 		name: `${PACKAGE_NAME}-${platform.getName()}`,
-		// Filenames the platform package must carry, from the same descriptors the
-		// build and runtime use. Asserting against a hand-written list would let a
-		// descriptor change pass unnoticed.
+		// From the same descriptors the build and runtime use; a hand-written list
+		// would let a descriptor change pass unnoticed.
 		binaries: platform.getBinaries().map((b) => b.outputName),
 	}));
 }
-
-// ---------------------------------------------------------------------------
-// local mode
-// ---------------------------------------------------------------------------
 
 function readLocal(expected, dir) {
 	const packageDir = path.join(dir, expected.platform);
@@ -132,27 +115,25 @@ function readLocal(expected, dir) {
 		cpu: manifest.cpu ?? [],
 		files,
 		bytes,
-		// --dummy packages legitimately carry no binaries; the caller decides whether
-		// that is acceptable, so record it rather than judging it here.
+		// --dummy packages legitimately carry no binaries; record it and let the
+		// caller decide whether that is acceptable.
 		dummy: files.length === 0,
 	};
 }
 
-// ---------------------------------------------------------------------------
-// registry mode
-// ---------------------------------------------------------------------------
-
 const REGISTRY =
 	process.env.NPM_CONFIG_REGISTRY || "https://registry.npmjs.org";
+
+const RETRY_DELAY_MS = 5000;
 
 /**
  * Fetch a package document, retrying while it is absent.
  *
- * Publishing is not read-your-writes: a fetch immediately after `npm publish` can 404 or
- * return stale metadata. Without this, a post-publish check produces flaky red builds,
- * which is worse than no check because people learn to ignore it.
+ * Publishing is not read-your-writes: a fetch immediately after `npm publish` can
+ * 404 or return stale metadata. Without the retries a post-publish check goes
+ * flaky, which is worse than no check because people learn to ignore it.
  */
-async function fetchPackument(name, { retries = 0, delayMs = 5000 } = {}) {
+async function fetchPackument(name, retries) {
 	const url = `${REGISTRY}/${name.replace("/", "%2F")}`;
 	for (let attempt = 0; attempt <= retries; attempt++) {
 		try {
@@ -167,7 +148,7 @@ async function fetchPackument(name, { retries = 0, delayMs = 5000 } = {}) {
 			if (attempt === retries) throw error;
 		}
 		if (attempt < retries) {
-			await new Promise((r) => setTimeout(r, delayMs));
+			await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
 		}
 	}
 	return null;
@@ -183,8 +164,8 @@ async function listTarballBinaries(tarballUrl) {
 	try {
 		const tarPath = path.join(tmp, "pkg.tar");
 		fs.writeFileSync(tarPath, zlib.gunzipSync(gz));
-		// `tar -t` rather than extracting: the payload is >150 MB per platform and only
-		// the entry names matter.
+		// `tar -t` rather than extracting: >150 MB per platform, and only the entry
+		// names matter.
 		const listing = execFileSync("tar", ["-tf", tarPath], { encoding: "utf8" });
 		return listing
 			.split("\n")
@@ -200,7 +181,7 @@ async function listTarballBinaries(tarballUrl) {
 async function readRegistry(expected, version, deep, retries) {
 	let packument;
 	try {
-		packument = await fetchPackument(expected.name, { retries });
+		packument = await fetchPackument(expected.name, retries);
 	} catch (error) {
 		return { ...expected, present: false, error: error.message };
 	}
@@ -221,7 +202,6 @@ async function readRegistry(expected, version, deep, retries) {
 		try {
 			files = await listTarballBinaries(manifest.dist.tarball);
 		} catch (error) {
-			files = null;
 			expected.deepError = error.message;
 		}
 	}
@@ -234,17 +214,13 @@ async function readRegistry(expected, version, deep, retries) {
 		os: manifest.os ?? [],
 		cpu: manifest.cpu ?? [],
 		files,
-		// Without --deep this is the cheap signal. A package carrying both binaries has
-		// 5 files (2 binaries + index.js + package.json + README.md); the core-only
+		// The cheap signal without --deep. A package carrying both binaries has 5
+		// files (2 binaries + index.js + package.json + README.md); the core-only
 		// packages that caused the original defect had 4.
 		fileCount: manifest.dist.fileCount,
 		bytes: manifest.dist.unpackedSize,
 	};
 }
-
-// ---------------------------------------------------------------------------
-// verification
-// ---------------------------------------------------------------------------
 
 function verify(rows, opts) {
 	const problems = [];
@@ -261,20 +237,14 @@ function verify(rows, opts) {
 			continue;
 		}
 
-		for (const value of row.os) {
-			if (INTERNAL_NAMES.has(value) || !NODE_OS.has(value)) {
-				problems.push(
-					`${label}: os "${value}" is not a Node process.platform value ` +
-						`(${[...NODE_OS].join(", ")}). npm can never match this package.`
-				);
-			}
-		}
-		for (const value of row.cpu) {
-			if (INTERNAL_NAMES.has(value) || !NODE_CPU.has(value)) {
-				problems.push(
-					`${label}: cpu "${value}" is not a Node process.arch value ` +
-						`(${[...NODE_CPU].join(", ")}). npm can never match this package.`
-				);
+		for (const [field, nodeField, allowed] of NODE_FIELDS) {
+			for (const value of row[field]) {
+				if (!allowed.has(value)) {
+					problems.push(
+						`${label}: ${field} "${value}" is not a Node process.${nodeField} ` +
+							`value (${[...allowed].join(", ")}). npm can never match this package.`
+					);
+				}
 			}
 		}
 
@@ -286,7 +256,6 @@ function verify(rows, opts) {
 			);
 		}
 
-		// The check that would have caught the original bug.
 		if (Array.isArray(row.files) && !row.dummy) {
 			for (const required of row.binaries) {
 				if (!row.files.includes(required)) {
@@ -309,8 +278,8 @@ function verify(rows, opts) {
 		}
 	}
 
-	// Declared vs expected. These drifting apart is how a platform ends up declared but
-	// never built, or built but never declared.
+	// Drift between these two is how a platform ends up declared but never built,
+	// or built but never declared.
 	const declared = Object.keys(mainPkg.optionalDependencies ?? {}).sort();
 	const expectedNames = rows.map((r) => r.name).sort();
 	if (JSON.stringify(declared) !== JSON.stringify(expectedNames)) {
@@ -336,10 +305,6 @@ function verify(rows, opts) {
 
 	return problems;
 }
-
-// ---------------------------------------------------------------------------
-// rendering
-// ---------------------------------------------------------------------------
 
 function mib(bytes) {
 	if (bytes == null) return "-";
@@ -379,7 +344,7 @@ function renderText(rows, opts) {
 
 function renderMarkdown(rows, opts) {
 	const out = [
-		`### Published platform matrix — \`${PACKAGE_NAME}@${PACKAGE_VERSION}\``,
+		`### Published platform matrix for \`${PACKAGE_NAME}@${PACKAGE_VERSION}\``,
 		"",
 		"| Package | OS | CPU | Binaries | Size |",
 		"|---|---|---|---|---|",
@@ -392,8 +357,6 @@ function renderMarkdown(rows, opts) {
 	}
 	return out.join("\n");
 }
-
-// ---------------------------------------------------------------------------
 
 async function main() {
 	const opts = parseArgs(process.argv.slice(2));
@@ -420,7 +383,7 @@ async function main() {
 		console.error(`Reading staged packages from ${opts.dir}\n`);
 	} else {
 		// Retries only matter right after a publish; a scheduled drift check wants a
-		// fast, honest answer instead.
+		// fast answer instead.
 		const retries = process.env.MATRIX_RETRIES
 			? Number(process.env.MATRIX_RETRIES)
 			: 0;
@@ -463,8 +426,8 @@ async function main() {
 	return 0;
 }
 
-// Guarded so the module can be required by tests without running the report and
-// calling process.exit() as a side effect of the import.
+// Guarded so tests can require this without the import running the report and
+// calling process.exit().
 if (require.main === module) {
 	main()
 		.then((code) => process.exit(code))
