@@ -56,12 +56,7 @@ export abstract class Platform {
 
 	abstract getOS(): OS;
 
-	/**
-	 * Filename of the core agent binary.
-	 *
-	 * Retained so existing consumers keep working. Prefer `getBinaries()`, which
-	 * describes every binary this package ships.
-	 */
+	/** Core agent filename. Predates `getBinaries()`; kept for existing consumers. */
 	getBinaryName(): string {
 		return this.getBinary("core").outputName;
 	}
@@ -76,12 +71,6 @@ export abstract class Platform {
 		return "";
 	}
 
-	/**
-	 * Every agent binary this package builds and ships for this platform.
-	 *
-	 * Callers iterate this rather than hardcoding a single binary. Adding a future
-	 * sub-agent is a new entry here, not a change to five call sites.
-	 */
 	getBinaries(): AgentBinaryDescriptor[] {
 		const ext = this.getExecutableExtension();
 		return [
@@ -112,7 +101,6 @@ export abstract class Platform {
 		];
 	}
 
-	/** Look up one descriptor by kind. Throws if the kind is not defined for this platform. */
 	getBinary(kind: AgentBinaryKind): AgentBinaryDescriptor {
 		const found = this.getBinaries().find((b) => b.kind === kind);
 		if (!found) {
@@ -124,17 +112,13 @@ export abstract class Platform {
 	}
 }
 
-abstract class Unix extends Platform {
-	abstract getOS(): OS;
-}
-
-class Linux extends Unix {
+class Linux extends Platform {
 	getOS(): OS {
 		return "linux";
 	}
 }
 
-class MacOS extends Unix {
+class MacOS extends Platform {
 	getOS(): OS {
 		return "macos";
 	}
@@ -163,20 +147,17 @@ class Unknown extends Platform {
 /**
  * Platforms this package builds and publishes.
  *
- * This list drives `create-platform-packages.js --all` and, through
- * `update-optional-deps.js`, the `optionalDependencies` in package.json. It must
- * therefore match the build matrix in `.github/workflows/build-release.yml`
- * exactly. A platform listed here but absent from the matrix is declared as an
- * optional dependency, never built, and never published: npm then silently skips
- * the missing package at install time and the consumer gets no binaries and no
- * error, which is the same silent-failure shape as the original defect.
+ * Drives `create-platform-packages.js --all` and, through `update-optional-deps.js`,
+ * the `optionalDependencies` in package.json, so it must match the build matrix in
+ * `.github/workflows/build-release.yml` exactly. A platform listed here but absent
+ * from the matrix is declared, never built, and never published; npm then skips the
+ * missing optional package at install time and the consumer gets no binaries and no
+ * error.
  *
- * macOS x86_64 is deliberately absent. GitHub retired the `macos-13` Intel
- * runner, so it cannot be built on hosted runners; it was previously declared
- * here and in optionalDependencies while no matrix leg produced it. Restore it by
- * adding a leg (self-hosted Intel, or a verified darwin/amd64 cross-compile with
- * CGO enabled, which the `netcgo` build tag requires) and adding the entry back
- * here in the same change.
+ * macOS x86_64 is absent because GitHub retired the `macos-13` Intel runner. Restore
+ * it by adding a matrix leg (self-hosted Intel, or a verified darwin/amd64
+ * cross-compile with CGO enabled, which the `netcgo` build tag requires) in the same
+ * change as the entry here.
  */
 export const SUPPORTED_PLATFORMS: Platform[] = [
 	new Linux("x86_64"),
