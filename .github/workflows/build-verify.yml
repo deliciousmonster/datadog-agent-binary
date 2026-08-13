@@ -3,25 +3,18 @@ name: Verify Agent Build
 # Builds both agent binaries and proves the APM receiver works, WITHOUT publishing
 # anything.
 #
-# Why this exists: build-release.yml only triggers on `push: tags: v*` and
-# workflow_dispatch. Everything it exercises — the descriptor loop in
-# src/builders/base.ts buildCommon(), copyBinariesToOutput(), the trace-agent
-# invoke task, the version pin in src/downloader.ts — was therefore never run
-# until someone cut a release tag. A change that broke the build path stayed
-# invisible through review, merge, and every green `test` run, and surfaced only
-# at the moment it was most expensive.
+# build-release.yml only triggers on `push: tags: v*` and workflow_dispatch, so
+# the build path (the descriptor loop in src/builders/base.ts buildCommon(),
+# copyBinariesToOutput(), the trace-agent invoke task, the version pin in
+# src/downloader.ts) was never run until someone cut a release tag. A change that
+# broke it stayed invisible through review, merge, and every green `test` run.
 #
-# test.yml is hermetic by design: no network, no agent binary, seconds per leg.
-# That is the right trade for something running on every push. This workflow is
-# the opposite trade, so it runs on a schedule and on pushes to main rather than
-# on every branch and PR: an agent build is tens of minutes, and paying that on
-# every push would make the fast checks useless.
+# An agent build is tens of minutes, so this runs nightly and on pushes to main
+# rather than on every push; test.yml stays hermetic and fast.
 #
 # One platform on purpose. linux-x86_64 is the deploy target (the Harper
-# component image) and the only leg that can run the receiver assertion, so it is
-# where a regression matters first. The remaining platforms are covered at
-# release time, where their cost is justified. Use workflow_dispatch to build a
-# different one before a release.
+# component image), so a regression matters there first. The rest are covered at
+# release time. Use workflow_dispatch to build a different one before a release.
 
 on:
   push:
@@ -31,8 +24,8 @@ on:
       - "**/*.md"
       - "example/**"
   schedule:
-    # 04:17 UTC. Off the hour deliberately: scheduled jobs landing exactly on :00
-    # queue behind everyone else's cron.
+    # Off the hour deliberately: jobs scheduled at :00 queue behind everyone
+    # else's cron.
     - cron: "17 4 * * *"
   workflow_dispatch:
     inputs:
@@ -59,9 +52,9 @@ env:
 jobs:
   build-verify:
     name: build + APM receiver (${{ github.event.inputs.platform || 'linux-x86_64' }})
-    # ubuntu-22.04 (glibc 2.35) matches build-release.yml. The floor is set by the
-    # OSS Harper image (Debian 12 / glibc 2.36), and glibc is forward-compatible
-    # only: building on a newer runner produces binaries that will not load there.
+    # ubuntu-22.04 (glibc 2.35) matches build-release.yml. The floor is the OSS
+    # Harper image (Debian 12 / glibc 2.36), and glibc only works upward: build on
+    # a newer runner and the binaries will not load there.
     runs-on: >-
       ${{ (github.event.inputs.platform == 'linux-arm64' && 'ubuntu-22.04-arm')
        || (github.event.inputs.platform == 'macos-arm64' && 'macos-latest')
@@ -87,9 +80,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           # dda is a Python CLI and the agent's build system is invoke-based, so
-          # Python is required to build EITHER binary. This is unrelated to the
-          # `python` build tag, which is excluded from the core agent so the
-          # shipped binary does not embed CPython.
+          # Python builds EITHER binary. Unrelated to the `python` build tag, which
+          # is excluded from the core agent so it does not embed CPython.
           python-version: "3.12"
 
       - name: Install build dependencies (Linux)
@@ -112,8 +104,8 @@ jobs:
 
       # Prove the pin resolves before spending an hour on a build. resolveVersion()
       # reads .datadog-agent-version and asserts the tag exists upstream, so a bad
-      # pin fails here in seconds with the real tags listed, instead of surfacing
-      # as an opaque clone failure.
+      # pin fails here in seconds with the real tags listed instead of surfacing as
+      # an opaque clone failure.
       - name: Resolve and verify the pinned agent version
         shell: bash
         run: |
@@ -140,9 +132,9 @@ jobs:
             node dist/cli.js build
           fi
 
-      # The check that would have caught the original defect. The package shipped
-      # the core agent alone: nothing bound 8126, dd-trace got ECONNREFUSED, and
-      # every span was dropped in silence. A missing binary is a hard failure.
+      # The check that would have caught the original defect: the package shipped
+      # the core agent alone, nothing bound 8126, dd-trace got ECONNREFUSED, and
+      # every span was dropped in silence.
       - name: Assert both binaries were produced
         shell: bash
         run: |
@@ -163,11 +155,10 @@ jobs:
           done
           exit "$rc"
 
-      # Symbol-level proof that the trace binary is a trace-agent rather than a
-      # second copy of the core agent. `version` cannot tell those apart: a
-      # bundled-but-misdispatched binary prints a version and exits 0 while
-      # containing no receiver at all. pkg/trace/api is the package that binds the
-      # port, so its symbol count is the thing worth asserting.
+      # Symbol-level proof that the trace binary is a trace-agent and not a second
+      # copy of the core agent. `version` cannot tell those apart: a misdispatched
+      # binary prints a version and exits 0 with no receiver in it. pkg/trace/api
+      # is the package that binds the port.
       - name: Assert the trace binary contains the APM receiver
         if: runner.os == 'Linux'
         shell: bash
@@ -192,9 +183,9 @@ jobs:
           [ "$t_cmd" -gt 0 ] || { echo "::error::trace-agent contains no cmd/trace-agent symbols."; rc=1; }
           exit "$rc"
 
-      # The end the whole package exists for: a real receiver, on the real port,
-      # accepting a real v0.4 payload. Everything above this proves a file exists
-      # and loads; only this proves a span would be received.
+      # A real receiver, on the real port, accepting a real v0.4 payload.
+      # Everything above proves a file exists and loads; only this proves a span
+      # would be received.
       - name: Verify the APM receiver accepts a trace
         if: runner.os != 'Windows'
         shell: bash
@@ -230,9 +221,8 @@ jobs:
           export DD_APM_ENABLED=true
           export DD_APM_RECEIVER_PORT=8126
           export DD_REMOTE_CONFIGURATION_ENABLED=false
-          # Point the writer at a dead local port: payloads are accepted by the
-          # receiver and then fail to forward, which is all this needs and keeps
-          # the run entirely on the runner.
+          # Dead local port: the receiver accepts payloads and then fails to
+          # forward them, keeping the run entirely on the runner.
           export DD_APM_DD_URL=http://127.0.0.1:1
 
           "$bin" run -c "$work/datadog.yaml" > "$work/console.log" 2>&1 &

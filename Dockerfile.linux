@@ -1,7 +1,6 @@
-# Dockerfile for cross-compiling Datadog Agent to Linux
+# Cross-compile the Datadog Agent to Linux.
 FROM golang:1.23
 
-# Install build dependencies for cross-compilation
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
@@ -15,15 +14,10 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Set Go environment
 ENV CGO_ENABLED=1
 ENV GOOS=linux
 
-# Create working directory
+# Source and build script are mounted at runtime.
 WORKDIR /workspace
 
-# Copy source code will be mounted at runtime
-# Build script will be provided at runtime
-
-# Default command
 CMD ["/bin/bash"]

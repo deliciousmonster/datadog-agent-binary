@@ -19,26 +19,25 @@ on:
 env:
   NODE_VERSION: "22"
   # Must satisfy the go.mod `go` directive of the agent release pinned in
-  # .datadog-agent-version — 7.79.x needs Go 1.25.x. Bump this when the pin moves
+  # .datadog-agent-version; 7.79.x needs Go 1.25.x. Bump this when the pin moves
   # across a Go requirement.
   GO_VERSION: "1.25.8"
   # The Datadog Agent version this package BUNDLES is NOT set here. It lives in
-  # .datadog-agent-version at the repo root, which src/downloader.ts reads when no
-  # --datadog-version is passed. It used to be duplicated in this file, and two
-  # copies of a pin are two pins: the workflow builds one release while the repo
-  # claims another, and nothing compares them. A workflow_dispatch
-  # `datadog_version` input still overrides it for one-off builds.
+  # .datadog-agent-version, which src/downloader.ts reads when no --datadog-version
+  # is passed. It used to be duplicated here, and two copies of a pin are two pins:
+  # the workflow builds one release while the repo claims another, and nothing
+  # compares them. The workflow_dispatch `datadog_version` input still overrides it
+  # for one-off builds.
 
 jobs:
-  # Gate. test.yml runs on `push: branches: ["**"]`, which matches branches only,
-  # so a tag push does not trigger it — and this workflow had no test steps of its
-  # own. The net effect was that cutting a release ran zero tests against the ref
-  # being published. Tagging a commit that was green on a branch is the common
-  # case, but nothing enforced it: a tag on any commit published unverified.
+  # Gate. test.yml runs on `push: branches: ["**"]`, which matches branches only, so
+  # a tag push does not trigger it. Without this job, cutting a release ran zero
+  # tests against the ref being published: tagging a green commit is the common case
+  # but nothing enforced it.
   #
-  # Deliberately the fast hermetic checks only. The real-Harper integration suite
-  # lives in test.yml and takes minutes; duplicating it here would double every
-  # release's critical path for a suite that already ran on the branch.
+  # Fast hermetic checks only. The real-Harper integration suite lives in test.yml
+  # and already ran on the branch; repeating it here would double every release's
+  # critical path.
   test:
     name: test (gate)
     runs-on: ubuntu-latest
@@ -66,60 +65,41 @@ jobs:
 
   build:
     needs: test
-    # Legs flagged `experimental` are allowed to fail so they don't block
-    # `release`/`publish`, which depend on this job. The publish step skips any
-    # platform whose binary is missing.
-    continue-on-error: ${{ matrix.experimental || false }}
     # Cap each leg so a runner that never gets scheduled (e.g. a retired runner
-    # image) can't stall the whole build — and therefore the publish — for the
-    # default 6h. A real agent build finishes well within this.
+    # image) can't stall the build, and therefore the publish, for the default 6h.
+    # A real agent build finishes well within this.
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux builds
+          # glibc floor. Both shipped binaries link against whatever glibc the
+          # build runner ships, and glibc only works upward: a binary built on an
+          # older glibc runs on newer ones, not the reverse. The trace-agent is no
+          # exception, its build tags include netcgo so it is dynamically linked
+          # exactly like the core agent.
           #
-          # glibc floor: both shipped binaries (datadog-agent and trace-agent)
-          # link against whatever glibc the build runner ships, and glibc is
-          # backward-compatible only upward (a binary built on an older glibc
-          # runs on newer ones, not vice versa). The trace-agent is no
-          # exception; its build tags include netcgo, so it is dynamically
-          # linked exactly like the core agent.
-          #
-          # The oldest runtime we have to load on is the OSS Harper image,
-          # still Debian 12 / glibc 2.36. (harper-pro has moved to
-          # node:24-trixie, glibc 2.41, so it is no longer what sets this
-          # floor.) We must therefore build on a runner whose glibc is <= 2.36
-          # or the binaries won't load there: they would reference
-          # GLIBC_2.38/2.39 symbols the image doesn't have. ubuntu-latest is
-          # now Ubuntu 24.04 (glibc 2.39), so we pin to ubuntu-22.04 (glibc
-          # 2.35). The agent does not actually require any newer glibc feature;
-          # upstream Datadog builds against an even older glibc for portability.
+          # The oldest runtime we load on is the OSS Harper image, still Debian 12
+          # / glibc 2.36 (harper-pro has moved to node:24-trixie, glibc 2.41, so it
+          # no longer sets the floor). ubuntu-latest is Ubuntu 24.04, glibc 2.39,
+          # and would emit GLIBC_2.38/2.39 references the image cannot satisfy, so
+          # pin ubuntu-22.04 (glibc 2.35). The agent needs no newer glibc feature.
           - os: ubuntu-22.04
             platform: linux-x86_64
-          # GitHub-hosted arm64 runner on Ubuntu 22.04 (glibc 2.35), the arm
-          # counterpart of the x86_64 pin above. If hosted arm runners aren't
-          # available, swap this for any arm runner whose glibc is <= 2.36;
-          # the "Verify glibc floor" step below will fail the build if it
-          # isn't.
+          # The arm counterpart, also Ubuntu 22.04. Any arm runner with glibc
+          # <= 2.36 works; "Verify glibc floor" below fails the build if it isn't.
           - os: ubuntu-22.04-arm
             platform: linux-arm64
 
-          # macOS builds
-          # macOS x86_64 (Intel) is omitted: GitHub has retired the macos-13
-          # Intel runner, so it can't be built on hosted runners. Re-add it with
-          # a self-hosted or cross-compiling runner if Intel-mac support is
-          # needed again.
+          # macOS x86_64 (Intel) is omitted: GitHub retired the macos-13 Intel
+          # runner. Re-add it with a self-hosted or cross-compiling runner if
+          # Intel-mac support is needed again.
           - os: macos-latest
             platform: macos-arm64
 
-          # Windows builds
           - os: windows-latest
             platform: windows-x86_64
-          # Disable Windows ARM64 builds until Chocolatey supports it
-          # - os: windows-11-arm
-          #   platform: windows-arm64
+          # windows-arm64 is omitted until Chocolatey supports it.
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -164,29 +144,15 @@ jobs:
       - name: Build TypeScript
         run: npm run build
 
-      # The agent version to BUILD is independent of the package release version
-      # (the git tag). The tag only drives the npm package version, set in the
-      # publish job.
-      #
-      # Only a workflow_dispatch override is resolved here. Left empty, the build
-      # step passes no --datadog-version and src/downloader.ts falls back to the
-      # pin in .datadog-agent-version — the one place the bundled release is
-      # recorded. The pin is echoed first so the build log states which upstream
-      # release this artifact came from even on the default path.
-      - name: Resolve Datadog Agent version to build (Unix)
-        if: runner.os != 'Windows'
-        id: extract_version_unix
-        run: |
-          echo "Pinned in .datadog-agent-version: $(cat .datadog-agent-version)"
-          echo "version=${{ github.event.inputs.datadog_version }}" >> $GITHUB_OUTPUT
-
-      - name: Resolve Datadog Agent version to build (Windows)
-        if: runner.os == 'Windows'
-        id: extract_version_windows
-        run: |
-          echo "Pinned in .datadog-agent-version: $(Get-Content .datadog-agent-version)"
-          echo "version=${{ github.event.inputs.datadog_version }}" >> $env:GITHUB_OUTPUT
-        shell: pwsh
+      # The agent version BUILT is independent of the package release version: the
+      # git tag only drives the npm package version, set in the publish job.
+      # Without a workflow_dispatch override the build passes no --datadog-version
+      # and src/downloader.ts falls back to .datadog-agent-version, the one place
+      # the bundled release is recorded. Echoed so the build log states which
+      # upstream release this artifact came from even on the default path.
+      - name: Show the pinned Datadog Agent version
+        shell: bash
+        run: cat .datadog-agent-version
 
       # One build step produces BOTH binaries: src/builders/base.ts iterates
       # platform.getBinaries() and runs `dda inv <buildTask>` per descriptor. Each
@@ -199,9 +165,8 @@ jobs:
           DD_AGENT_BUILD_ARGS: ${{ github.event.inputs.agent_build_args }}
           DD_TRACE_AGENT_BUILD_ARGS: ${{ github.event.inputs.trace_agent_build_args }}
         run: |
-          if [ -n "${{ steps.extract_version_unix.outputs.version }}" ]; then
-            node dist/cli.js build --datadog-version ${{ steps.extract_version_unix.outputs.version }}
-            ls -l build/${{ matrix.platform }}/bin/
+          if [ -n "${{ github.event.inputs.datadog_version }}" ]; then
+            node dist/cli.js build --datadog-version ${{ github.event.inputs.datadog_version }}
           else
             node dist/cli.js build
           fi
@@ -213,30 +178,25 @@ jobs:
           DD_AGENT_BUILD_ARGS: ${{ github.event.inputs.agent_build_args }}
           DD_TRACE_AGENT_BUILD_ARGS: ${{ github.event.inputs.trace_agent_build_args }}
         run: |
-          if ("${{ steps.extract_version_windows.outputs.version }}" -ne "") {
-            node dist/cli.js build --datadog-version ${{ steps.extract_version_windows.outputs.version }}
+          if ("${{ github.event.inputs.datadog_version }}" -ne "") {
+            node dist/cli.js build --datadog-version ${{ github.event.inputs.datadog_version }}
           } else {
             node dist/cli.js build
           }
         shell: pwsh
 
-      # Prove every binary we ship actually runs as a standalone file BEFORE we
-      # ship it. We hide the build tree first so a binary that still links
-      # libraries by their build-time path (e.g. librtloader) can't be
-      # satisfied; that's the exact failure that only shows up on a user's
-      # machine. A self-contained binary runs fine; a non-relocatable one fails
-      # here and blocks the release instead of publishing something that won't
-      # start.
+      # Prove every binary we ship runs as a standalone file BEFORE we ship it. The
+      # build tree is hidden first so a binary that still links a library by its
+      # build-time path (e.g. librtloader) cannot be satisfied; that failure
+      # otherwise shows up only on a user's machine.
       #
-      # The loop over BOTH binaries is load-bearing. The package once shipped
-      # with the core agent only: nothing bound 127.0.0.1:8126, dd-trace got
-      # ECONNREFUSED, and every span was dropped in silence. A missing binary is
-      # a hard failure here, not a warning.
+      # The loop over BOTH binaries is load-bearing. The package once shipped with
+      # the core agent only: nothing bound 127.0.0.1:8126, dd-trace got
+      # ECONNREFUSED, and every span was dropped in silence.
       - name: Smoke test ${{ matrix.platform }} binaries run standalone (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          set -e
           bindir="build/${{ matrix.platform }}/bin"
           src="build/${{ matrix.platform }}/src"
           [ -d "$src" ] && mv "$src" "${src}.hidden" || true
@@ -256,12 +216,8 @@ jobs:
           [ -d "${src}.hidden" ] && mv "${src}.hidden" "$src" || true
           exit "$rc"
 
-      # The Windows counterpart. This leg previously had no smoke test at all, so
-      # the .exe path through descriptors -> build -> copy -> package -> resolve
-      # was compiled and never once executed; combined with `continue-on-error` on
-      # experimental legs, a broken Windows build could publish. Same contract as
-      # the Unix step: hide the build tree so a binary that still resolves a
-      # library by its build-time path cannot be satisfied, then run both.
+      # The Windows counterpart. Without it the .exe path through descriptors ->
+      # build -> copy -> package -> resolve is compiled and never once executed.
       - name: Smoke test ${{ matrix.platform }} binaries run standalone (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -291,24 +247,21 @@ jobs:
           if (Test-Path $hidden) { Move-Item $hidden $src }
           exit $rc
 
-      # `version` only proves the file loads. This proves the APM receiver
-      # actually works: start the trace-agent, wait for it to bind
-      # 127.0.0.1:8126, and submit a trace payload the way dd-trace does. The
-      # original defect shipped a package where nothing ever listened on 8126,
-      # and every "is the file there" check passed anyway.
+      # `version` only proves the file loads. This starts the trace-agent, waits
+      # for it to bind 127.0.0.1:8126, and submits a trace payload the way dd-trace
+      # does. The original defect shipped a package where nothing ever listened on
+      # 8126 and every "is the file there" check passed anyway.
       #
       # The trace-agent dies at startup unless datadog.yaml EXISTS (0 bytes is
-      # enough; every setting below arrives through the environment) and its
-      # config and run directories are writable, so the whole run lives in one
-      # temp dir. Nothing leaves the runner: the hostname is pinned so no cloud
-      # metadata is probed, remote config is off, and the trace writer points at
-      # a dead local port, so submitted payloads are accepted by the receiver
-      # and then fail to forward, which is all this test needs.
-      # Runs on every Unix leg, not just Linux. The receiver is the whole point of
-      # shipping a second binary, so proving it works on only one of the platforms
-      # we publish leaves the others resting on "the file exists". Verified by hand
-      # on darwin/arm64 before widening this: a trace-agent built from the pin binds
-      # 8126, answers /info, and accepts a v0.4 payload there exactly as on Linux.
+      # enough, every setting below arrives through the environment) and its config
+      # and run directories are writable, so the whole run lives in one temp dir.
+      # Nothing leaves the runner: the hostname is pinned so no cloud metadata is
+      # probed, remote config is off, and the trace writer points at a dead local
+      # port, so payloads are accepted by the receiver and then fail to forward.
+      #
+      # Every Unix leg, not just Linux. Proving the receiver on one published
+      # platform leaves the rest resting on "the file exists". Checked by hand on
+      # darwin/arm64 first.
       - name: Verify APM receiver accepts traces (Unix)
         if: runner.os != 'Windows'
         shell: bash
@@ -353,13 +306,12 @@ jobs:
           pid=$!
           echo "trace-agent running as pid $pid out of $work"
 
-          # 60 * 0.5s = 30s ceiling. Bail the moment the process dies so a
+          # 60 * 0.5s = 30s ceiling, but bail the moment the process dies so a
           # startup failure reports in a second instead of after the timeout.
           ready=0
           for _ in $(seq 1 60); do
-            # No -S here: a connection refused on every attempt until the
-            # listener is up is expected, and printing it 60 times buries the
-            # real failure when there is one.
+            # No -S: connection refused until the listener is up is expected, and
+            # printing it 60 times buries the real failure when there is one.
             if curl -fs --max-time 2 http://127.0.0.1:8126/info -o "$work/info.json"; then
               ready=1
               break
@@ -382,9 +334,9 @@ jobs:
           cat "$work/info.json"
           echo
 
-          # Parse the JSON rather than grepping it: the point is that the
-          # receiver ADVERTISES the endpoint dd-trace posts to, not that the
-          # string appears somewhere in the response.
+          # Parse the JSON rather than grep it: the claim is that the receiver
+          # ADVERTISES the endpoint dd-trace posts to, not that the string appears
+          # somewhere in the response.
           python3 - "$work/info.json" <<'PY'
           import json, sys
 
@@ -409,32 +361,22 @@ jobs:
 
           echo "OK: trace-agent bound 127.0.0.1:8126 and accepted a trace payload."
 
-      # Guard against the symbol floor creeping back up, for EVERY binary we
-      # ship. The trace-agent carries the netcgo build tag, so it is dynamically
-      # linked against glibc just like the core agent and has to clear the same
-      # floor; checking datadog-agent alone would let through a trace-agent that
-      # cannot load on the image.
+      # Guard against the symbol floor creeping back up, for EVERY binary we ship.
+      # The trace-agent carries the netcgo build tag, so it is dynamically linked
+      # against glibc just like the core agent; checking datadog-agent alone would
+      # let through a trace-agent that cannot load on the image. The floor is 2.36
+      # because the OSS Harper image is Debian 12.
       #
-      # The floor is 2.36 because the OSS Harper image is Debian 12. This step's
-      # older rationale named the Harper Pro image as the constraint, which is
-      # now stale (harper-pro runs node:24-trixie, glibc 2.41). The number is
-      # unchanged; the reason for it is not.
-      #
-      # glibc and libstdc++ are two SEPARATE libraries: the glibc floor is set
-      # by the runner's Ubuntu version, the GLIBCXX floor by its GCC version. A
-      # binary must not reference a symbol newer than either, or it fails to
-      # load with "version `GLIBC_2.xx' not found" or "version `GLIBCXX_3.4.xx'
-      # not found". The latter is the exact error the Macy's deploy hit on
-      # rocksdb-js. Building on ubuntu-22.04 (glibc 2.35, GCC 11 ->
-      # GLIBCXX_3.4.29) keeps both under the limit, and this step fails the
-      # build loudly if either floor is exceeded so we catch it in CI instead of
-      # on a customer's instance.
+      # glibc and libstdc++ are SEPARATE libraries: the glibc floor comes from the
+      # runner's Ubuntu version, the GLIBCXX floor from its GCC version. A binary
+      # referencing a symbol newer than either fails to load with "version
+      # `GLIBC_2.xx' not found" or "version `GLIBCXX_3.4.xx' not found" - the
+      # latter is what the Macy's deploy hit on rocksdb-js. ubuntu-22.04 (glibc
+      # 2.35, GCC 11 -> GLIBCXX_3.4.29) keeps both under the limit.
       - name: Verify glibc / libstdc++ floor (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          set -e
-
           check() {
             local binpath="$1" label="$2" prefix="$3" limit="$4" max
             # GLIBC_ won't match GLIBCXX_ (char after GLIBC is X, not _), so the
@@ -465,14 +407,12 @@ jobs:
           fi
           exit "$rc"
 
-      # The artifact is the whole bin/ directory, which is how both binaries
-      # travel to the release and publish jobs. Assert they are both present
-      # first: Windows has no smoke test above, so a half-empty bin/ would sail
-      # through here and only surface as a missing trace-agent at install time.
+      # The artifact is the whole bin/ directory, which is how both binaries travel
+      # to the release and publish jobs. A half-empty bin/ uploads without
+      # complaint and only surfaces as a missing trace-agent at install time.
       - name: Verify both binaries are present for upload
         shell: bash
         run: |
-          set -e
           bindir="build/${{ matrix.platform }}/bin"
           ext=""
           if [ "${RUNNER_OS:-}" = "Windows" ]; then ext=".exe"; fi
@@ -486,11 +426,9 @@ jobs:
           done
           exit "$rc"
 
-      # Uploading the directory (not a single file) is what carries the core
-      # agent AND the trace-agent, plus anything else the build drops in bin/.
-      # if-no-files-found: error stops a build that produced nothing from
-      # publishing an empty artifact that the publish job would then skip in
-      # silence.
+      # Uploading the directory rather than a single file is what carries the core
+      # agent AND the trace-agent. if-no-files-found: error stops a build that
+      # produced nothing from uploading an empty artifact.
       - name: Upload ${{ matrix.platform }} artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -514,58 +452,29 @@ jobs:
         with:
           path: artifacts/
 
+      # One archive per downloaded artifact, whatever the matrix produced. Naming
+      # the platforms here instead would silently drop a newly added one.
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
-
-          # Create compressed archives for each platform
+          dest="$PWD/release-assets"
           cd artifacts
-
-          echo "Recursively listing files in artifacts:"
           ls -lR
 
-          # Linux platforms
-          for arch in x86_64 arm64; do
-            if [ -d "agent-linux-${arch}" ]; then
-              cd "agent-linux-${arch}"
-              tar -czf "../../release-assets/datadog-agent-${{ github.ref_name }}-linux-${arch}.tar.gz" *
-              cd ..
-            fi
+          for dir in agent-*/; do
+            platform="${dir%/}"
+            platform="${platform#agent-}"
+            asset="$dest/datadog-agent-${{ github.ref_name }}-${platform}"
+            case "$platform" in
+              windows-*) (cd "$dir" && zip -r "$asset.zip" *) ;;
+              *) (cd "$dir" && tar -czf "$asset.tar.gz" *) ;;
+            esac
           done
 
-          echo "Listing files in release-assets:"
-          ls -l ../release-assets
-
-          # macOS platforms
-          for arch in x86_64 arm64; do
-            if [ -d "agent-macos-${arch}" ]; then
-              cd "agent-macos-${arch}"
-              tar -czf "../../release-assets/datadog-agent-${{ github.ref_name }}-macos-${arch}.tar.gz" *
-              cd ..
-            fi
-          done
-
-          echo "Listing files in release-assets:"
-          ls -l ../release-assets
-
-          # Windows platforms
-          for arch in x86_64 arm64; do
-            if [ -d "agent-windows-${arch}" ]; then
-              cd "agent-windows-${arch}"
-              zip -r "../../release-assets/datadog-agent-${{ github.ref_name }}-windows-${arch}.zip" *
-              cd ..
-            fi
-          done
-
-          echo "Listing files in release-assets:"
-          ls -l ../release-assets
+          ls -l "$dest"
 
       - name: Generate checksums
         run: |
-          echo "Listing current dir"
-          ls -l
-          echo "Listing release-assets dir"
-          ls -l release-assets/
           cd release-assets
           sha256sum * > checksums.txt
 
@@ -592,7 +501,6 @@ jobs:
 
             - **Linux x86_64**: `datadog-agent-${{ github.ref_name }}-linux-x86_64.tar.gz`
             - **Linux arm64**: `datadog-agent-${{ github.ref_name }}-linux-arm64.tar.gz`
-            - **macOS x86_64**: `datadog-agent-${{ github.ref_name }}-macos-x86_64.tar.gz`
             - **macOS arm64**: `datadog-agent-${{ github.ref_name }}-macos-arm64.tar.gz`
             - **Windows x86_64**: `datadog-agent-${{ github.ref_name }}-windows-x86_64.zip`
 
@@ -616,9 +524,8 @@ jobs:
       contents: read
       # Required for npm Trusted Publishing (OIDC). With a trusted publisher
       # configured on npmjs.com for this repo + workflow, `npm publish` mints a
-      # short-lived token from this ID token and no NPM_TOKEN secret is needed. It also
-      # attaches build provenance, so the registry records which commit and workflow
-      # produced each tarball.
+      # short-lived token from this ID token, so no NPM_TOKEN secret is needed. It
+      # also attaches build provenance recording which commit produced each tarball.
       id-token: write
     steps:
       - name: Checkout
@@ -629,17 +536,8 @@ jobs:
         with:
           path: artifacts/
 
-      - name: List binaries
-        run: |
-          echo "Listing artifacts dir"
-          ls -l artifacts/
-          echo "Listing artifacts subdirs"
-          ls -l artifacts/*
-
       - name: Move binaries to build dirs
         run: |
-          echo "Listing artifacts dir again"
-          ls -l artifacts/
           pushd artifacts
           for artifact in *
           do
@@ -661,9 +559,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Trusted Publishing (OIDC) needs npm >= 11.5.1. The npm bundled with Node 22 is
-      # older, so upgrade the CLI rather than the runtime: bumping Node here would
-      # change the interpreter the build ran under.
+      # Trusted Publishing (OIDC) needs npm >= 11.5.1, newer than the npm bundled with
+      # Node 22. Upgrade the CLI, not the runtime: bumping Node here would change the
+      # interpreter the build ran under.
       - name: Upgrade npm for trusted publishing
         run: |
           npm install -g npm@latest
@@ -672,23 +570,23 @@ jobs:
       - name: Build TypeScript
         run: npm run build
 
-      # The release tag (vX.Y.Z) is the version everything is published at, so
-      # the npm package version must match it. This runs the `version` lifecycle
-      # script (build + update-optional-deps), keeping optionalDependencies
-      # pinned to the same version. --allow-same-version makes re-runs safe.
+      # The release tag (vX.Y.Z) is the version everything publishes at, so the npm
+      # package version must match it. This runs the `version` lifecycle script
+      # (build + update-optional-deps), keeping optionalDependencies pinned to the
+      # same version. --allow-same-version makes re-runs safe.
       - name: Set package version from tag
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "Setting npm package version to $VERSION"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
-      # A prerelease publishes under `next` so it cannot move `latest`; a stable release
-      # publishes under `latest`.
+      # A prerelease publishes under `next` so it cannot move `latest`; a stable
+      # release publishes under `latest`.
       #
-      # Decided by parsing semver rather than by looking for a hyphen. The two agree for
+      # Decided by parsing semver rather than looking for a hyphen. The two agree for
       # `7.75.6-next.0`, but "contains a hyphen" is not what prerelease means, and this
-      # is the switch that decides whether an untested build becomes the default install
-      # for every consumer. It is worth being exact about.
+      # switch decides whether an untested build becomes the default install for every
+      # consumer.
       - name: Determine npm dist-tag
         id: disttag
         run: |
@@ -696,7 +594,6 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           TAG=$(node -e '
             const v = process.argv[1];
-            // Full semver, capturing the optional prerelease segment.
             const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(v);
             if (!m) {
               console.error(`::error::Tag "${v}" is not valid semver; refusing to publish.`);
@@ -708,22 +605,19 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Publishing $VERSION under npm dist-tag: $TAG"
 
-      # Authentication. Two supported paths, and the choice is made by whether the
-      # secret exists:
+      # Two auth paths, chosen by whether the secret exists:
       #
-      #   Trusted Publishing (preferred) — configure a trusted publisher on npmjs.com
+      #   Trusted Publishing (preferred): configure a trusted publisher on npmjs.com
       #     for this repo and workflow, leave NPM_TOKEN unset, and npm exchanges the
-      #     OIDC token above for a short-lived credential. Nothing long-lived is stored.
+      #     OIDC token above for a short-lived credential.
       #
-      #   NPM_TOKEN (bootstrap) — a trusted publisher cannot always be configured for a
+      #   NPM_TOKEN (bootstrap): a trusted publisher cannot be configured for a
       #     package that does not exist yet, so the FIRST publish of a new scope may
-      #     need a token. Set NPM_TOKEN, publish once, configure the trusted publisher,
-      #     then delete the secret.
+      #     need a token. Publish once, configure the publisher, delete the secret.
       #
-      # Writing an .npmrc with an empty token would break OIDC, so the file is only
-      # written when the secret is actually set.
+      # An .npmrc with an empty token breaks OIDC, so it is only written when the
+      # secret is actually set.
       - name: Configure npm authentication
-        id: npmauth
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -731,43 +625,38 @@ jobs:
           if [ -n "${NPM_TOKEN:-}" ]; then
             echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
             echo "Using NPM_TOKEN (bootstrap path)."
-            echo "mode=token" >> "$GITHUB_OUTPUT"
           else
             echo "No NPM_TOKEN set; relying on Trusted Publishing (OIDC)."
             echo "If this fails with ENEEDAUTH, either configure a trusted publisher on"
             echo "npmjs.com for ${GITHUB_REPOSITORY} / $(basename "$GITHUB_WORKFLOW"), or"
             echo "set NPM_TOKEN for the first publish."
-            echo "mode=oidc" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Prepare platform packages with binaries
         run: |
           node scripts/create-platform-packages.js --all
 
-      # THE GATE. This is the last moment the answer can still change anything: the
-      # tarballs exist but nothing is public, so a failure here is free. Once
-      # `npm publish` runs, a version number is burned forever — it can be deprecated
-      # but never replaced.
+      # THE GATE. Last moment a failure is still free: the tarballs exist but nothing
+      # is public. Once `npm publish` runs the version number is burned, and a
+      # published version can be deprecated but never replaced.
       #
-      # Reads the staged npm/ dirs offline and fails on any of the three defects this
-      # project actually shipped: os/cpu carrying our internal names instead of Node's
-      # (so npm can never match the package), a platform declared in
-      # optionalDependencies but never built, and a package missing the trace-agent.
-      # All three fail silently at install time, which is why they need to fail loudly
-      # here.
+      # Reads the staged npm/ dirs offline and fails on the three defects this project
+      # actually shipped: os/cpu carrying our internal names instead of Node's (so npm
+      # can never match the package), a platform declared in optionalDependencies but
+      # never built, and a package missing the trace-agent. All three fail silently at
+      # install time.
       - name: Verify the platform matrix before publishing
         run: node scripts/publish-matrix.js --local ./npm
 
       # Platform packages publish FIRST, always. The main package's
       # optionalDependencies name them at this exact version, so a main package that
-      # lands first briefly advertises dependencies that do not exist — and because
-      # optional dependency failures are silent, anyone installing in that window gets
-      # no binaries and no error.
+      # lands first briefly advertises dependencies that do not exist, and optional
+      # dependency failures are silent: anyone installing in that window gets no
+      # binaries and no error.
       #
-      # Idempotent by design. A partial failure (say the third of four) previously left
-      # the tag unrepeatable: re-running died on the first package with EPUBLISHCONFLICT,
-      # and the only way forward was a new version number. Already-published versions are
-      # now skipped, so re-running a tag finishes the job.
+      # Skipping already-published versions keeps a re-run possible. A partial failure
+      # used to make the tag unrepeatable, dying on the first package with
+      # EPUBLISHCONFLICT and forcing a new version number.
       - name: Publish platform packages
         run: |
           set -euo pipefail
@@ -780,8 +669,7 @@ jobs:
 
             # The matrix gate above already proved every platform has both binaries, so
             # an empty bin/ here means the two disagree. Fail rather than skip: a
-            # silently incomplete publish is the failure mode this whole pipeline exists
-            # to prevent.
+            # silently incomplete publish is what this pipeline exists to prevent.
             if [ ! -d "$platform_dir/bin" ] || [ -z "$(ls -A "$platform_dir/bin")" ]; then
               echo "::error::$pkg_name has no binaries, but the pre-publish matrix check passed. Refusing to publish an incomplete set."
               exit 1
@@ -812,14 +700,12 @@ jobs:
           npm publish --access public --provenance --tag "$DIST_TAG"
 
       # A prerelease must never become the default install. `npm publish --tag next`
-      # already avoids moving `latest`, but npm makes an exception that bites exactly
-      # once: on the very first publish of a package, `latest` is set regardless of
-      # --tag, because a package with no dist-tags needs one. For a new scope whose
-      # first release is a prerelease, that silently makes it the default.
+      # avoids moving `latest`, but npm makes an exception that bites exactly once: on
+      # the very first publish of a package, `latest` is set regardless of --tag,
+      # because a package with no dist-tags needs one. For a new scope whose first
+      # release is a prerelease, that silently makes it the default.
       - name: Assert a prerelease did not become `latest`
         if: steps.disttag.outputs.tag == 'next'
-        env:
-          MATRIX_RETRIES: "12"
         run: |
           set -euo pipefail
           VERSION="${{ steps.disttag.outputs.version }}"
@@ -843,16 +729,12 @@ jobs:
 
       # The receipt: what actually landed on the registry, not what we believed we sent.
       #
-      # MATRIX_RETRIES is load-bearing. Publishing is not read-your-writes — a fetch
+      # MATRIX_RETRIES is load-bearing. Publishing is not read-your-writes, and a fetch
       # immediately after `npm publish` can 404 or return stale metadata. Without the
-      # retry this step goes intermittently red for a reason unrelated to the release,
-      # and a check people learn to ignore is worse than no check.
+      # retry this step goes intermittently red for a reason unrelated to the release.
       #
-      # --deep downloads each tarball and lists bin/ exactly, rather than inferring from
-      # fileCount. It costs a few hundred MB of transfer once per release, which is the
-      # right trade for the one artifact nobody can re-cut.
-      # VERSION is re-derived from the tag rather than carried over: it was a shell
-      # local in "Set package version from tag" and does not survive into later steps.
+      # --deep downloads each tarball and lists bin/ exactly rather than inferring from
+      # fileCount, at a few hundred MB of transfer once per release.
       - name: Verify the published matrix
         env:
           MATRIX_RETRIES: "12"
@@ -861,10 +743,10 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           node scripts/publish-matrix.js --registry "$VERSION" --deep
 
-      # Render the same table into the job summary and the Release body, so the matrix
-      # lives where someone actually looks rather than only in a log that scrolls away.
-      # Non-blocking: the verification above is the gate, and failing a release over a
-      # notes edit would be the tail wagging the dog.
+      # The same table in the job summary and the Release body, where someone will
+      # actually look, rather than only in a log that scrolls away. Non-blocking: the
+      # verification above is the gate, and a failed notes edit must not fail a
+      # release.
       - name: Append the matrix to the release notes
         continue-on-error: true
         env:
