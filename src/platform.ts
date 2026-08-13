@@ -160,10 +160,27 @@ class Unknown extends Platform {
 	}
 }
 
+/**
+ * Platforms this package builds and publishes.
+ *
+ * This list drives `create-platform-packages.js --all` and, through
+ * `update-optional-deps.js`, the `optionalDependencies` in package.json. It must
+ * therefore match the build matrix in `.github/workflows/build-release.yml`
+ * exactly. A platform listed here but absent from the matrix is declared as an
+ * optional dependency, never built, and never published: npm then silently skips
+ * the missing package at install time and the consumer gets no binaries and no
+ * error, which is the same silent-failure shape as the original defect.
+ *
+ * macOS x86_64 is deliberately absent. GitHub retired the `macos-13` Intel
+ * runner, so it cannot be built on hosted runners; it was previously declared
+ * here and in optionalDependencies while no matrix leg produced it. Restore it by
+ * adding a leg (self-hosted Intel, or a verified darwin/amd64 cross-compile with
+ * CGO enabled, which the `netcgo` build tag requires) and adding the entry back
+ * here in the same change.
+ */
 export const SUPPORTED_PLATFORMS: Platform[] = [
 	new Linux("x86_64"),
 	new Linux("arm64"),
-	new MacOS("x86_64"),
 	new MacOS("arm64"),
 	new Windows("x86_64"),
 ];

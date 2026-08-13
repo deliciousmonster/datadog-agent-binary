@@ -1,0 +1,269 @@
+name: Verify Agent Build
+
+# Builds both agent binaries and proves the APM receiver works, WITHOUT publishing
+# anything.
+#
+# Why this exists: build-release.yml only triggers on `push: tags: v*` and
+# workflow_dispatch. Everything it exercises — the descriptor loop in
+# src/builders/base.ts buildCommon(), copyBinariesToOutput(), the trace-agent
+# invoke task, the version pin in src/downloader.ts — was therefore never run
+# until someone cut a release tag. A change that broke the build path stayed
+# invisible through review, merge, and every green `test` run, and surfaced only
+# at the moment it was most expensive.
+#
+# test.yml is hermetic by design: no network, no agent binary, seconds per leg.
+# That is the right trade for something running on every push. This workflow is
+# the opposite trade, so it runs on a schedule and on pushes to main rather than
+# on every branch and PR: an agent build is tens of minutes, and paying that on
+# every push would make the fast checks useless.
+#
+# One platform on purpose. linux-x86_64 is the deploy target (the Harper
+# component image) and the only leg that can run the receiver assertion, so it is
+# where a regression matters first. The remaining platforms are covered at
+# release time, where their cost is justified. Use workflow_dispatch to build a
+# different one before a release.
+
+on:
+  push:
+    branches: [main]
+    # Docs-only pushes cannot break a Go build.
+    paths-ignore:
+      - "**/*.md"
+      - "example/**"
+  schedule:
+    # 04:17 UTC. Off the hour deliberately: scheduled jobs landing exactly on :00
+    # queue behind everyone else's cron.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform to build"
+        required: false
+        default: "linux-x86_64"
+        type: choice
+        options:
+          - linux-x86_64
+          - linux-arm64
+          - macos-arm64
+          - windows-x86_64
+      datadog_version:
+        description: "Override the Datadog Agent version (default: .datadog-agent-version)"
+        required: false
+
+env:
+  NODE_VERSION: "22"
+  # Must satisfy the go.mod `go` directive of the release pinned in
+  # .datadog-agent-version. Keep in step with build-release.yml.
+  GO_VERSION: "1.25.8"
+
+jobs:
+  build-verify:
+    name: build + APM receiver (${{ github.event.inputs.platform || 'linux-x86_64' }})
+    # ubuntu-22.04 (glibc 2.35) matches build-release.yml. The floor is set by the
+    # OSS Harper image (Debian 12 / glibc 2.36), and glibc is forward-compatible
+    # only: building on a newer runner produces binaries that will not load there.
+    runs-on: >-
+      ${{ (github.event.inputs.platform == 'linux-arm64' && 'ubuntu-22.04-arm')
+       || (github.event.inputs.platform == 'macos-arm64' && 'macos-latest')
+       || (github.event.inputs.platform == 'windows-x86_64' && 'windows-latest')
+       || 'ubuntu-22.04' }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          # dda is a Python CLI and the agent's build system is invoke-based, so
+          # Python is required to build EITHER binary. This is unrelated to the
+          # `python` build tag, which is excluded from the core agent so the
+          # shipped binary does not embed CPython.
+          python-version: "3.12"
+
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake
+
+      - name: Install build dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      # Prove the pin resolves before spending an hour on a build. resolveVersion()
+      # reads .datadog-agent-version and asserts the tag exists upstream, so a bad
+      # pin fails here in seconds with the real tags listed, instead of surfacing
+      # as an opaque clone failure.
+      - name: Resolve and verify the pinned agent version
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin="$(cat .datadog-agent-version)"
+          echo "Pinned Datadog Agent version: $pin"
+          node -e "
+            const { DatadogAgentDownloader } = require('./dist/downloader.js');
+            new DatadogAgentDownloader()
+              .resolveVersion(process.env.OVERRIDE || undefined)
+              .then((v) => console.log('resolved:', v))
+              .catch((e) => { console.error('::error::' + e.message); process.exit(1); });
+          "
+        env:
+          OVERRIDE: ${{ github.event.inputs.datadog_version }}
+
+      - name: Build both agent binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.datadog_version }}" ]; then
+            node dist/cli.js build --datadog-version "${{ github.event.inputs.datadog_version }}"
+          else
+            node dist/cli.js build
+          fi
+
+      # The check that would have caught the original defect. The package shipped
+      # the core agent alone: nothing bound 8126, dd-trace got ECONNREFUSED, and
+      # every span was dropped in silence. A missing binary is a hard failure.
+      - name: Assert both binaries were produced
+        shell: bash
+        run: |
+          set -euo pipefail
+          platform="$(node -e "console.log(require('./dist/platform.js').Platform.current().getName())")"
+          bindir="build/$platform/bin"
+          ext=""
+          [ "${RUNNER_OS}" = "Windows" ] && ext=".exe"
+
+          rc=0
+          for name in "datadog-agent$ext" "trace-agent$ext"; do
+            if [ ! -f "$bindir/$name" ]; then
+              echo "::error::$bindir/$name was not built."
+              rc=1
+            else
+              ls -l "$bindir/$name"
+            fi
+          done
+          exit "$rc"
+
+      # Symbol-level proof that the trace binary is a trace-agent rather than a
+      # second copy of the core agent. `version` cannot tell those apart: a
+      # bundled-but-misdispatched binary prints a version and exits 0 while
+      # containing no receiver at all. pkg/trace/api is the package that binds the
+      # port, so its symbol count is the thing worth asserting.
+      - name: Assert the trace binary contains the APM receiver
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          platform="$(node -e "console.log(require('./dist/platform.js').Platform.current().getName())")"
+          trace="build/$platform/bin/trace-agent"
+          core="build/$platform/bin/datadog-agent"
+
+          count() { strings -a "$1" | grep -c "$2" || true; }
+
+          t_api=$(count "$trace" 'datadog-agent/pkg/trace/api\.')
+          t_cmd=$(count "$trace" 'datadog-agent/cmd/trace-agent')
+          c_api=$(count "$core"  'datadog-agent/pkg/trace/api\.')
+
+          echo "trace-agent  pkg/trace/api symbols : $t_api"
+          echo "trace-agent  cmd/trace-agent       : $t_cmd"
+          echo "core agent   pkg/trace/api symbols : $c_api  (expected 0)"
+
+          rc=0
+          [ "$t_api" -gt 0 ] || { echo "::error::trace-agent contains no pkg/trace/api symbols; it cannot serve the receiver."; rc=1; }
+          [ "$t_cmd" -gt 0 ] || { echo "::error::trace-agent contains no cmd/trace-agent symbols."; rc=1; }
+          exit "$rc"
+
+      # The end the whole package exists for: a real receiver, on the real port,
+      # accepting a real v0.4 payload. Everything above this proves a file exists
+      # and loads; only this proves a span would be received.
+      - name: Verify the APM receiver accepts a trace
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          platform="$(node -e "console.log(require('./dist/platform.js').Platform.current().getName())")"
+          bin="$PWD/build/$platform/bin/trace-agent"
+          work="$(mktemp -d)"
+          pid=""
+
+          cleanup() {
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+              kill "$pid" 2>/dev/null || true
+              wait "$pid" 2>/dev/null || true
+            fi
+            rm -rf "$work"
+          }
+          trap cleanup EXIT
+
+          mkdir -p "$work/conf.d" "$work/run"
+          # Contents are irrelevant to startup; existence is not. Without this the
+          # process exits immediately with "unable to load Datadog config file".
+          : > "$work/datadog.yaml"
+
+          export DD_API_KEY=dummy
+          export DD_HOSTNAME=ci-build-verify
+          export DD_CONFD_PATH="$work/conf.d"
+          export DD_RUN_PATH="$work/run"
+          export DD_AUTH_TOKEN_FILE_PATH="$work/auth_token"
+          export DD_IPC_CERT_FILE_PATH="$work/ipc_cert.pem"
+          export DD_LOG_FILE="$work/trace-agent.log"
+          export DD_BIND_HOST=127.0.0.1
+          export DD_APM_ENABLED=true
+          export DD_APM_RECEIVER_PORT=8126
+          export DD_REMOTE_CONFIGURATION_ENABLED=false
+          # Point the writer at a dead local port: payloads are accepted by the
+          # receiver and then fail to forward, which is all this needs and keeps
+          # the run entirely on the runner.
+          export DD_APM_DD_URL=http://127.0.0.1:1
+
+          "$bin" run -c "$work/datadog.yaml" > "$work/console.log" 2>&1 &
+          pid=$!
+
+          ready=0
+          for _ in $(seq 1 60); do
+            if curl -fs --max-time 2 http://127.0.0.1:8126/info -o "$work/info.json"; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "::error::trace-agent exited before binding 127.0.0.1:8126."
+              cat "$work/console.log" || true
+              exit 1
+            fi
+            sleep 0.5
+          done
+          [ "$ready" -eq 1 ] || { echo "::error::trace-agent never bound 8126 within 30s."; cat "$work/console.log" || true; exit 1; }
+
+          echo "--- /info ---"
+          cat "$work/info.json"
+          grep -q '/v0.4/traces' "$work/info.json" \
+            || { echo "::error::/info does not advertise /v0.4/traces."; exit 1; }
+
+          # A real single-span v0.4 payload: array of traces, each an array of spans.
+          payload='[[{"trace_id":1,"span_id":2,"name":"ci.smoke","resource":"ci","service":"build-verify","type":"custom","start":1,"duration":1000000}]]'
+          code=$(curl -s -o "$work/put.json" -w '%{http_code}' -X PUT \
+            -H 'Content-Type: application/json' \
+            --data "$payload" http://127.0.0.1:8126/v0.4/traces)
+          echo "PUT /v0.4/traces -> HTTP $code, body: $(cat "$work/put.json")"
+          [ "$code" = "200" ] || { echo "::error::receiver rejected a valid v0.4 payload (HTTP $code)."; exit 1; }
+
+          echo "OK: the trace-agent bound 8126, advertised /v0.4/traces, and accepted a span."

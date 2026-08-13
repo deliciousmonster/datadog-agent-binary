@@ -30,7 +30,42 @@ env:
   # `datadog_version` input still overrides it for one-off builds.
 
 jobs:
+  # Gate. test.yml runs on `push: branches: ["**"]`, which matches branches only,
+  # so a tag push does not trigger it — and this workflow had no test steps of its
+  # own. The net effect was that cutting a release ran zero tests against the ref
+  # being published. Tagging a commit that was green on a branch is the common
+  # case, but nothing enforced it: a tag on any commit published unverified.
+  #
+  # Deliberately the fast hermetic checks only. The real-Harper integration suite
+  # lives in test.yml and takes minutes; duplicating it here would double every
+  # release's critical path for a suite that already ran on the branch.
+  test:
+    name: test (gate)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run lint:check
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Run npm test
+        run: npm test
+
   build:
+    needs: test
     # Legs flagged `experimental` are allowed to fail so they don't block
     # `release`/`publish`, which depend on this job. The publish step skips any
     # platform whose binary is missing.
@@ -221,6 +256,41 @@ jobs:
           [ -d "${src}.hidden" ] && mv "${src}.hidden" "$src" || true
           exit "$rc"
 
+      # The Windows counterpart. This leg previously had no smoke test at all, so
+      # the .exe path through descriptors -> build -> copy -> package -> resolve
+      # was compiled and never once executed; combined with `continue-on-error` on
+      # experimental legs, a broken Windows build could publish. Same contract as
+      # the Unix step: hide the build tree so a binary that still resolves a
+      # library by its build-time path cannot be satisfied, then run both.
+      - name: Smoke test ${{ matrix.platform }} binaries run standalone (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $bindir = "build/${{ matrix.platform }}/bin"
+          $src    = "build/${{ matrix.platform }}/src"
+          $hidden = "$src.hidden"
+          if (Test-Path $src) { Move-Item $src $hidden }
+
+          $rc = 0
+          foreach ($name in @('datadog-agent.exe', 'trace-agent.exe')) {
+            $bin = Join-Path $bindir $name
+            if (-not (Test-Path $bin)) {
+              Write-Output "::error::$bin was not built. Both the core agent and the trace-agent must ship; without trace-agent nothing listens on 8126 and every span is dropped silently."
+              $rc = 1
+              continue
+            }
+            Write-Output "Running: $bin version (build tree hidden)"
+            & $bin version
+            if ($LASTEXITCODE -ne 0) {
+              Write-Output "::error::$bin failed to run standalone (exit $LASTEXITCODE)."
+              $rc = 1
+            }
+          }
+
+          if (Test-Path $hidden) { Move-Item $hidden $src }
+          exit $rc
+
       # `version` only proves the file loads. This proves the APM receiver
       # actually works: start the trace-agent, wait for it to bind
       # 127.0.0.1:8126, and submit a trace payload the way dd-trace does. The
@@ -234,8 +304,13 @@ jobs:
       # metadata is probed, remote config is off, and the trace writer points at
       # a dead local port, so submitted payloads are accepted by the receiver
       # and then fail to forward, which is all this test needs.
-      - name: Verify APM receiver accepts traces (Linux)
-        if: runner.os == 'Linux'
+      # Runs on every Unix leg, not just Linux. The receiver is the whole point of
+      # shipping a second binary, so proving it works on only one of the platforms
+      # we publish leaves the others resting on "the file exists". Verified by hand
+      # on darwin/arm64 before widening this: a trace-agent built from the pin binds
+      # 8126, answers /info, and accepts a v0.4 payload there exactly as on Linux.
+      - name: Verify APM receiver accepts traces (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail

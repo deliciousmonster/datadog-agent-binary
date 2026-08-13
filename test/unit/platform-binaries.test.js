@@ -68,10 +68,13 @@ const EXPECTED = {
 
 const EXPECTED_KINDS = ["core", "trace"];
 
+// Must match SUPPORTED_PLATFORMS and the build-release.yml matrix. macOS x86_64
+// is absent because GitHub retired the macos-13 Intel runner: declaring a platform
+// nobody builds publishes an optionalDependency that never resolves, and npm skips
+// it silently.
 const EXPECTED_PLATFORM_NAMES = [
 	"linux-x86_64",
 	"linux-arm64",
-	"macos-x86_64",
 	"macos-arm64",
 	"windows-x86_64",
 ];

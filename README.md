@@ -201,12 +201,15 @@ The `python` exclusion is not incidental. Linking the embedded CPython gives a b
 |----|-------------|--------|
 | Linux | x86_64 | ✅ |
 | Linux | arm64 | ✅ |
-| Windows | x86_64 | ✅ |
-| Windows | arm64 | 🚫 |
-| macOS | x86_64 | ✅ |
 | macOS | arm64 | ✅ |
+| Windows | x86_64 | ✅ |
+| macOS | x86_64 | 🚫 |
+| Windows | arm64 | 🚫 |
 
-Windows arm64 is blocked by [Chocolatey](https://chocolatey.org) not supporting arm64 natively.
+This table is the same set as `SUPPORTED_PLATFORMS` in `src/platform.ts` and the build matrix in `.github/workflows/build-release.yml`. The three are kept in step deliberately: a platform listed in `SUPPORTED_PLATFORMS` becomes an `optionalDependency`, and if no matrix leg builds it then npm skips the missing package at install time **without an error**, leaving the consumer with no binaries and no explanation.
+
+- **macOS x86_64** is unsupported because GitHub retired the `macos-13` Intel runner, so it cannot be built on hosted runners. It was previously advertised here and declared as an optional dependency while nothing built it. Restoring it needs a build leg (self-hosted Intel, or a verified darwin/amd64 cross-compile with CGO enabled, which the `netcgo` build tag requires) added in the same change as the `SUPPORTED_PLATFORMS` entry.
+- **Windows arm64** is blocked by [Chocolatey](https://chocolatey.org) not supporting arm64 natively.
 
 ## Harper v5 (Lincoln) compatibility
 

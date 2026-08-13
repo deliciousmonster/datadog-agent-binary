@@ -50,7 +50,6 @@ function windowsBinaries() {
 const EXPECTED = {
 	"linux-x86_64": { os: "linux", cpu: "x64", binaries: unixBinaries() },
 	"linux-arm64": { os: "linux", cpu: "arm64", binaries: unixBinaries() },
-	"macos-x86_64": { os: "darwin", cpu: "x64", binaries: unixBinaries() },
 	"macos-arm64": { os: "darwin", cpu: "arm64", binaries: unixBinaries() },
 	"windows-x86_64": { os: "win32", cpu: "x64", binaries: windowsBinaries() },
 };
