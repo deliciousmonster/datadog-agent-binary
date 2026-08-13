@@ -139,3 +139,43 @@ test("reports a declared platform that was never staged", () => {
 		);
 	});
 });
+
+// verify() compares optionalDependencies against SUPPORTED_PLATFORMS. A platform
+// declared but never built is what made Intel-Mac installs resolve nothing at all,
+// silently, because npm skips an unresolvable optional dependency without a warning.
+// Asserted both ways: the repo is in sync now, and a drift would actually be caught.
+test("optionalDependencies matches SUPPORTED_PLATFORMS, and drift is detected", () => {
+	withTempDir((dir) => {
+		stageAll(dir);
+		const problems = verify(rowsFor(dir), { mode: "local" });
+		assert.ok(
+			!problems.some((p) => /does not match SUPPORTED_PLATFORMS/.test(p)),
+			`optionalDependencies is out of sync: ${problems.join(" | ")}`
+		);
+
+		// Stage a platform nobody declares. Without the negative case this test would
+		// still pass if the check were deleted from verify() entirely.
+		stage(dir, "solaris-sparc", {
+			os: ["sunos"],
+			cpu: ["sparc"],
+			binaries: ["datadog-agent", "trace-agent"],
+		});
+		const rows = [
+			...rowsFor(dir),
+			readLocal(
+				{
+					platform: "solaris-sparc",
+					name: `${PACKAGE_NAME}-solaris-sparc`,
+					binaries: ["datadog-agent", "trace-agent"],
+				},
+				dir
+			),
+		];
+		assert.ok(
+			verify(rows, { mode: "local" }).some((p) =>
+				/does not match SUPPORTED_PLATFORMS/.test(p)
+			),
+			"an undeclared platform should be reported"
+		);
+	});
+});
