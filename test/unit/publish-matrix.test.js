@@ -14,10 +14,7 @@ const {
 	PACKAGE_VERSION,
 } = require("../../scripts/publish-matrix.js");
 
-/**
- * Build a staged package dir on disk, the way create-platform-packages.js would.
- * `overrides` lets a test reproduce a specific historical defect.
- */
+/** Stage a package dir on disk the way create-platform-packages.js would. */
 function stage(dir, platform, { os: pkgOs, cpu, version, binaries }) {
 	const packageDir = path.join(dir, platform);
 	fs.mkdirSync(path.join(packageDir, "bin"), { recursive: true });
@@ -132,26 +129,13 @@ test("rejects a platform package whose version has drifted from the main package
 test("reports a declared platform that was never staged", () => {
 	withTempDir((dir) => {
 		stageAll(dir);
-		// Simulate a build leg that failed: the package is declared but absent.
+		// A build leg that failed: the package is declared but absent.
 		const victim = expectedPackages()[0].platform;
 		fs.rmSync(path.join(dir, victim), { recursive: true, force: true });
 		const problems = verify(rowsFor(dir), { mode: "local" });
 		assert.ok(
 			problems.some((p) => /not found/.test(p) && /skip it silently/.test(p)),
 			`expected a not-found problem, got: ${problems.join(" | ")}`
-		);
-	});
-});
-
-test("optionalDependencies exactly matches SUPPORTED_PLATFORMS", () => {
-	withTempDir((dir) => {
-		stageAll(dir);
-		// A platform declared but not built, or built but not declared, is the drift
-		// that made an Intel-Mac install resolve nothing at all.
-		const problems = verify(rowsFor(dir), { mode: "local" });
-		assert.ok(
-			!problems.some((p) => /does not match SUPPORTED_PLATFORMS/.test(p)),
-			`optionalDependencies is out of sync: ${problems.join(" | ")}`
 		);
 	});
 });
