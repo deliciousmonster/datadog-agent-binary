@@ -26,13 +26,17 @@
 import { suite, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 import { createRequire } from 'node:module';
 import { setupHarperWithFixture, teardownHarper, type ContextWithHarper } from '@harperfast/integration-testing';
-import { darwinLoopbackSkipReason, errorMessage, readJsonlRows, resolveHarperBinPath } from './support/harness.ts';
+import {
+	darwinLoopbackSkipReason,
+	errorMessage,
+	makeTempDir,
+	pollJsonlRows,
+	resolveHarperBinPath,
+} from './support/harness.ts';
 
 const require = createRequire(import.meta.url);
 
@@ -108,8 +112,7 @@ function buildImportFixture(): ImportFixture | { error: string } {
 				'compiled entry the published package ships',
 		};
 	}
-	// realpath: os.tmpdir() on macOS lives under a /var -> /private/var symlink.
-	const workDir = realpathSync(mkdtempSync(join(tmpdir(), 'ddab-harper-import-')));
+	const workDir = makeTempDir('ddab-harper-import-');
 	try {
 		// --ignore-scripts: `prepare` runs husky, which contributes nothing to
 		// pack contents and would couple this suite to git hook setup.
@@ -177,14 +180,8 @@ function buildImportFixture(): ImportFixture | { error: string } {
  * landed; no settle window is needed the way the multi-thread spawn suite
  * needs one.
  */
-async function waitForProbeResults(resultsFile: string, { timeoutMs = 60000 } = {}): Promise<ProbeRow[]> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		const rows = readJsonlRows<ProbeRow>(resultsFile);
-		if (rows.some((row) => row.probe === 'done')) return rows;
-		await sleep(200);
-	}
-	return readJsonlRows<ProbeRow>(resultsFile);
+function waitForProbeResults(resultsFile: string): Promise<ProbeRow[]> {
+	return pollJsonlRows<ProbeRow>(resultsFile, (rows) => rows.some((row) => row.probe === 'done'));
 }
 
 function rowFor(rows: ProbeRow[], probe: string): ProbeRow | undefined {

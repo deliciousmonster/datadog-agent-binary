@@ -11,25 +11,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
-function findRepoRoot(start) {
-	let dir = start;
-	while (!fs.existsSync(path.join(dir, 'package.json'))) {
-		const parent = path.dirname(dir);
-		if (parent === dir) throw new Error('Could not locate package root');
-		dir = parent;
-	}
-	return dir;
-}
+import { importDist } from '../support/harness.js';
 
-const REPO_ROOT = findRepoRoot(import.meta.dirname);
-// pathToFileURL because import() of a bare absolute path is rejected on Windows.
-const { Platform, SUPPORTED_PLATFORMS, getAllSupportedPlatforms } = await import(
-	pathToFileURL(path.join(REPO_ROOT, 'dist', 'platform.js')).href
-);
+const { Platform, SUPPORTED_PLATFORMS, getAllSupportedPlatforms } = await importDist('platform.js');
 
 /**
  * The `python` build tag links librtloader and an embedded CPython by an rpath

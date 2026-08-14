@@ -30,23 +30,18 @@
 import { suite, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import {
-	chmodSync,
-	cpSync,
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	realpathSync,
-	rmSync,
-	writeFileSync,
-} from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { setupHarperWithFixture, teardownHarper, type ContextWithHarper } from '@harperfast/integration-testing';
-import { darwinLoopbackSkipReason, errorMessage, readJsonlRows, resolveHarperBinPath } from './support/harness.ts';
+import {
+	darwinLoopbackSkipReason,
+	errorMessage,
+	makeTempDir,
+	pollJsonlRows,
+	resolveHarperBinPath,
+} from './support/harness.ts';
 
 const require = createRequire(import.meta.url);
 
@@ -134,9 +129,7 @@ type Workspace = {
 };
 
 function createWorkspace(): Workspace {
-	// realpath: on macOS os.tmpdir() lives under a /var -> /private/var symlink,
-	// and the path recorded in ps(1) output is the resolved one.
-	const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ddab-harper-spawn-')));
+	const dir = makeTempDir('ddab-harper-spawn-');
 
 	// Stands in for an agent binary: stays alive until killed, the interval being
 	// the only thing holding its event loop open. It deliberately does NOT set
@@ -291,25 +284,18 @@ function supervisorEnv(workspace: Workspace): Record<string, string> {
  * supervisor run. There is no way to know N up front (that is what the run is
  * measuring), so wait for the count of finished threads to stop changing.
  */
-async function waitForProbeResults(
-	resultsFile: string,
-	{ settleMs = 2000, timeoutMs = 60000 } = {}
-): Promise<ProbeRow[]> {
-	const deadline = Date.now() + timeoutMs;
+function waitForProbeResults(resultsFile: string, { settleMs = 2000 } = {}): Promise<ProbeRow[]> {
 	let lastCount = -1;
 	let stableSince = Date.now();
-	while (Date.now() < deadline) {
-		const rows = readJsonlRows<ProbeRow>(resultsFile);
-		const finished = new Set(rows.filter((r) => r.probe === 'done').map((r) => r.threadId));
-		if (finished.size !== lastCount) {
-			lastCount = finished.size;
+	return pollJsonlRows<ProbeRow>(resultsFile, (rows) => {
+		const finished = threadsThatProbed(rows);
+		if (finished !== lastCount) {
+			lastCount = finished;
 			stableSince = Date.now();
-		} else if (finished.size > 0 && Date.now() - stableSince >= settleMs) {
-			return rows;
+			return false;
 		}
-		await sleep(200);
-	}
-	return readJsonlRows<ProbeRow>(resultsFile);
+		return finished > 0 && Date.now() - stableSince >= settleMs;
+	});
 }
 
 function rowsFor(rows: ProbeRow[], probe: string): ProbeRow[] {

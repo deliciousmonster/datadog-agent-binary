@@ -11,38 +11,22 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import child_process from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { syncBuiltinESMExports } from 'node:module';
-import { pathToFileURL } from 'node:url';
 
 import { findFreePort } from '../support/find-free-port.js';
+import { PACKAGE_MANIFEST, createDistSandbox, importDist, withEnv } from '../support/harness.js';
 
-function findRepoRoot(start) {
-	let dir = start;
-	while (!fs.existsSync(path.join(dir, 'package.json'))) {
-		const parent = path.dirname(dir);
-		if (parent === dir) throw new Error('Could not locate package root');
-		dir = parent;
-	}
-	return dir;
-}
-
-const REPO_ROOT = findRepoRoot(import.meta.dirname);
-const mainPkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
-// pathToFileURL because import() of a bare absolute path is rejected on Windows.
-const { Platform } = await import(pathToFileURL(path.join(REPO_ROOT, 'dist', 'platform.js')).href);
+const { Platform } = await importDist('platform.js');
 
 const platform = Platform.current();
-const platformName = platform.getName();
-// Derived from the manifest, not hardcoded: a test pinning the old scope would
-// keep passing against a stale assumption after a re-scope.
-const PACKAGE_NAME = mainPkg.name;
+const PACKAGE_NAME = PACKAGE_MANIFEST.name;
 const PACKAGE_SCOPE = PACKAGE_NAME.startsWith('@') ? PACKAGE_NAME.split('/')[0] : '';
-const platformPkgName = `${PACKAGE_NAME}-${platformName}`;
+const platformPkgName = `${PACKAGE_NAME}-${platform.getName()}`;
 const isWindows = process.platform === 'win32';
+const SHIM_SKIP = isWindows && 'stub executable is not runnable as a .exe on Windows';
 
 const STUB_MARKER = 'STUB_DATADOG_AGENT_OK';
 
@@ -52,23 +36,6 @@ let sandboxBinaries; // { core: <abs path>, trace: <abs path> }
 let BinaryManager;
 let launchAgent;
 let traceConfigPath;
-
-/**
- * Symlink every top-level entry of the repo's node_modules into the sandbox so
- * dist/ can resolve whatever it imports, then shadow the package scope with a
- * real directory holding only our stub. Symlinking the scope instead would let
- * a real installed platform package win, and the stub would never be exercised.
- */
-function linkRuntimeDependencies(sourceModules, targetModules) {
-	fs.mkdirSync(targetModules, { recursive: true });
-	for (const entry of fs.readdirSync(sourceModules)) {
-		if (entry === PACKAGE_SCOPE) continue;
-		const source = path.join(sourceModules, entry);
-		if (!fs.statSync(source).isDirectory()) continue;
-		// "junction" is the only directory link Windows creates without elevation.
-		fs.symlinkSync(source, path.join(targetModules, entry), isWindows ? 'junction' : 'dir');
-	}
-}
 
 /**
  * A stub platform package with the shape scripts/create-platform-packages.js
@@ -85,7 +52,7 @@ function createStubPlatformPackage(packageDir) {
 		JSON.stringify(
 			{
 				name: platformPkgName,
-				version: mainPkg.version,
+				version: PACKAGE_MANIFEST.version,
 				main: 'index.js',
 				os: [process.platform],
 				cpu: [process.arch],
@@ -126,7 +93,12 @@ function createStubPlatformPackage(packageDir) {
 	return resolved;
 }
 
-function runToCompletion(child) {
+/** Run one of the sandbox's bin/ shims to completion, capturing its output. */
+function runShim(name, args, env = process.env) {
+	const child = child_process.spawn(process.execPath, [path.join(sandbox, 'bin', name), ...args], {
+		stdio: ['ignore', 'pipe', 'pipe'],
+		env,
+	});
 	return new Promise((resolve, reject) => {
 		let stdout = '';
 		let stderr = '';
@@ -138,19 +110,14 @@ function runToCompletion(child) {
 }
 
 before(async () => {
-	// realpath so paths compared against module-location-derived values agree on
-	// macOS, where os.tmpdir() is a symlink into /private.
-	sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ddab-harper-')));
-	fs.cpSync(path.join(REPO_ROOT, 'dist'), path.join(sandbox, 'dist'), {
-		recursive: true,
+	// The package scope is shadowed rather than symlinked so the stub platform
+	// package below is the one that resolves; bin/ travels because the shim tests
+	// execute it.
+	sandbox = createDistSandbox({
+		prefix: 'ddab-harper-',
+		include: ['bin'],
+		shadowed: [PACKAGE_SCOPE],
 	});
-	fs.cpSync(path.join(REPO_ROOT, 'bin'), path.join(sandbox, 'bin'), {
-		recursive: true,
-	});
-	// The manifest carries "type": "module", which is what makes the copied dist/*.js
-	// load as ESM; without it Node falls back to per-file syntax detection.
-	fs.copyFileSync(path.join(REPO_ROOT, 'package.json'), path.join(sandbox, 'package.json'));
-	linkRuntimeDependencies(path.join(REPO_ROOT, 'node_modules'), path.join(sandbox, 'node_modules'));
 	sandboxBinaries = createStubPlatformPackage(path.join(sandbox, 'node_modules', ...platformPkgName.split('/')));
 
 	// The trace launcher refuses to start without an existing config file in a
@@ -158,8 +125,8 @@ before(async () => {
 	traceConfigPath = path.join(sandbox, 'datadog.yaml');
 	fs.writeFileSync(traceConfigPath, '');
 
-	({ BinaryManager } = await import(pathToFileURL(path.join(sandbox, 'dist', 'binary-manager.js')).href));
-	({ launchAgent } = await import(pathToFileURL(path.join(sandbox, 'dist', 'agent-launcher.js')).href));
+	({ BinaryManager } = await importDist('binary-manager.js', sandbox));
+	({ launchAgent } = await importDist('agent-launcher.js', sandbox));
 });
 
 after(() => {
@@ -220,10 +187,8 @@ test('ensureBinary() rejects a version string in the kind slot with an actionabl
 	await assert.rejects(() => new BinaryManager().ensureBinary('7.75.5'), /first argument.*binary kind/s);
 });
 
-test("Harper's allowlist is a Set keyed on the first token of the command", async () => {
-	const manager = new BinaryManager();
-	const corePath = await manager.ensureBinary('core');
-	const tracePath = await manager.ensureBinary('trace');
+test("Harper's allowlist is a Set keyed on the first token of the command", () => {
+	const { core: corePath, trace: tracePath } = sandboxBinaries;
 	const allowedSpawnCommands = [corePath, tracePath];
 
 	// A bare command name never matches: the allowlist holds absolute paths.
@@ -253,57 +218,38 @@ test("Harper's allowlist is a Set keyed on the first token of the command", asyn
 	);
 });
 
-test('allowlisting the core agent says nothing about the trace-agent', async () => {
+test('allowlisting the core agent says nothing about the trace-agent', () => {
 	// Exact string equality, per binary. This is the shape the original bug took
 	// at the deployment layer: the app allowlisted the one path it knew about.
-	const manager = new BinaryManager();
-	const corePath = await manager.ensureBinary('core');
-	const tracePath = await manager.ensureBinary('trace');
-
 	assert.throws(
-		() => assertHarperSpawnAllowed(tracePath, { name: 'datadog-trace-agent' }, [corePath]),
+		() => assertHarperSpawnAllowed(sandboxBinaries.trace, { name: 'datadog-trace-agent' }, [sandboxBinaries.core]),
 		/is not allowed/,
 		'both absolute paths must appear in applications.allowedSpawnCommands'
 	);
 });
 
-test('Harper requires a `name` option on spawn', async () => {
-	const binaryPath = await new BinaryManager().ensureBinary();
+test('Harper requires a `name` option on spawn', () => {
+	const binaryPath = sandboxBinaries.core;
 	assert.throws(() => assertHarperSpawnAllowed(binaryPath, {}, [binaryPath]), /must have a process "name"/);
 	assert.throws(() => assertHarperSpawnAllowed(binaryPath, undefined, [binaryPath]), /must have a process "name"/);
 });
 
-test('end-to-end: the datadog-agent shim resolves and executes the core agent', async (t) => {
-	if (isWindows) {
-		t.skip('stub executable is not runnable as a .exe on Windows');
-		return;
-	}
-	const shim = path.join(sandbox, 'bin', 'datadog-agent');
-	const child = child_process.spawn(process.execPath, [shim, 'version'], {
-		stdio: ['ignore', 'pipe', 'pipe'],
-		env: process.env,
-	});
-	const { code, stdout, stderr } = await runToCompletion(child);
+test('end-to-end: the datadog-agent shim resolves and executes the core agent', { skip: SHIM_SKIP }, async () => {
+	const { code, stdout, stderr } = await runShim('datadog-agent', ['version']);
 	assert.equal(code, 0, `shim should exit 0 (stderr: ${stderr})`);
 	assert.match(stdout, new RegExp(`${STUB_MARKER} core`), 'the core stub should have run');
 	assert.match(stdout, /version/, 'user args should be forwarded to the agent');
 });
 
-test('end-to-end: the trace-agent shim resolves and executes the trace-agent', async (t) => {
-	if (isWindows) {
-		t.skip('stub executable is not runnable as a .exe on Windows');
-		return;
-	}
-	const shim = path.join(sandbox, 'bin', 'trace-agent');
+test('end-to-end: the trace-agent shim resolves and executes the trace-agent', { skip: SHIM_SKIP }, async () => {
 	// A port nothing is listening on: the launcher treats an already-bound
 	// receiver as a successful no-op and exits 0 without spawning, which would
 	// make this assertion pass vacuously on a machine already running APM.
 	const port = await findFreePort();
-	const child = child_process.spawn(process.execPath, [shim, '-c', traceConfigPath, 'run'], {
-		stdio: ['ignore', 'pipe', 'pipe'],
-		env: { ...process.env, DD_APM_RECEIVER_PORT: String(port) },
+	const { code, stdout, stderr } = await runShim('trace-agent', ['-c', traceConfigPath, 'run'], {
+		...process.env,
+		DD_APM_RECEIVER_PORT: String(port),
 	});
-	const { code, stdout, stderr } = await runToCompletion(child);
 	assert.equal(code, 0, `shim should exit 0 (stderr: ${stderr})`);
 	assert.match(
 		stdout,
@@ -356,9 +302,7 @@ function fakeChildProcess() {
 
 test("launchAgent spawns with Harper's required `name`, distinct per binary", async () => {
 	const port = await findFreePort();
-	const previousPort = process.env.DD_APM_RECEIVER_PORT;
-	process.env.DD_APM_RECEIVER_PORT = String(port);
-	try {
+	await withEnv('DD_APM_RECEIVER_PORT', String(port), async () => {
 		const coreCalls = await withStubbedSpawn(fakeChildProcess(), () => launchAgent('core', ['version']));
 		assert.equal(coreCalls.length, 1);
 		assert.equal(coreCalls[0].command, sandboxBinaries.core);
@@ -379,10 +323,7 @@ test("launchAgent spawns with Harper's required `name`, distinct per binary", as
 			'datadog-trace-agent',
 			"the two processes must take different PID locks, or Harper's dedupe lets " + 'only one of them run per node'
 		);
-	} finally {
-		if (previousPort === undefined) delete process.env.DD_APM_RECEIVER_PORT;
-		else process.env.DD_APM_RECEIVER_PORT = previousPort;
-	}
+	});
 });
 
 test('launchAgent unrefs and returns when Harper hands back an existing process', async () => {

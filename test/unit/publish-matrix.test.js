@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 import { expectedPackages, readLocal, verify, PACKAGE_NAME, PACKAGE_VERSION } from '../../scripts/publish-matrix.js';
+import { withTempDir } from '../support/harness.js';
 
 /** Stage a package dir on disk the way create-platform-packages.js would. */
 function stage(dir, platform, { os: pkgOs, cpu, version, binaries }) {
@@ -21,15 +21,6 @@ function stage(dir, platform, { os: pkgOs, cpu, version, binaries }) {
 	);
 	for (const name of binaries) {
 		fs.writeFileSync(path.join(packageDir, 'bin', name), 'x');
-	}
-}
-
-function withTempDir(fn) {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ddab-matrix-test-'));
-	try {
-		return fn(dir);
-	} finally {
-		fs.rmSync(dir, { recursive: true, force: true });
 	}
 }
 
@@ -56,15 +47,14 @@ function rowsFor(dir) {
 	return expectedPackages().map((e) => readLocal(e, dir));
 }
 
-test('a correctly staged matrix has no problems', () => {
-	withTempDir((dir) => {
+test('a correctly staged matrix has no problems', () =>
+	withTempDir('ddab-matrix-', (dir) => {
 		stageAll(dir);
 		assert.deepEqual(verify(rowsFor(dir), { mode: 'local' }), []);
-	});
-});
+	}));
 
-test("rejects this project's internal os/cpu names (the macos-x86_64 defect)", () => {
-	withTempDir((dir) => {
+test("rejects this project's internal os/cpu names (the macos-x86_64 defect)", () =>
+	withTempDir('ddab-matrix-', (dir) => {
 		// Exactly what shipped: our own vocabulary instead of Node's. npm compares these
 		// against process.platform/process.arch, so the package could never install, and
 		// because the dependency is optional the failure was completely silent.
@@ -83,11 +73,10 @@ test("rejects this project's internal os/cpu names (the macos-x86_64 defect)", (
 			problems.some((p) => /cpu "x86_64" is not a Node process.arch/.test(p)),
 			`expected a cpu rejection, got: ${problems.join(' | ')}`
 		);
-	});
-});
+	}));
 
-test('rejects a package missing the trace-agent (the original defect)', () => {
-	withTempDir((dir) => {
+test('rejects a package missing the trace-agent (the original defect)', () =>
+	withTempDir('ddab-matrix-', (dir) => {
 		stageAll(dir, (platform, spec) => {
 			if (platform === 'linux-x86_64') {
 				// Core agent only, which is precisely what was published: nothing binds
@@ -100,11 +89,10 @@ test('rejects a package missing the trace-agent (the original defect)', () => {
 			problems.some((p) => /missing trace-agent/.test(p)),
 			`expected a missing-binary problem, got: ${problems.join(' | ')}`
 		);
-	});
-});
+	}));
 
-test('rejects a platform package whose version has drifted from the main package', () => {
-	withTempDir((dir) => {
+test('rejects a platform package whose version has drifted from the main package', () =>
+	withTempDir('ddab-matrix-', (dir) => {
 		stageAll(dir, (platform, spec) => {
 			if (platform === 'linux-arm64') spec.version = '0.0.1';
 		});
@@ -113,11 +101,10 @@ test('rejects a platform package whose version has drifted from the main package
 			problems.some((p) => /does not match the main package/.test(p)),
 			`expected a version-skew problem, got: ${problems.join(' | ')}`
 		);
-	});
-});
+	}));
 
-test('reports a declared platform that was never staged', () => {
-	withTempDir((dir) => {
+test('reports a declared platform that was never staged', () =>
+	withTempDir('ddab-matrix-', (dir) => {
 		stageAll(dir);
 		// A build leg that failed: the package is declared but absent.
 		const victim = expectedPackages()[0].platform;
@@ -127,15 +114,14 @@ test('reports a declared platform that was never staged', () => {
 			problems.some((p) => /not found/.test(p) && /skip it silently/.test(p)),
 			`expected a not-found problem, got: ${problems.join(' | ')}`
 		);
-	});
-});
+	}));
 
 // verify() compares optionalDependencies against SUPPORTED_PLATFORMS. A platform
 // declared but never built is what made Intel-Mac installs resolve nothing at all,
 // silently, because npm skips an unresolvable optional dependency without a warning.
 // Asserted both ways: the repo is in sync now, and a drift would actually be caught.
-test('optionalDependencies matches SUPPORTED_PLATFORMS, and drift is detected', () => {
-	withTempDir((dir) => {
+test('optionalDependencies matches SUPPORTED_PLATFORMS, and drift is detected', () =>
+	withTempDir('ddab-matrix-', (dir) => {
 		stageAll(dir);
 		const problems = verify(rowsFor(dir), { mode: 'local' });
 		assert.ok(
@@ -165,5 +151,4 @@ test('optionalDependencies matches SUPPORTED_PLATFORMS, and drift is detected', 
 			verify(rows, { mode: 'local' }).some((p) => /does not match SUPPORTED_PLATFORMS/.test(p)),
 			'an undeclared platform should be reported'
 		);
-	});
-});
+	}));

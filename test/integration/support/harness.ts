@@ -6,10 +6,12 @@
  * same ifconfig instructions and the same pool-start parsing), so they live
  * here once. Not collected as a test: the runner glob only matches *.test.ts.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
-import { dirname, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 const require = createRequire(import.meta.url);
 
@@ -64,6 +66,15 @@ export async function darwinLoopbackSkipReason(): Promise<string | false> {
 	);
 }
 
+/**
+ * A temp directory whose path is already resolved: on macOS os.tmpdir() lives
+ * under a /var -> /private/var symlink, while the paths both suites compare
+ * against it (ps(1) output, a Harper install dir) are the resolved spelling.
+ */
+export function makeTempDir(prefix: string): string {
+	return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+}
+
 /** Rows of a probe-results file holding one JSON record per line. */
 export function readJsonlRows<T>(resultsFile: string): T[] {
 	if (!existsSync(resultsFile)) return [];
@@ -79,6 +90,26 @@ export function readJsonlRows<T>(resultsFile: string): T[] {
 				return [];
 			}
 		});
+}
+
+/**
+ * Re-read the probe file until `isComplete` accepts what is there, then hand
+ * those rows back. On timeout the rows are returned anyway: what a component
+ * managed to write before giving up is what the assertions report on, and a
+ * throw here would replace every one of their messages with this one.
+ */
+export async function pollJsonlRows<T>(
+	resultsFile: string,
+	isComplete: (rows: T[]) => boolean,
+	{ timeoutMs = 60000, intervalMs = 200 } = {}
+): Promise<T[]> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const rows = readJsonlRows<T>(resultsFile);
+		if (isComplete(rows)) return rows;
+		await sleep(intervalMs);
+	}
+	return readJsonlRows<T>(resultsFile);
 }
 
 /**
