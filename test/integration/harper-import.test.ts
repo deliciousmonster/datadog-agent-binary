@@ -199,17 +199,6 @@ function buildImportFixture(): ImportFixture | { error: string } {
 	}
 }
 
-const importFixture = SKIP_REASON
-	? { error: SKIP_REASON }
-	: buildImportFixture();
-
-const IMPORT_SKIP_REASON: string | false =
-	SKIP_REASON ||
-	("error" in importFixture
-		? `the published tarball could not be staged into a Harper application, so ` +
-			`there is nothing to import: ${importFixture.error}`
-		: false);
-
 /**
  * The probe writes "done" last, so its presence means every earlier record has
  * landed; no settle window is needed the way the multi-thread spawn suite
@@ -234,15 +223,32 @@ function rowFor(rows: ProbeRow[], probe: string): ProbeRow | undefined {
 
 suite(
 	"Harper v5 native import of the published package",
-	{ skip: IMPORT_SKIP_REASON },
+	{ skip: SKIP_REASON },
 	(suiteContext) => {
 		// Same SuiteContext promotion as harper-spawn.test.ts: before() populates
 		// .harper on this object.
 		const ctx = suiteContext as ContextWithHarper;
-		const fixture = importFixture as ImportFixture;
+		// Staged in before(), not at module load: a run that evaluates this file
+		// without executing the suite (--only elsewhere, a name pattern under
+		// --isolation=none, an interrupted discovery) must not pay the npm pack
+		// plus offline install, or leak the mkdtemp workDir whose only
+		// success-path removal is the after() below.
+		let fixture: ImportFixture | undefined;
+		let stagingSkipReason: string | undefined;
 		let rows: ProbeRow[];
 
 		before(async () => {
+			const staged = buildImportFixture();
+			if ("error" in staged) {
+				// A per-test skip, not a throw: failed staging is a missing
+				// prerequisite (an npm cache miss under --offline, an unbuilt
+				// dist/), and a throw here would report failures instead of skips.
+				stagingSkipReason =
+					`the published tarball could not be staged into a Harper ` +
+					`application, so there is nothing to import: ${staged.error}`;
+				return;
+			}
+			fixture = staged;
 			await setupHarperWithFixture(ctx, fixture.appDir, {
 				harperBinPath: harperBinPath!,
 				env: {
@@ -255,15 +261,20 @@ suite(
 			);
 		});
 
+		// Runs even when before() threw past the staging step (node:test executes
+		// after() either way), so a setupHarperWithFixture failure still gets its
+		// workDir removed; buildImportFixture cleans up its own failures before
+		// returning, which is why the error branch above has nothing to remove.
 		after(async () => {
 			await teardownHarper(ctx);
-			rmSync(fixture.workDir, { recursive: true, force: true });
+			if (fixture) rmSync(fixture.workDir, { recursive: true, force: true });
 		});
 
-		test("the installed manifest is the packed one, devDependencies intact", () => {
+		test("the installed manifest is the packed one, devDependencies intact", (t) => {
+			if (stagingSkipReason) return t.skip(stagingSkipReason);
 			const manifest = JSON.parse(
 				readFileSync(
-					join(fixture.appDir, "node_modules", PACKAGE_NAME, "package.json"),
+					join(fixture!.appDir, "node_modules", PACKAGE_NAME, "package.json"),
 					"utf8"
 				)
 			);
@@ -300,16 +311,18 @@ suite(
 			}
 		});
 
-		test("the component loaded and probed", () => {
+		test("the component loaded and probed", (t) => {
+			if (stagingSkipReason) return t.skip(stagingSkipReason);
 			assert.ok(
 				rows.length > 0,
-				`no probe records were written to ${join(fixture.workDir, "probe-results.jsonl")}. ` +
+				`no probe records were written to ${join(fixture!.workDir, "probe-results.jsonl")}. ` +
 					`The component did not load, so nothing below is testing the loader.`
 			);
 			assert.ok(rowFor(rows, "done"), "the probe never finished");
 		});
 
-		test("NEGATIVE: the probes ran under Harper's loader, not plain Node", () => {
+		test("NEGATIVE: the probes ran under Harper's loader, not plain Node", (t) => {
+			if (stagingSkipReason) return t.skip(stagingSkipReason);
 			const harperModule = rowFor(rows, "harper-module");
 			assert.ok(harperModule, "the harper-module probe never ran");
 			assert.equal(
@@ -343,7 +356,8 @@ suite(
 			);
 		});
 
-		test("component code natively imports the published package", () => {
+		test("component code natively imports the published package", (t) => {
+			if (stagingSkipReason) return t.skip(stagingSkipReason);
 			const nativeImport = rowFor(rows, "native-import");
 			assert.ok(nativeImport, "the native-import probe never ran");
 			assert.equal(
@@ -365,8 +379,8 @@ suite(
 			assert.equal(
 				nativeImport.hasBinaryManager,
 				true,
-				"BinaryManager is missing; the star re-exports of dist/index.js did " +
-					"not survive the import path Harper used"
+				"BinaryManager is missing; dist/index.js's named export list (see " +
+					"src/index.ts) did not survive the import path Harper used"
 			);
 			assert.equal(
 				nativeImport.builderHasBuildForPlatform,
@@ -375,7 +389,8 @@ suite(
 			);
 		});
 
-		test("NEGATIVE: the import is the native evaluation, not a loader copy", () => {
+		test("NEGATIVE: the import is the native evaluation, not a loader copy", (t) => {
+			if (stagingSkipReason) return t.skip(stagingSkipReason);
 			// On harper 5.2.1 a claimed package still resolves with the same export
 			// shape, so the shape assertions above stay green through the exact
 			// regression this suite exists for. Identity does not: the application
