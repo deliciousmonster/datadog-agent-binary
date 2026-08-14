@@ -441,8 +441,8 @@ jobs:
           exit "$rc"
 
       # The artifact is the whole bin/ directory, which is how both binaries travel
-      # to the release and publish jobs. A half-empty bin/ uploads without
-      # complaint and only surfaces as a missing trace-agent at install time.
+      # to the publish job. A half-empty bin/ uploads without complaint and only
+      # surfaces as a missing trace-agent at install time.
       - name: Verify both binaries are present for upload
         shell: bash
         run: |
@@ -469,85 +469,6 @@ jobs:
           path: build/${{ matrix.platform }}/bin/
           if-no-files-found: error
           retention-days: 90
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          path: artifacts/
-
-      # One archive per downloaded artifact, whatever the matrix produced. Naming
-      # the platforms here instead would silently drop a newly added one.
-      - name: Prepare release assets
-        run: |
-          mkdir -p release-assets
-          dest="$PWD/release-assets"
-          cd artifacts
-          ls -lR
-
-          for dir in agent-*/; do
-            platform="${dir%/}"
-            platform="${platform#agent-}"
-            asset="$dest/datadog-agent-${{ github.ref_name }}-${platform}"
-            case "$platform" in
-              windows-*) (cd "$dir" && zip -r "$asset.zip" *) ;;
-              *) (cd "$dir" && tar -czf "$asset.tar.gz" *) ;;
-            esac
-          done
-
-          ls -l "$dest"
-
-      - name: Generate checksums
-        run: |
-          cd release-assets
-          sha256sum * > checksums.txt
-
-      - name: Create Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: Datadog Agent ${{ github.ref_name }}
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          files: |
-            release-assets/*
-          body: |
-            # @deliciousmonster/datadog-agent-binary ${{ github.ref_name }}
-
-            Pre-compiled Datadog Agent binaries for all supported platforms.
-
-            Every archive carries BOTH processes: `datadog-agent` (the core
-            agent) and `trace-agent` (the APM receiver that binds
-            127.0.0.1:8126). Tracing needs the trace-agent, not the core agent,
-            so an archive with only `datadog-agent` in it is broken.
-
-            ## Supported Platforms
-
-            - **Linux x86_64**: `datadog-agent-${{ github.ref_name }}-linux-x86_64.tar.gz`
-            - **Linux arm64**: `datadog-agent-${{ github.ref_name }}-linux-arm64.tar.gz`
-            - **macOS arm64**: `datadog-agent-${{ github.ref_name }}-macos-arm64.tar.gz`
-            - **Windows x86_64**: `datadog-agent-${{ github.ref_name }}-windows-x86_64.zip`
-
-            ## NPM Package
-
-            ```bash
-            npm install @deliciousmonster/datadog-agent-binary
-            ```
-
-            ## Verification
-
-            ```bash
-            sha256sum -c checksums.txt
-            ```
 
   publish:
     needs: build
