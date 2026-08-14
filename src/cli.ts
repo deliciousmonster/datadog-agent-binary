@@ -52,11 +52,11 @@ program
 				for (const [kind, outputPath] of Object.entries(
 					result.outputPaths ?? {}
 				)) {
-					logger.info(`✅ Successful (${kind}): ${outputPath}`);
+					logger.info(`Successful (${kind}): ${outputPath}`);
 				}
 				process.exit(0);
 			} else {
-				logger.error(`❌ Failed: ${result.error}`);
+				logger.error(`Failed: ${result.error}`);
 				process.exit(1);
 			}
 		} catch (error) {
@@ -125,7 +125,7 @@ program
 					options.version
 				);
 				logger.info(
-					`✅ Datadog ${descriptor.kind} agent installed: ${binaryPath}`
+					`Datadog ${descriptor.kind} agent installed: ${binaryPath}`
 				);
 			}
 			logger.info(

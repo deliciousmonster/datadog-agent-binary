@@ -15,6 +15,8 @@ const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
 
+const { findFreePort } = require("../support/find-free-port.js");
+
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const LAUNCHER_PATH = path.join(REPO_ROOT, "dist", "agent-launcher.js");
 
@@ -41,18 +43,6 @@ function listen(server) {
 
 function closeServer(server) {
 	return new Promise((resolve) => server.close(resolve));
-}
-
-/** A 127.0.0.1 port with nothing listening on it. */
-function findFreePort() {
-	return new Promise((resolve, reject) => {
-		const server = net.createServer();
-		server.once("error", reject);
-		server.listen(0, "127.0.0.1", () => {
-			const { port } = server.address();
-			server.close(() => resolve(port));
-		});
-	});
 }
 
 /**
