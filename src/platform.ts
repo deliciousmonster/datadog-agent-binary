@@ -1,35 +1,29 @@
 import type { AgentBinaryDescriptor, AgentBinaryKind, Architecture, OS } from './types.js';
 
-export abstract class Platform {
-	protected readonly arch: Architecture;
+/** `process.arch` and `process.platform` values this package runs on, in this package's labels. */
+const ARCHITECTURES: Partial<Record<string, Architecture>> = { x64: 'x86_64', arm64: 'arm64' };
+const OPERATING_SYSTEMS: Partial<Record<string, OS>> = { linux: 'linux', darwin: 'macos', win32: 'windows' };
 
-	constructor(arch: Architecture) {
-		this.arch = arch;
-	}
-
-	private static processArchToArchitecture(): Architecture {
-		switch (process.arch) {
-			case 'x64':
-				return 'x86_64';
-			case 'arm64':
-				return 'arm64';
-			default:
-				throw new Error(`Unsupported architecture: ${process.arch}`);
-		}
-	}
+export class Platform {
+	constructor(
+		private readonly os: OS,
+		private readonly arch: Architecture
+	) {}
 
 	static current(): Platform {
-		const arch = this.processArchToArchitecture();
-		switch (process.platform) {
-			case 'linux':
-				return new Linux(arch);
-			case 'darwin':
-				return new MacOS(arch);
-			case 'win32':
-				return new Windows(arch);
-			default:
-				throw new Error(`Unsupported platform: ${process.platform}`);
+		const arch = ARCHITECTURES[process.arch];
+		if (!arch) {
+			throw new Error(`Unsupported architecture: ${process.arch}`);
 		}
+		const os = OPERATING_SYSTEMS[process.platform];
+		if (!os) {
+			throw new Error(`Unsupported platform: ${process.platform}`);
+		}
+		return new Platform(os, arch);
+	}
+
+	getOS(): OS {
+		return this.os;
 	}
 
 	getArch(): Architecture {
@@ -37,27 +31,16 @@ export abstract class Platform {
 	}
 
 	getGoArch(): string {
-		switch (this.arch) {
-			case 'x86_64':
-				return 'amd64';
-			default:
-				return this.arch;
-		}
+		return this.arch === 'x86_64' ? 'amd64' : this.arch;
 	}
 
 	getName(): string {
-		return `${this.getOS()}-${this.getArch()}`;
-	}
-
-	abstract getOS(): OS;
-
-	/** Executable extension for this platform (`.exe` on Windows). Mirrors upstream `bin_name()`. */
-	protected getExecutableExtension(): string {
-		return '';
+		return `${this.os}-${this.arch}`;
 	}
 
 	getBinaries(): AgentBinaryDescriptor[] {
-		const ext = this.getExecutableExtension();
+		// Executable extension for this platform (`.exe` on Windows). Mirrors upstream `bin_name()`.
+		const ext = this.os === 'windows' ? '.exe' : '';
 		return [
 			{
 				kind: 'core',
@@ -95,28 +78,6 @@ export abstract class Platform {
 	}
 }
 
-class Linux extends Platform {
-	getOS(): OS {
-		return 'linux';
-	}
-}
-
-class MacOS extends Platform {
-	getOS(): OS {
-		return 'macos';
-	}
-}
-
-class Windows extends Platform {
-	getOS(): OS {
-		return 'windows';
-	}
-
-	protected getExecutableExtension(): string {
-		return '.exe';
-	}
-}
-
 /**
  * Platforms this package builds and publishes.
  *
@@ -133,10 +94,10 @@ class Windows extends Platform {
  * change as the entry here.
  */
 export const SUPPORTED_PLATFORMS: Platform[] = [
-	new Linux('x86_64'),
-	new Linux('arm64'),
-	new MacOS('arm64'),
-	new Windows('x86_64'),
+	new Platform('linux', 'x86_64'),
+	new Platform('linux', 'arm64'),
+	new Platform('macos', 'arm64'),
+	new Platform('windows', 'x86_64'),
 ];
 
 export function getAllSupportedPlatforms(): string[] {

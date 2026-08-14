@@ -1,27 +1,49 @@
 import { execSync, spawn } from 'node:child_process';
 import * as path from 'node:path';
-import { AgentBinaryDescriptor, AgentBinaryKind, BuildConfig, BuildResult } from '../types.js';
-import { errorMessage, logger } from '../logger.js';
+import { AgentBinaryDescriptor, AgentBinaryKind, BuildConfig, BuildResult, OS } from './types.js';
+import { errorMessage, logger } from './logger.js';
 
-export abstract class BaseBuilder {
+/**
+ * Everything that varies between the three build hosts: the label in the log line and
+ * the `GOOS` the toolchain cross-compiles for. Data rather than a subclass per OS,
+ * because a subclass whose whole body is one string is a place for the two to drift.
+ */
+const OS_BUILDS: Record<OS, { label: string; goos: string }> = {
+	linux: { label: 'Linux', goos: 'linux' },
+	macos: { label: 'macOS', goos: 'darwin' },
+	windows: { label: 'Windows', goos: 'windows' },
+};
+
+export function createBuilder(config: BuildConfig): AgentBuilder {
+	const osName = config.platform.getOS();
+	// Refuse an unknown OS here rather than fall through to the host's GOOS, which
+	// would compile a binary for the wrong platform and report success.
+	if (!OS_BUILDS[osName]) {
+		throw new Error(`Unsupported OS: ${osName}`);
+	}
+	return new AgentBuilder(config);
+}
+
+export class AgentBuilder {
 	protected config: BuildConfig;
 
 	constructor(config: BuildConfig) {
 		this.config = config;
 	}
 
-	abstract build(): Promise<BuildResult>;
+	private osBuild(): { label: string; goos: string } {
+		return OS_BUILDS[this.config.platform.getOS()];
+	}
 
-	/** Shared build sequence. `preflight` runs before anything is compiled. */
-	protected async runBuild(osLabel: string, preflight?: () => Promise<void>): Promise<BuildResult> {
+	async build(): Promise<BuildResult> {
 		const startTime = Date.now();
 		const { platform } = this.config;
 
-		logger.info(`Building Datadog Agent for ${osLabel} ${platform.getArch()}...`);
+		logger.info(`Building Datadog Agent for ${this.osBuild().label} ${platform.getArch()}...`);
 
 		try {
 			await this.ensureOutputDirectory();
-			await preflight?.();
+			await this.preflight();
 
 			await this.buildCommon();
 
@@ -52,6 +74,19 @@ export abstract class BaseBuilder {
 				error: message,
 				duration,
 			};
+		}
+	}
+
+	/** Runs before anything is compiled. Only macOS has something to check. */
+	protected async preflight(): Promise<void> {
+		if (this.config.platform.getOS() !== 'macos') {
+			return;
+		}
+		try {
+			await this.executeCommand('xcode-select -p');
+			logger.debug('Xcode command line tools found');
+		} catch (error) {
+			throw new Error('Xcode command line tools not found. Run: xcode-select --install', { cause: error });
 		}
 	}
 
@@ -161,11 +196,6 @@ export abstract class BaseBuilder {
 				}
 			};
 
-			const addLine = (line: string, isStderr: boolean) => {
-				rollingLines.push((isStderr ? '[stderr] ' : '') + line.trim());
-				updateRollingDisplay();
-			};
-
 			const collect = (isStderr: boolean) => (data: Buffer) => {
 				const output = data.toString();
 				if (isStderr) {
@@ -176,7 +206,8 @@ export abstract class BaseBuilder {
 
 				for (const line of output.split('\n')) {
 					if (line.trim()) {
-						addLine(line, isStderr);
+						rollingLines.push((isStderr ? '[stderr] ' : '') + line.trim());
+						updateRollingDisplay();
 					}
 				}
 			};
@@ -207,10 +238,6 @@ export abstract class BaseBuilder {
 		});
 	}
 
-	protected getOSEnvironmentVariables(): Record<string, string> {
-		return {};
-	}
-
 	protected getEnvironmentVariables(): Record<string, string> {
 		const { platform } = this.config;
 		const goPath = path.join(process.cwd(), 'build', platform.getName(), 'go');
@@ -219,8 +246,8 @@ export abstract class BaseBuilder {
 			GOPATH: goPath,
 			PATH: `${goPath}/bin${path.delimiter}${process.env.PATH}`,
 			GOARCH: platform.getGoArch(),
+			GOOS: this.osBuild().goos,
 			CGO_ENABLED: '1',
-			...this.getOSEnvironmentVariables(),
 		};
 	}
 
@@ -246,12 +273,6 @@ export abstract class BaseBuilder {
 		}
 	}
 
-	protected getAbsoluteOutputPath(fileName: string): string {
-		// A relative outputDir resolves from the project root, never from the agent
-		// source tree the build commands run in.
-		return path.resolve(this.config.outputDir, fileName);
-	}
-
 	protected async copyBinariesToOutput(): Promise<Partial<Record<AgentBinaryKind, string>>> {
 		const { chmod, copyFile, mkdir, stat } = await import('node:fs/promises');
 		const { platform, outputDir } = this.config;
@@ -263,7 +284,9 @@ export abstract class BaseBuilder {
 
 		for (const binary of platform.getBinaries()) {
 			const sourcePath = path.join(this.config.sourceDir, 'bin', binary.buildDir, binary.buildName);
-			const destPath = this.getAbsoluteOutputPath(binary.outputName);
+			// A relative outputDir resolves from the project root, never from the agent
+			// source tree the build commands run in.
+			const destPath = path.resolve(outputDir, binary.outputName);
 
 			// Check first so an absent binary names the path it should have been at
 			// instead of a bare ENOENT. Publishing one binary short surfaces only as

@@ -2,11 +2,7 @@ import { styleText } from 'node:util';
 import { Logger } from './types.js';
 
 export class ConsoleLogger implements Logger {
-	private prefix: string;
-
-	constructor(prefix = '[datadog-agent-build]') {
-		this.prefix = prefix;
-	}
+	constructor(private prefix = '[datadog-agent-build]') {}
 
 	info(message: string): void {
 		console.log(styleText('blue', this.prefix), message);

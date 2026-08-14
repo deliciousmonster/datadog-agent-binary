@@ -1,9 +1,16 @@
 import * as path from 'node:path';
 import { DatadogAgentDownloader } from './downloader.js';
-import { createBuilder } from './builders/index.js';
+import { createBuilder } from './builder.js';
 import { errorMessage, logger } from './logger.js';
 import { BuildConfig, BuildResult } from './types.js';
 import { Platform } from './platform.js';
+
+/** What a caller may vary per build. Anything else is derived from the platform. */
+export interface BuildOptions {
+	version?: string;
+	outputDir?: string;
+	buildArgs?: string[];
+}
 
 export class DatadogAgentBuilder {
 	private downloader: DatadogAgentDownloader;
@@ -12,18 +19,7 @@ export class DatadogAgentBuilder {
 		this.downloader = new DatadogAgentDownloader();
 	}
 
-	getLatestVersion(): Promise<string> {
-		return this.downloader.getLatestVersion();
-	}
-
-	async buildForPlatform(
-		platform: Platform,
-		options: {
-			version?: string;
-			outputDir?: string;
-			buildArgs?: string[];
-		} = {}
-	): Promise<BuildResult> {
+	async buildForPlatform(platform: Platform, options: BuildOptions = {}): Promise<BuildResult> {
 		// Both binaries come from this one ref: the core agent and trace-agent share an
 		// IPC auth handshake and a config schema, so a mismatched pair fails at the
 		// handshake with nothing in the error naming the cause. resolveVersion falls back
@@ -57,8 +53,7 @@ export class DatadogAgentBuilder {
 			buildArgs: options.buildArgs,
 		};
 
-		const builder = createBuilder(config);
-		return await builder.build();
+		return createBuilder(config).build();
 	}
 
 	private async setupGoPathStructure(goPath: string, sourceDir: string): Promise<void> {
@@ -84,26 +79,18 @@ export class DatadogAgentBuilder {
 		}
 	}
 
-	async buildForCurrentPlatform(
-		options: {
-			version?: string;
-			outputDir?: string;
-			sourceDir?: string;
-			buildArgs?: string[];
-		} = {}
-	): Promise<BuildResult> {
-		const platform = Platform.current();
-		return await this.buildForPlatform(platform, options);
+	buildForCurrentPlatform(options: BuildOptions = {}): Promise<BuildResult> {
+		return this.buildForPlatform(Platform.current(), options);
 	}
 }
 
 // The named public API, instead of six export *. Everything else (the launcher,
-// the logger, the per-OS builder classes, SUPPORTED_PLATFORMS) is reached through
-// its own module by the scripts and shims that need it, and a wildcard here would
+// the logger, the AgentBuilder class, SUPPORTED_PLATFORMS) is reached through its
+// own module by the scripts and shims that need it, and a wildcard here would
 // silently promote every future internal helper to public surface.
 export { BinaryManager } from './binary-manager.js';
 export { DatadogAgentDownloader } from './downloader.js';
-export { createBuilder } from './builders/index.js';
+export { createBuilder } from './builder.js';
 export { Platform } from './platform.js';
 export type {
 	AgentBinaryDescriptor,

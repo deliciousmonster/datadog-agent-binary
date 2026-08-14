@@ -29,10 +29,10 @@ export class LaunchPreflightError extends Error {}
  * the first thing to check when no logs or traces are arriving.
  */
 export function logDatadogEnv(kind: AgentBinaryKind): void {
-	const present = (name: string) => (process.env[name] ? 'set' : 'MISSING');
 	logger.info(
 		`Datadog env visible to the ${kind} wrapper: ` +
-			`DD_API_KEY=${present('DD_API_KEY')}, ` +
+			// Presence only: the key itself must never reach a log.
+			`DD_API_KEY=${process.env.DD_API_KEY ? 'set' : 'MISSING'}, ` +
 			`DD_SITE=${process.env.DD_SITE || 'MISSING'}, ` +
 			`DD_ENV=${process.env.DD_ENV || 'MISSING'}, ` +
 			`DD_HOSTNAME=${process.env.DD_HOSTNAME || '(default)'}, ` +
@@ -123,22 +123,16 @@ function resolveConfigPath(args: string[], binaryPath?: string): { configPath: s
 		}
 	}
 
-	if (binaryPath) {
-		// <installRoot>/bin/trace-agent -> <installRoot>/etc/datadog.yaml
-		return {
-			configPath: path.join(path.dirname(path.dirname(binaryPath)), 'etc', 'datadog.yaml'),
-			explicit: false,
-		};
-	}
-
 	// No binary to derive from: upstream's compiled-in default, before osinit() rewrites it.
-	if (process.platform === 'win32') {
-		return {
-			configPath: path.join(process.env.ProgramData || 'C:\\ProgramData', 'Datadog', 'datadog.yaml'),
-			explicit: false,
-		};
-	}
-	return { configPath: '/opt/datadog-agent/etc/datadog.yaml', explicit: false };
+	const compiledInDefault =
+		process.platform === 'win32'
+			? path.join(process.env.ProgramData || 'C:\\ProgramData', 'Datadog', 'datadog.yaml')
+			: '/opt/datadog-agent/etc/datadog.yaml';
+
+	// <installRoot>/bin/trace-agent -> <installRoot>/etc/datadog.yaml
+	const derived = binaryPath ? path.join(path.dirname(path.dirname(binaryPath)), 'etc', 'datadog.yaml') : null;
+
+	return { configPath: derived ?? compiledInDefault, explicit: false };
 }
 
 function isDirectory(target: string): boolean {
@@ -255,10 +249,9 @@ async function isTraceReceiverHealthy(port: number, timeoutMs = 1000): Promise<b
  */
 function isPortBound(port: number, timeoutMs = 250): Promise<boolean> {
 	return new Promise((resolve) => {
-		let settled = false;
+		// A later event after the first is a no-op: a promise settles once and destroy()
+		// on a destroyed socket does nothing.
 		const finish = (bound: boolean) => {
-			if (settled) return;
-			settled = true;
 			socket.destroy();
 			resolve(bound);
 		};
@@ -304,32 +297,34 @@ export async function launchAgent(
 		const binaryPath = await new BinaryManager().ensureBinary(kind);
 		resolvedBinaryPath = binaryPath;
 
-		// After resolution, not before: with no explicit -c the trace-agent derives its
-		// config path from where its own executable sits, so the check needs the binary.
 		if (kind === 'trace') {
+			// After resolution, not before: with no explicit -c the trace-agent derives its
+			// config path from where its own executable sits, so the check needs the binary.
 			preflightTraceAgentConfig(args, binaryPath);
-		}
 
-		if (kind === 'trace' && isRunSubcommand(args)) {
-			const port = receiverPort();
-			if (await isTraceReceiverHealthy(port)) {
-				logger.info(
-					`A trace-agent receiver is already listening on 127.0.0.1:${port} and ` +
-						`answered /info; not starting a second one. dd-trace will reach the ` +
-						`running receiver, so this is a successful no-op, not a failure.`
-				);
-				process.exit(0);
-			}
-			if (await isPortBound(port)) {
-				// Something holds the port but does not speak the trace protocol. Starting
-				// anyway yields a real EADDRINUSE instead of reporting success next to a
-				// stray socket.
-				logger.warn(
-					`127.0.0.1:${port} is bound but did not answer the trace-agent /info ` +
-						`endpoint, so it is not a healthy receiver. Starting the trace-agent ` +
-						`anyway; if that port is held by an unrelated process this will fail ` +
-						`with EADDRINUSE rather than silently pretending APM is working.`
-				);
+			// Only the invocations that bind the receiver: a `version` query has to keep
+			// working while one is already up.
+			if (isRunSubcommand(args)) {
+				const port = receiverPort();
+				if (await isTraceReceiverHealthy(port)) {
+					logger.info(
+						`A trace-agent receiver is already listening on 127.0.0.1:${port} and ` +
+							`answered /info; not starting a second one. dd-trace will reach the ` +
+							`running receiver, so this is a successful no-op, not a failure.`
+					);
+					process.exit(0);
+				}
+				if (await isPortBound(port)) {
+					// Something holds the port but does not speak the trace protocol. Starting
+					// anyway yields a real EADDRINUSE instead of reporting success next to a
+					// stray socket.
+					logger.warn(
+						`127.0.0.1:${port} is bound but did not answer the trace-agent /info ` +
+							`endpoint, so it is not a healthy receiver. Starting the trace-agent ` +
+							`anyway; if that port is held by an unrelated process this will fail ` +
+							`with EADDRINUSE rather than silently pretending APM is working.`
+					);
+				}
 			}
 		}
 
