@@ -203,8 +203,8 @@ curl -s -u HDB_ADMIN:password http://localhost:9926/DatadogStatus/ | jq
 ```
 
 For proof that spans arrive, call `/Work/` a few times and watch the trace-agent's periodic
-summary, either in `hdb.log` (the supervisor forwards agent output there) or in
-`<runtime dir>/logs/trace-agent.log`. `traces received` climbing is the end-to-end signal:
+summary in `<runtime dir>/logs/trace-agent.log` (the agents write their own log files; no
+worker thread collects their output). `traces received` climbing is the end-to-end signal:
 
 ```
 [TRACE] ... INFO (...): [lang:nodejs ...] -> traces received: 4, traces filtered: 0,

@@ -235,11 +235,11 @@ function renderDatadogYaml(paths) {
 		`auth_token_file_path: ${yamlString(paths.authToken)}`,
 		`ipc_cert_file_path: ${yamlString(paths.ipcCert)}`,
 		"",
-		"# File logging is off AND both log paths are relocated. The binaries do not honour",
-		"# disable_file_logging identically, so one that ignores it still writes somewhere it",
-		"# may write, instead of one permission-denied line per log line into Harper's log.",
-		"disable_file_logging: true",
-		"log_to_console: true",
+		"# The agents write their own log files under the runtime tree, relocated off the",
+		"# unwritable defaults. No worker thread collects their stdio: a pipe would tie both",
+		"# agents to the thread that won the spawn race, and harper dev replaces that thread",
+		"# on every save.",
+		"log_to_console: false",
 		`log_file: ${yamlString(paths.coreLog)}`,
 		"",
 		"# Off by default in the agent. The source itself is in conf.d.",
@@ -304,20 +304,6 @@ function preflightBinary(title, binaryPath) {
 	accessSync(binaryPath, constants.X_OK);
 }
 
-/** Forward an agent's stdout/stderr into Harper's log, one line per entry. */
-function pipeToHarperLog(stream, title, level) {
-	let pending = "";
-	stream.setEncoding("utf-8");
-	stream.on("data", (chunk) => {
-		pending += chunk;
-		const lines = pending.split("\n");
-		pending = lines.pop() ?? "";
-		for (const line of lines) {
-			if (line.trim()) log[level](`[${title}] ${line}`);
-		}
-	});
-}
-
 /** Preflight and start one already-resolved agent. Never throws; returns what happened. */
 function launchOne(descriptor, binaryPath, paths, version) {
 	const state = {
@@ -346,9 +332,12 @@ function launchOne(descriptor, binaryPath, paths, version) {
 			name: descriptor.name,
 			// See configVersion(): a number, never a string.
 			version,
-			// Piped, not inherited: agent output has to reach Harper's log file, which is
-			// what the conf.d source tails.
-			stdio: ["ignore", "pipe", "pipe"],
+			// Never piped. A pipe ties both agents to the worker thread that won the spawn
+			// race: when harper dev recycles that thread on a save, the agents die on
+			// SIGPIPE at their next write, the PID file survives them, and every later
+			// thread adopts the corpse and reports "already running" forever. The agents
+			// write their own log files under the runtime tree instead (renderDatadogYaml).
+			stdio: ["ignore", "ignore", "ignore"],
 			env: process.env,
 		});
 	} catch (error) {
@@ -393,13 +382,12 @@ function launchOne(descriptor, binaryPath, paths, version) {
 		return state;
 	}
 
+	// Agent output no longer reaches hdb.log, so say where it went instead.
 	log.info(
 		`Datadog supervisor: started the ${descriptor.title} (pid ${child.pid}): ` +
-			`${binaryPath} ${args.join(" ")}`
+			`${binaryPath} ${args.join(" ")}. It logs to ` +
+			`${join(paths.runtimeDir, "logs")}.`
 	);
-
-	pipeToHarperLog(child.stdout, descriptor.title, "info");
-	pipeToHarperLog(child.stderr, descriptor.title, "warn");
 
 	child.on("exit", (code, signal) => {
 		if (signal) {
