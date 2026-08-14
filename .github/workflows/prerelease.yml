@@ -18,10 +18,11 @@ name: Cut Prerelease
 on:
   push:
     branches: [main]
-    # A docs-only change does not need its own build of the Go agent.
+    # A docs-only change does not need its own build of the Go agent. example/
+    # is NOT ignored: it ships in the package (see files[] in package.json), so
+    # an example-only change is a consumer-visible change and gets a release.
     paths-ignore:
       - "**/*.md"
-      - "example/**"
   workflow_dispatch:
     inputs:
       base:
