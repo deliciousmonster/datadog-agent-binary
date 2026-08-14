@@ -33,6 +33,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -79,6 +80,31 @@ const harperBinPath = resolveHarperBinPath();
  */
 const REQUESTED_THREAD_COUNT = 4;
 
+/**
+ * First address the harness's loopback pool hands out. Linux binds all of 127/8
+ * out of the box; macOS configures only 127.0.0.1, so on a Mac without the alias
+ * the harness's first bind dies in LoopbackAddressValidationError. That is a
+ * missing prerequisite, not a failure, so probe it up front and skip.
+ */
+const LOOPBACK_POOL_START = Number.parseInt(
+	process.env.HARPER_INTEGRATION_TEST_LOOPBACK_POOL_START ?? "",
+	10
+);
+const LOOPBACK_PROBE_ADDRESS = `127.0.0.${
+	Number.isNaN(LOOPBACK_POOL_START) ? 2 : LOOPBACK_POOL_START
+}`;
+
+function canBindLoopbackAddress(address: string): Promise<boolean> {
+	return new Promise((resolve) => {
+		const server = createServer();
+		server.once("error", () => resolve(false));
+		// Port 0: the probe is about the address; any bindable port proves it.
+		server.listen({ host: address, port: 0 }, () => {
+			server.close(() => resolve(true));
+		});
+	});
+}
+
 const SKIP_REASON: string | false =
 	process.platform === "win32"
 		? "Harper spawn enforcement is exercised with a shebang'd stub executable and " +
@@ -86,7 +112,13 @@ const SKIP_REASON: string | false =
 		: !harperBinPath
 			? "the `harper` package is not installed; add harper and " +
 				"@harperfast/integration-testing to devDependencies"
-			: false;
+			: process.platform === "darwin" &&
+				  !(await canBindLoopbackAddress(LOOPBACK_PROBE_ADDRESS))
+				? `this machine cannot bind ${LOOPBACK_PROBE_ADDRESS}, the first address in ` +
+					`the harness's loopback pool; macOS enables only 127.0.0.1 by default. ` +
+					`Run \`sudo ifconfig lo0 alias ${LOOPBACK_PROBE_ADDRESS} up\` (or ` +
+					`\`npx harper-integration-test-setup-loopback\` for the whole pool)`
+				: false;
 
 type ProbeRow = {
 	threadId: number;
