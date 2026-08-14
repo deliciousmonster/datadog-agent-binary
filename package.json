@@ -33,7 +33,7 @@
 		"version": "npm run build && npm run update-optional-deps",
 		"prepublishOnly": "npm run build",
 		"test": "npm run build && node --test \"test/**/*.test.js\"",
-		"test:integration": "harper-integration-test-run --isolation=none \"test/integration/**/*.test.ts\"",
+		"test:integration": "npm run build && harper-integration-test-run --isolation=none \"test/integration/**/*.test.ts\"",
 		"matrix": "npm run build && node scripts/publish-matrix.js --registry",
 		"matrix:local": "npm run build && node scripts/publish-matrix.js --local"
 	},

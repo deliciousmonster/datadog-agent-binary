@@ -222,7 +222,7 @@ async function readRegistry(expected, version, deep, retries) {
 	};
 }
 
-function verify(rows, opts) {
+function verify(rows) {
 	const problems = [];
 
 	for (const row of rows) {
@@ -318,7 +318,7 @@ function binariesCell(row) {
 	return `${row.fileCount} files`;
 }
 
-function renderText(rows, opts) {
+function renderText(rows) {
 	const header = ["PACKAGE", "VERSION", "OS", "CPU", "BINARIES", "SIZE"];
 	const body = rows.map((r) => [
 		r.name,
@@ -342,7 +342,7 @@ function renderText(rows, opts) {
 	return out.join("\n");
 }
 
-function renderMarkdown(rows, opts) {
+function renderMarkdown(rows) {
 	const out = [
 		`### Published platform matrix for \`${PACKAGE_NAME}@${PACKAGE_VERSION}\``,
 		"",
@@ -400,12 +400,12 @@ async function main() {
 	if (opts.format === "json") {
 		console.log(JSON.stringify(rows, null, 2));
 	} else if (opts.format === "markdown") {
-		console.log(renderMarkdown(rows, opts));
+		console.log(renderMarkdown(rows));
 	} else {
-		console.log(renderText(rows, opts));
+		console.log(renderText(rows));
 	}
 
-	const problems = verify(rows, opts);
+	const problems = verify(rows);
 	const declaredCount = Object.keys(mainPkg.optionalDependencies ?? {}).length;
 	const presentCount = rows.filter((r) => r.present).length;
 

@@ -100,8 +100,8 @@ test("every supported platform ships exactly the core agent and the trace-agent"
 		assert.deepEqual(
 			binaries.map((b) => b.kind),
 			EXPECTED_KINDS,
-			`${platform.getName()}: kinds must be core then trace (the core agent is ` +
-				`built first and is what getBinaryName() still returns)`
+			`${platform.getName()}: kinds must be core then trace, the order the ` +
+				`upstream build tasks run in`
 		);
 	}
 });
@@ -206,23 +206,13 @@ test("Windows binary names end in .exe and no other platform's do", () => {
 	}
 });
 
-test("getBinaryName() still returns the core agent, getTraceAgentBinaryName() the trace-agent", () => {
+test("the two binaries never share a filename on any platform", () => {
 	for (const platform of SUPPORTED_PLATFORMS) {
-		assert.equal(
-			platform.getBinaryName(),
-			platform.getBinary("core").outputName,
-			`${platform.getName()}: getBinaryName() is the pre-trace-agent API and must keep ` +
-				`meaning the core agent, or every existing consumer silently switches binaries`
-		);
-		assert.equal(
-			platform.getTraceAgentBinaryName(),
-			platform.getBinary("trace").outputName,
-			`${platform.getName()}: getTraceAgentBinaryName()`
-		);
 		assert.notEqual(
-			platform.getBinaryName(),
-			platform.getTraceAgentBinaryName(),
-			`${platform.getName()}: the two binaries must not share a filename`
+			platform.getBinary("core").outputName,
+			platform.getBinary("trace").outputName,
+			`${platform.getName()}: a shared filename means one binary overwrites ` +
+				`the other in bin/ and the loss looks like "the trace-agent is missing"`
 		);
 	}
 });

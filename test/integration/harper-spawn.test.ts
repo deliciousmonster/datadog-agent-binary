@@ -128,8 +128,9 @@ const SKIP_REASON: string | false =
 		? "Harper spawn enforcement is exercised with a shebang'd stub executable and " +
 			"counted with ps(1); neither works on Windows"
 		: !harperBinPath
-			? "the `harper` package is not installed; add harper and " +
-				"@harperfast/integration-testing to devDependencies"
+			? "the `harper` package is not installed; `npm ci` provides it through " +
+				"@harperfast/integration-testing's peer dependency (never add harper " +
+				"itself to a dependencies key: the manifest guard test forbids it)"
 			: !existsSync(join(PACKAGE_DIST_DIR, "index.js"))
 				? "dist/ has not been built, and the assembled application ships this " +
 					"repo's real dist/ into the Harper component; run `npm run build` first"

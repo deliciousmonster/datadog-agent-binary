@@ -56,16 +56,6 @@ export abstract class Platform {
 
 	abstract getOS(): OS;
 
-	/** Core agent filename. Predates `getBinaries()`; kept for existing consumers. */
-	getBinaryName(): string {
-		return this.getBinary("core").outputName;
-	}
-
-	/** Filename of the trace-agent (APM receiver) binary. */
-	getTraceAgentBinaryName(): string {
-		return this.getBinary("trace").outputName;
-	}
-
 	/** Executable extension for this platform (`.exe` on Windows). Mirrors upstream `bin_name()`. */
 	protected getExecutableExtension(): string {
 		return "";
