@@ -1,4 +1,4 @@
-import chalk from "chalk";
+import { styleText } from "node:util";
 import { Logger } from "./types.js";
 
 export class ConsoleLogger implements Logger {
@@ -9,20 +9,23 @@ export class ConsoleLogger implements Logger {
 	}
 
 	info(message: string): void {
-		console.log(chalk.blue(this.prefix), message);
+		console.log(styleText("blue", this.prefix), message);
 	}
 
 	warn(message: string): void {
-		console.warn(chalk.yellow(this.prefix), chalk.yellow(message));
+		console.warn(
+			styleText("yellow", this.prefix),
+			styleText("yellow", message)
+		);
 	}
 
 	error(message: string): void {
-		console.error(chalk.red(this.prefix), chalk.red(message));
+		console.error(styleText("red", this.prefix), styleText("red", message));
 	}
 
 	debug(message: string): void {
 		if (process.env.DEBUG) {
-			console.log(chalk.gray(this.prefix), chalk.gray(message));
+			console.log(styleText("gray", this.prefix), styleText("gray", message));
 		}
 	}
 }
