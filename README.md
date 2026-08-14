@@ -125,12 +125,12 @@ Each resolves through the platform package's accessor, falling back to a locally
 
 | OS | Architecture | Status |
 | --- | --- | --- |
-| Linux | x86_64 | ✅ |
-| Linux | arm64 | ✅ |
-| macOS | arm64 | ✅ |
-| Windows | x86_64 | ✅ |
-| macOS | x86_64 | 🚫 GitHub retired the `macos-13` Intel runner |
-| Windows | arm64 | 🚫 [Chocolatey](https://chocolatey.org) has no native arm64 |
+| Linux | x86_64 | Supported |
+| Linux | arm64 | Supported |
+| macOS | arm64 | Supported |
+| Windows | x86_64 | Supported |
+| macOS | x86_64 | Not supported: GitHub retired the `macos-13` Intel runner |
+| Windows | arm64 | Not supported: [Chocolatey](https://chocolatey.org) has no native arm64 |
 
 This set must match `SUPPORTED_PLATFORMS` in `src/platform.ts` and the build matrix in `.github/workflows/build-release.yml`. A platform listed in `SUPPORTED_PLATFORMS` becomes an `optionalDependency`, so if no matrix leg builds it, npm skips the missing package at install time **without an error** and the consumer gets no binaries and no explanation. `npm run matrix` checks this.
 
@@ -151,7 +151,7 @@ console.log(await m.ensureBinary()); // core
 console.log(await m.ensureTraceAgentBinary()); // trace
 ```
 
-Then add both to `harperdb-config.yaml`:
+Then add both to `harper-config.yaml`:
 
 ```yaml
 applications:
@@ -163,7 +163,7 @@ applications:
 Two ways this fails silently:
 
 - **The match is an exact string compare on the first space-delimited token.** Harper takes `command.split(' ')[0]` and asks whether the allowlist set contains it. A bare command name never matches, a relative path never matches, and a path containing a space can never match at all, since the token is truncated at the space. Install somewhere without spaces.
-- **The allowlist is read once at module load.** Editing `harperdb-config.yaml` while Harper runs changes nothing. Restart it.
+- **The allowlist is read once at module load.** Editing `harper-config.yaml` while Harper runs changes nothing. Restart it.
 
 The paths carry no version number, so they survive a package upgrade.
 
