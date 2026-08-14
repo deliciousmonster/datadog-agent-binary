@@ -332,16 +332,25 @@ export async function launchAgent(
 
 		// `name` is passed for correctness, but do NOT rely on it here.
 		//
-		// Harper substitutes its constrained child_process only for modules its own loader
-		// evaluates, and only on the ESM path: its CommonJS bridge forwards a builtin
-		// specifier straight to Node's real `require`. This file compiles to CommonJS, so
-		// `spawn` below is stock Node, which ignores `name`. No PID lock is taken and no
-		// allowlist is consulted when the launcher runs.
+		// Harper's loader never evaluates this package, so `spawn` below is stock Node: it
+		// ignores `name`, takes no PID lock, and consults no allowlist. For a bare specifier
+		// under node_modules, shouldUseApplicationLoader falls through to
+		// packageDependsOnHarper, and this manifest names no Harper-claimed id. On that
+		// native path createModule hands the URL to Node's own import() and wraps the result
+		// as a SyntheticModule, which has no linker, so the loader never sees this package's
+		// internal relative imports either. Measured against harper 5.2.1, jsLoader.js
+		// :499-517 and :656. test/unit/harper-loader-claim.test.js is what keeps the premise
+		// true: harper in ANY dependency key flips the routing.
 		//
-		// That makes these launchers CLI entry points, not a way to get one agent per node.
-		// Component code needing the singleton must spawn from its own module graph via a
-		// relative ESM import; see example/dd-supervisor.js. The branch below is kept
-		// because `name` IS honoured when this module is loaded through Harper's ESM path.
+		// Three ways a caller puts this module back under the loader, where the spawn would
+		// THROW rather than dedupe, since allowedSpawnCommands defaults to empty:
+		// applications.dependencyLoader 'app'; a relative import reaching into node_modules;
+		// a linked copy resolving under the component root.
+		//
+		// So these launchers are CLI entry points, not a way to get one agent per node, and
+		// bin/ runs them in their own process where no loader exists at all. Component code
+		// needing the singleton spawns from its own module graph via a relative import; see
+		// example/dd-supervisor.js.
 		const child = spawn(binaryPath, args, {
 			stdio: 'inherit',
 			env: process.env,
