@@ -42,15 +42,20 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
 	setupHarperWithFixture,
 	teardownHarper,
 	type ContextWithHarper,
 } from "@harperfast/integration-testing";
+import {
+	darwinLoopbackSkipReason,
+	errorMessage,
+	readJsonlRows,
+	resolveHarperBinPath,
+} from "./support/harness.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -70,21 +75,6 @@ const TRACE_AGENT_NAME = "datadog-trace-agent";
 const CORE_AGENT_NAME = "datadog-agent";
 const AGENT_NAMES = [TRACE_AGENT_NAME, CORE_AGENT_NAME];
 
-/**
- * The `harper` package's exports map only exposes ".", so the harness's
- * auto-resolution of 'harper/dist/bin/harper.js' fails with
- * ERR_PACKAGE_PATH_NOT_EXPORTED. Resolve the package entry (which the map does
- * expose) and walk to the bin script from there. Same workaround
- * harperfast/application-template carries in its own tests.
- */
-function resolveHarperBinPath(): string | null {
-	try {
-		return resolve(dirname(require.resolve("harper")), "bin/harper.js");
-	} catch {
-		return null;
-	}
-}
-
 const harperBinPath = resolveHarperBinPath();
 
 /**
@@ -98,31 +88,6 @@ const harperBinPath = resolveHarperBinPath();
  */
 const REQUESTED_THREAD_COUNT = 4;
 
-/**
- * First address the harness's loopback pool hands out. Linux binds all of 127/8
- * out of the box; macOS configures only 127.0.0.1, so on a Mac without the alias
- * the harness's first bind dies in LoopbackAddressValidationError. That is a
- * missing prerequisite, not a failure, so probe it up front and skip.
- */
-const LOOPBACK_POOL_START = Number.parseInt(
-	process.env.HARPER_INTEGRATION_TEST_LOOPBACK_POOL_START ?? "",
-	10
-);
-const LOOPBACK_PROBE_ADDRESS = `127.0.0.${
-	Number.isNaN(LOOPBACK_POOL_START) ? 2 : LOOPBACK_POOL_START
-}`;
-
-function canBindLoopbackAddress(address: string): Promise<boolean> {
-	return new Promise((resolve) => {
-		const server = createServer();
-		server.once("error", () => resolve(false));
-		// Port 0: the probe is about the address; any bindable port proves it.
-		server.listen({ host: address, port: 0 }, () => {
-			server.close(() => resolve(true));
-		});
-	});
-}
-
 const SKIP_REASON: string | false =
 	process.platform === "win32"
 		? "Harper spawn enforcement is exercised with a shebang'd stub executable and " +
@@ -134,13 +99,7 @@ const SKIP_REASON: string | false =
 			: !existsSync(join(PACKAGE_DIST_DIR, "index.js"))
 				? "dist/ has not been built, and the assembled application ships this " +
 					"repo's real dist/ into the Harper component; run `npm run build` first"
-				: process.platform === "darwin" &&
-					  !(await canBindLoopbackAddress(LOOPBACK_PROBE_ADDRESS))
-					? `this machine cannot bind ${LOOPBACK_PROBE_ADDRESS}, the first address in ` +
-						`the harness's loopback pool; macOS enables only 127.0.0.1 by default. ` +
-						`Run \`sudo ifconfig lo0 alias ${LOOPBACK_PROBE_ADDRESS} up\` (or ` +
-						`\`npx harper-integration-test-setup-loopback\` for the whole pool)`
-					: false;
+				: await darwinLoopbackSkipReason();
 
 /** One agent entry of the supervisor's status object (launchOne's return). */
 type AgentRow = {
@@ -362,22 +321,6 @@ function supervisorEnv(workspace: Workspace): Record<string, string> {
 	};
 }
 
-function readProbeRows(resultsFile: string): ProbeRow[] {
-	if (!existsSync(resultsFile)) return [];
-	return readFileSync(resultsFile, "utf8")
-		.split("\n")
-		.filter((line) => line.trim().length > 0)
-		.flatMap((line) => {
-			try {
-				return [JSON.parse(line) as ProbeRow];
-			} catch {
-				// A record is written in a single appendFileSync, so a torn line should
-				// be impossible; tolerate one rather than failing on it.
-				return [];
-			}
-		});
-}
-
 /**
  * Wait until every thread that is going to load the component has finished its
  * supervisor run. There is no way to know N up front (that is what the run is
@@ -391,7 +334,7 @@ async function waitForProbeResults(
 	let lastCount = -1;
 	let stableSince = Date.now();
 	while (Date.now() < deadline) {
-		const rows = readProbeRows(resultsFile);
+		const rows = readJsonlRows<ProbeRow>(resultsFile);
 		const finished = new Set(
 			rows.filter((r) => r.probe === "done").map((r) => r.threadId)
 		);
@@ -403,7 +346,7 @@ async function waitForProbeResults(
 		}
 		await sleep(200);
 	}
-	return readProbeRows(resultsFile);
+	return readJsonlRows<ProbeRow>(resultsFile);
 }
 
 function rowsFor(rows: ProbeRow[], probe: string): ProbeRow[] {
@@ -957,8 +900,8 @@ async function resolveAgentBinaries(): Promise<
 			core: await manager.ensureBinary("core", "not-a-published-version"),
 			trace: await manager.ensureBinary("trace", "not-a-published-version"),
 		};
-	} catch (error: any) {
-		return { error: String(error?.message ?? error) };
+	} catch (error) {
+		return { error: errorMessage(error) };
 	}
 }
 

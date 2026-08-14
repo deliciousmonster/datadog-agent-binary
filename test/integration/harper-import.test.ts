@@ -35,9 +35,8 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createRequire } from "node:module";
 import {
@@ -45,6 +44,12 @@ import {
 	teardownHarper,
 	type ContextWithHarper,
 } from "@harperfast/integration-testing";
+import {
+	darwinLoopbackSkipReason,
+	errorMessage,
+	readJsonlRows,
+	resolveHarperBinPath,
+} from "./support/harness.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -69,47 +74,7 @@ const { claimedIds } = require("../support/harper-claimed-ids.js") as {
 	claimedIds: () => Set<string>;
 };
 
-/**
- * The `harper` package's exports map only exposes ".", so the harness's
- * auto-resolution of 'harper/dist/bin/harper.js' fails with
- * ERR_PACKAGE_PATH_NOT_EXPORTED. Resolve the package entry (which the map does
- * expose) and walk to the bin script from there. Same workaround
- * harperfast/application-template carries in its own tests.
- */
-function resolveHarperBinPath(): string | null {
-	try {
-		return resolve(dirname(require.resolve("harper")), "bin/harper.js");
-	} catch {
-		return null;
-	}
-}
-
 const harperBinPath = resolveHarperBinPath();
-
-/**
- * First address the harness's loopback pool hands out. Linux binds all of 127/8
- * out of the box; macOS configures only 127.0.0.1, so on a Mac without the alias
- * the harness's first bind dies in LoopbackAddressValidationError. That is a
- * missing prerequisite, not a failure, so probe it up front and skip.
- */
-const LOOPBACK_POOL_START = Number.parseInt(
-	process.env.HARPER_INTEGRATION_TEST_LOOPBACK_POOL_START ?? "",
-	10
-);
-const LOOPBACK_PROBE_ADDRESS = `127.0.0.${
-	Number.isNaN(LOOPBACK_POOL_START) ? 2 : LOOPBACK_POOL_START
-}`;
-
-function canBindLoopbackAddress(address: string): Promise<boolean> {
-	return new Promise((resolve) => {
-		const server = createServer();
-		server.once("error", () => resolve(false));
-		// Port 0: the probe is about the address; any bindable port proves it.
-		server.listen({ host: address, port: 0 }, () => {
-			server.close(() => resolve(true));
-		});
-	});
-}
 
 // Same prerequisites as harper-spawn.test.ts; only the win32 reason differs,
 // because what breaks there differs.
@@ -120,13 +85,7 @@ const SKIP_REASON: string | false =
 		: !harperBinPath
 			? "the `harper` package is not installed; add harper and " +
 				"@harperfast/integration-testing to devDependencies"
-			: process.platform === "darwin" &&
-				  !(await canBindLoopbackAddress(LOOPBACK_PROBE_ADDRESS))
-				? `this machine cannot bind ${LOOPBACK_PROBE_ADDRESS}, the first address in ` +
-					`the harness's loopback pool; macOS enables only 127.0.0.1 by default. ` +
-					`Run \`sudo ifconfig lo0 alias ${LOOPBACK_PROBE_ADDRESS} up\` (or ` +
-					`\`npx harper-integration-test-setup-loopback\` for the whole pool)`
-				: false;
+			: await darwinLoopbackSkipReason();
 
 type ProbeRow = {
 	probe: string;
@@ -298,9 +257,9 @@ function buildImportFixture(): ImportFixture | { error: string } {
 			{ cwd: appDir, encoding: "utf8" }
 		);
 		return { workDir, appDir };
-	} catch (error: any) {
+	} catch (error) {
 		rmSync(workDir, { recursive: true, force: true });
-		return { error: String(error?.message ?? error) };
+		return { error: errorMessage(error) };
 	}
 }
 
@@ -315,22 +274,6 @@ const IMPORT_SKIP_REASON: string | false =
 			`there is nothing to import: ${importFixture.error}`
 		: false);
 
-function readProbeRows(resultsFile: string): ProbeRow[] {
-	if (!existsSync(resultsFile)) return [];
-	return readFileSync(resultsFile, "utf8")
-		.split("\n")
-		.filter((line) => line.trim().length > 0)
-		.flatMap((line) => {
-			try {
-				return [JSON.parse(line) as ProbeRow];
-			} catch {
-				// A record is written in a single appendFileSync, so a torn line should
-				// be impossible; tolerate one rather than failing on it.
-				return [];
-			}
-		});
-}
-
 /**
  * The probe writes "done" last, so its presence means every earlier record has
  * landed; no settle window is needed the way the multi-thread spawn suite
@@ -342,11 +285,11 @@ async function waitForProbeResults(
 ): Promise<ProbeRow[]> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
-		const rows = readProbeRows(resultsFile);
+		const rows = readJsonlRows<ProbeRow>(resultsFile);
 		if (rows.some((row) => row.probe === "done")) return rows;
 		await sleep(200);
 	}
-	return readProbeRows(resultsFile);
+	return readJsonlRows<ProbeRow>(resultsFile);
 }
 
 function rowFor(rows: ProbeRow[], probe: string): ProbeRow | undefined {
