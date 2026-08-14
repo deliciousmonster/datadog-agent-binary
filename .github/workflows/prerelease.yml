@@ -56,6 +56,19 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Without this the run dies inside actions/checkout with "Input required and not
+      # supplied: token", which reads like a broken workflow rather than a missing secret.
+      - name: Require REPO_TOKEN
+        env:
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${REPO_TOKEN}" ]; then
+            echo "::error::REPO_TOKEN is not set. A tag pushed with the default GITHUB_TOKEN does not start another workflow, so build-release.yml would never run and this job would report success while shipping nothing. Add a PAT with contents:write as REPO_TOKEN."
+            exit 1
+          fi
+          echo "REPO_TOKEN is present."
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -76,47 +89,34 @@ jobs:
         run: |
           set -euo pipefail
 
-          BASE="${{ github.event.inputs.base }}"
-          if [ -z "$BASE" ]; then
-            BASE=$(node -p "require('./package.json').version.split('-')[0]")
-          fi
           CHANNEL="${{ github.event.inputs.channel }}"
           [ -z "$CHANNEL" ] && CHANNEL="next"
           PKG=$(node -p "require('./package.json').name")
 
+          # An explicit base is a floor, not an override: it still has to clear whatever
+          # is already released, or the run fails rather than shipping a lower version.
+          PKG_VERSION="${{ github.event.inputs.base }}"
+          if [ -z "$PKG_VERSION" ]; then
+            PKG_VERSION=$(node -p "require('./package.json').version")
+          fi
+
           echo "Package: $PKG"
-          echo "Base:    $BASE"
           echo "Channel: $CHANNEL"
+          echo "package.json floor: $PKG_VERSION"
 
           # A 404 (scope not published yet) is the normal bootstrap case, not an error.
           PUBLISHED=$(npm view "$PKG" versions --json 2>/dev/null || echo "[]")
-          # Tags are the other half of the truth: one exists for every release ever
-          # attempted, including the ones whose publish step failed.
-          TAGS=$(git tag -l "v${BASE}-${CHANNEL}.*" | tr '\n' ' ')
+          # Every version ever tagged, including the ones whose publish step failed. The
+          # registry cannot see those and would hand their number out twice.
+          TAGS=$(git tag -l 'v*' | tr '\n' ' ')
 
           echo "Registry versions: $(echo "$PUBLISHED" | head -c 200)"
-          echo "Matching tags:     ${TAGS:-none}"
 
-          NEXT=$(node -e '
-            const [base, channel, publishedJson, tagList] = process.argv.slice(1);
-            const prefix = `${base}-${channel}.`;
-
-            let published = [];
-            try {
-              const parsed = JSON.parse(publishedJson);
-              published = Array.isArray(parsed) ? parsed : [parsed];
-            } catch { /* nothing published yet */ }
-
-            const fromTags = tagList.split(/\s+/).filter(Boolean).map((t) => t.replace(/^v/, ""));
-
-            const used = [...published, ...fromTags]
-              .filter((v) => typeof v === "string" && v.startsWith(prefix))
-              .map((v) => Number(v.slice(prefix.length)))
-              .filter((n) => Number.isInteger(n));
-
-            const n = used.length ? Math.max(...used) + 1 : 0;
-            process.stdout.write(`${base}-${channel}.${n}`);
-          ' "$BASE" "$CHANNEL" "$PUBLISHED" "$TAGS")
+          NEXT=$(node scripts/next-prerelease.js \
+            --channel "$CHANNEL" \
+            --tags "$TAGS" \
+            --registry "$PUBLISHED" \
+            --package-version "$PKG_VERSION")
 
           echo "Next version: $NEXT"
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"
