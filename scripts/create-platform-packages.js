@@ -195,6 +195,14 @@ function writePlatformPackageJson(platform) {
 		keywords: [...packageTemplate.keywords, "apm", "trace-agent", os, arch],
 	};
 
+	// CGO_ENABLED=1 links glibc, so on musl (Alpine) the binary dies with an
+	// unexplained ENOENT at spawn. Declaring libc makes npm skip the optional
+	// dependency there, and the consumer gets the "no packaged binary" path
+	// instead of a binary that cannot run.
+	if (packageJson.os[0] === "linux") {
+		packageJson.libc = ["glibc"];
+	}
+
 	// The only place a platform package.json is written, so this covers every mode.
 	assertNodeOSAndCPU(packageJson);
 
