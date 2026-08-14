@@ -57,20 +57,17 @@ const PACKAGE_MANIFEST = JSON.parse(
 const PACKAGE_NAME: string = PACKAGE_MANIFEST.name;
 
 /**
- * harper 5.2.1's HARPER_MODULE_IDS (security/jsLoader.ts). The unit test
- * test/unit/harper-loader-claim.test.js derives the live list from the
- * installed harper; this copy exists because that test scans the repo
- * manifest, while the assertion below scans the packed artifact, which only
- * this suite has in hand.
+ * The 5.2.1 baseline unioned with the installed harper's live list, shared
+ * with test/unit/harper-loader-claim.test.js. That test scans the repo
+ * manifest while the assertion below scans the packed artifact, which only
+ * this suite has in hand; the id list itself is one module because a copy
+ * here froze at the 5.2.1 baseline while the unit guard tracked upstream.
+ * The skip guard below requires harper to be installed whenever this suite
+ * runs, so the live derivation is always available to it.
  */
-const CLAIMED_MODULE_IDS = [
-	"harper",
-	"harperdb",
-	"harperdb/v1",
-	"harperdb/v2",
-	"@harperfast/harper",
-	"@harperfast/harper-pro",
-];
+const { claimedIds } = require("../support/harper-claimed-ids.js") as {
+	claimedIds: () => Set<string>;
+};
 
 /**
  * The `harper` package's exports map only exposes ".", so the harness's
@@ -412,7 +409,7 @@ suite(
 				...manifest.devDependencies,
 				...manifest.peerDependencies,
 			};
-			for (const id of CLAIMED_MODULE_IDS) {
+			for (const id of claimedIds()) {
 				assert.ok(
 					!(id in merged),
 					`the packed manifest names ${id}; Harper's loader will claim the ` +

@@ -20,49 +20,17 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+// The claim-id list and its live derivation live in one support module because
+// test/integration/harper-import.test.ts scans the packed artifact against the
+// same ids; a private copy here or there goes stale when harper adds one.
+const {
+	BASELINE_CLAIMED_IDS,
+	HARPER_LOADER_PATH,
+	claimedIds,
+	extractClaimedIds,
+} = require("../support/harper-claimed-ids.js");
 
 const REPO_ROOT = path.join(__dirname, "..", "..");
-
-/**
- * The claim list as shipped in harper 5.2.1 (security/jsLoader.ts,
- * HARPER_MODULE_IDS). The constant is module-private and harper's exports map
- * exposes only the package entry, so it cannot be imported; this baseline is
- * the floor, and claimedIds() unions in whatever the installed harper ships so
- * an upstream addition is still caught.
- */
-const BASELINE_CLAIMED_IDS = [
-	"harper",
-	"harperdb",
-	"harperdb/v1",
-	"harperdb/v2",
-	"@harperfast/harper",
-	"@harperfast/harper-pro",
-];
-
-const HARPER_LOADER_PATH = path.join(
-	REPO_ROOT,
-	"node_modules",
-	"harper",
-	"dist",
-	"security",
-	"jsLoader.js"
-);
-
-/** The string literals of `HARPER_MODULE_IDS = new Set([...])`, or null. */
-function extractClaimedIds(source) {
-	const block = source.match(/HARPER_MODULE_IDS\s*=\s*new Set\(\[([^\]]*)\]/);
-	if (!block) return null;
-	return [...block[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]);
-}
-
-function claimedIds() {
-	const ids = new Set(BASELINE_CLAIMED_IDS);
-	if (fs.existsSync(HARPER_LOADER_PATH)) {
-		const live = extractClaimedIds(fs.readFileSync(HARPER_LOADER_PATH, "utf8"));
-		for (const id of live ?? []) ids.add(id);
-	}
-	return ids;
-}
 
 /**
  * Every { key, name } pair a published manifest can use to name a dependency.
@@ -102,11 +70,27 @@ test("the claim list can still be derived from the installed harper", (t) => {
 	}
 	const live = extractClaimedIds(fs.readFileSync(HARPER_LOADER_PATH, "utf8"));
 	assert.ok(
-		live !== null && live.includes("harper"),
+		live !== null,
 		"HARPER_MODULE_IDS was not found in harper's dist/security/jsLoader.js, " +
 			"so the loader moved or renamed it. Re-derive the claim list from the " +
 			"new source and update extractClaimedIds(); until then this suite only " +
 			"knows the 5.2.1 baseline and misses upstream additions."
+	);
+	// A superset of the baseline, not merely a non-empty parse: an extraction
+	// that finds the constant but under-extracts (a spread or a computed member
+	// inside the literal, or an earlier *_HARPER_MODULE_IDS constant matching
+	// first) returns a short list while still containing "harper", and catching
+	// upstream additions is this canary's one job. The lists are equal today,
+	// so any shortfall is a parser regression, not a harper change.
+	const missing = BASELINE_CLAIMED_IDS.filter((id) => !live.includes(id));
+	assert.deepEqual(
+		missing,
+		[],
+		`extractClaimedIds() no longer sees [${missing.join(", ")}] although the ` +
+			`5.2.1 baseline ships ${missing.length === 1 ? "it" : "them"}. The ` +
+			`regex is under-extracting against the installed harper's jsLoader.js ` +
+			`and would silently miss upstream additions too; update ` +
+			`extractClaimedIds() to parse the new source shape.`
 	);
 });
 
