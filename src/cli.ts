@@ -49,13 +49,10 @@ program
 				// Report every binary. A summary that prints one path when two were built
 				// reads as a successful single-binary build, which is how a missing
 				// trace-agent went unnoticed through an entire release.
-				const produced = Object.entries(result.outputPaths ?? {});
-				if (produced.length > 0) {
-					for (const [kind, outputPath] of produced) {
-						logger.info(`✅ Successful (${kind}): ${outputPath}`);
-					}
-				} else {
-					logger.info(`✅ Successful: ${result.outputPath}`);
+				for (const [kind, outputPath] of Object.entries(
+					result.outputPaths ?? {}
+				)) {
+					logger.info(`✅ Successful (${kind}): ${outputPath}`);
 				}
 				process.exit(0);
 			} else {
@@ -114,14 +111,9 @@ program
 		"Install every Datadog Agent binary (core agent and trace-agent) for the current platform"
 	)
 	.option("-v, --version <version>", "Specific version to install")
-	.option("-f, --force", "Force reinstall even if already installed")
 	.action(async (options) => {
 		try {
 			const manager = new BinaryManager();
-
-			if (options.force) {
-				logger.info("Force reinstall requested...");
-			}
 
 			// Every binary this platform ships, not just the core agent. ensureBinary()
 			// takes the kind first and the version second; commander types its options as

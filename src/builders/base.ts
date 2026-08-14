@@ -48,7 +48,6 @@ export abstract class BaseBuilder {
 			return {
 				success: true,
 				platform,
-				outputPath: outputPaths.core,
 				outputPaths,
 				duration,
 			};

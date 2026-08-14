@@ -33,7 +33,7 @@ export abstract class Platform {
 			case "win32":
 				return new Windows(arch);
 			default:
-				return new Unknown(arch);
+				throw new Error(`Unsupported platform: ${process.platform}`);
 		}
 	}
 
@@ -131,16 +131,6 @@ class Windows extends Platform {
 
 	protected getExecutableExtension(): string {
 		return ".exe";
-	}
-}
-
-class Unknown extends Platform {
-	getOS(): OS {
-		throw new Error("Unknown OS");
-	}
-
-	getBinaries(): AgentBinaryDescriptor[] {
-		throw new Error("Unknown platform: no agent binaries are defined");
 	}
 }
 

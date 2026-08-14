@@ -84,8 +84,6 @@ export interface AgentBinaryDescriptor {
 export interface BuildResult {
 	success: boolean;
 	platform: Platform;
-	/** Path to the core agent binary. Retained for backwards compatibility. */
-	outputPath?: string;
 	/** Every binary produced by this build, keyed by kind. */
 	outputPaths?: Partial<Record<AgentBinaryKind, string>>;
 	error?: string;

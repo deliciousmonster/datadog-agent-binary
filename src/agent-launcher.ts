@@ -8,13 +8,9 @@ import { Platform } from "./platform.js";
 import { AgentBinaryKind } from "./types.js";
 
 /**
- * The launcher shared by `bin/datadog-agent`, `bin/trace-agent`, and the wrappers
- * `BinaryManager.createBinaryWrapper()` generates.
- *
- * Those entry points were three copies of the same resolve-spawn-supervise logic, which
- * is how the trace-agent came to be missing from all of them at once. They are now
- * one-line shims: the only thing that varies is the `AgentBinaryKind` they pass in, and
- * everything kind-specific hangs off the descriptor for that kind.
+ * The launcher shared by the `bin/datadog-agent` and `bin/trace-agent` shims. The only
+ * thing that varies between them is the `AgentBinaryKind` they pass in; everything
+ * kind-specific hangs off the descriptor for that kind.
  *
  * `launchAgent()` never rejects. It owns the process lifecycle and calls `process.exit()`
  * on every terminal path, because an unhandled rejection in a launcher is the

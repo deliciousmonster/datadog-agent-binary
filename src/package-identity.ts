@@ -46,11 +46,6 @@ const pkg = readPackageJson();
 export const PACKAGE_NAME: string =
 	pkg.name ?? "@deliciousmonster/datadog-agent-binary";
 
-/** npm scope including the leading `@`, or an empty string for an unscoped package. */
-export const PACKAGE_SCOPE: string = PACKAGE_NAME.startsWith("@")
-	? PACKAGE_NAME.split("/")[0]
-	: "";
-
 /** This package's own version, used to version-lock the platform sub-packages. */
 export const PACKAGE_VERSION: string = pkg.version ?? "0.0.0";
 
