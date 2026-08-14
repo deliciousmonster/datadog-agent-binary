@@ -480,3 +480,16 @@ async function onExit(
 	}
 	process.exit(code || 0);
 }
+
+/**
+ * Test-only handle on the supervision internals; not public API. Each member guards
+ * a failure mode whose only production symptom is silently dropped spans, and without
+ * this export the unit suite had to re-evaluate the compiled module through a
+ * hand-built CJS wrapper to reach them.
+ */
+export const internalsForTesting = {
+	receiverPort,
+	isRunSubcommand,
+	isTraceReceiverHealthy,
+	onExit,
+};

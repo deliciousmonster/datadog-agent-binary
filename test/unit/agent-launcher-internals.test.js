@@ -2,55 +2,24 @@
 
 /**
  * The launcher's supervision internals: `receiverPort()`, `isRunSubcommand()`,
- * `isTraceReceiverHealthy()`, and `onExit()`. None are exported; each guards a
- * failure mode that surfaces only as silently dropped spans, so they are loaded
- * here by evaluating the compiled module with an internals export appended.
+ * `isTraceReceiverHealthy()`, and `onExit()`. Each guards a failure mode that
+ * surfaces only as silently dropped spans; they are reached through the
+ * launcher's `internalsForTesting` export.
  *
  * Hermetic: the only sockets are ephemeral 127.0.0.1 listeners standing in for
  * a receiver, the same device test/e2e/harper-component.test.js uses.
  */
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
-const { createRequire } = require("node:module");
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const LAUNCHER_PATH = path.join(REPO_ROOT, "dist", "agent-launcher.js");
 
-/**
- * Evaluate the compiled CommonJS module with Node's own wrapper shape, plus one
- * appended line exporting the module-private functions under test. Re-exporting
- * them from src would put test-only surface on the launcher's public API.
- */
-function loadLauncherInternals() {
-	const source = fs.readFileSync(LAUNCHER_PATH, "utf8");
-	const wrapper = new Function(
-		"exports",
-		"require",
-		"module",
-		"__filename",
-		"__dirname",
-		source +
-			"\nmodule.exports.__internals = " +
-			"{ receiverPort, isRunSubcommand, isTraceReceiverHealthy, onExit };"
-	);
-	const module = { exports: {} };
-	wrapper.call(
-		module.exports,
-		module.exports,
-		createRequire(LAUNCHER_PATH),
-		module,
-		LAUNCHER_PATH,
-		path.dirname(LAUNCHER_PATH)
-	);
-	return module.exports.__internals;
-}
-
 const { receiverPort, isRunSubcommand, isTraceReceiverHealthy, onExit } =
-	loadLauncherInternals();
+	require(LAUNCHER_PATH).internalsForTesting;
 
 async function withReceiverPortEnv(value, run) {
 	const previous = process.env.DD_APM_RECEIVER_PORT;
