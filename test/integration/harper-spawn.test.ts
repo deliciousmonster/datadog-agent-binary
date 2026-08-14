@@ -310,265 +310,263 @@ function allowlist(...commands: string[]): string[] {
 const CORE_PROBE_NAME = "datadog-agent-probe";
 const TRACE_PROBE_NAME = "datadog-trace-agent-probe";
 
-suite(
-	"Harper v5 spawn enforcement",
-	{ skip: SKIP_REASON },
-	(ctx: ContextWithHarper) => {
-		let workspace: Workspace;
-		let rows: ProbeRow[];
+suite("Harper v5 spawn enforcement", { skip: SKIP_REASON }, (suiteContext) => {
+	// node:test hands the callback a bare SuiteContext; setupHarperWithFixture()
+	// populates .harper on that same object in before(). The cast records that
+	// promotion; annotating the parameter itself is a TS2345 under strict
+	// function-type contravariance.
+	const ctx = suiteContext as ContextWithHarper;
+	let workspace: Workspace;
+	let rows: ProbeRow[];
 
-		before(async () => {
-			workspace = createWorkspace();
-			await setupHarperWithFixture(ctx, FIXTURE_PATH, {
-				harperBinPath: harperBinPath!,
-				config: {
-					threads: { count: REQUESTED_THREAD_COUNT },
-					applications: {
-						allowedSpawnCommands: allowlist(workspace.longLivedCommand),
+	before(async () => {
+		workspace = createWorkspace();
+		await setupHarperWithFixture(ctx, FIXTURE_PATH, {
+			harperBinPath: harperBinPath!,
+			config: {
+				threads: { count: REQUESTED_THREAD_COUNT },
+				applications: {
+					allowedSpawnCommands: allowlist(workspace.longLivedCommand),
+				},
+			},
+			env: {
+				DD_SPAWN_PROBE_DIR: workspace.dir,
+				DD_SPAWN_PROBE_COMMAND: workspace.longLivedCommand,
+				DD_SPAWN_PROBE_DENIED_COMMAND: workspace.deniedCommand,
+				DD_SPAWN_PROBE_TARGETS: JSON.stringify([
+					{
+						name: CORE_PROBE_NAME,
+						command: workspace.longLivedCommand,
+						args: ["core"],
 					},
-				},
-				env: {
-					DD_SPAWN_PROBE_DIR: workspace.dir,
-					DD_SPAWN_PROBE_COMMAND: workspace.longLivedCommand,
-					DD_SPAWN_PROBE_DENIED_COMMAND: workspace.deniedCommand,
-					DD_SPAWN_PROBE_TARGETS: JSON.stringify([
-						{
-							name: CORE_PROBE_NAME,
-							command: workspace.longLivedCommand,
-							args: ["core"],
-						},
-						{
-							name: TRACE_PROBE_NAME,
-							command: workspace.longLivedCommand,
-							args: ["trace"],
-						},
-					]),
-				},
-			});
-			rows = await waitForProbeResults(workspace.resultsFile);
+					{
+						name: TRACE_PROBE_NAME,
+						command: workspace.longLivedCommand,
+						args: ["trace"],
+					},
+				]),
+			},
 		});
+		rows = await waitForProbeResults(workspace.resultsFile);
+	});
 
-		after(() => teardown(ctx, workspace));
+	after(() => teardown(ctx, workspace));
 
-		test("the component loaded and probed", () => {
-			assert.ok(
-				rows.length > 0,
-				`no probe records were written to ${workspace.resultsFile}. The component ` +
-					`did not load, so nothing below is testing enforcement.`
-			);
-			assert.ok(threadsThatProbed(rows) >= 1, "no thread finished its probes");
-		});
+	test("the component loaded and probed", () => {
+		assert.ok(
+			rows.length > 0,
+			`no probe records were written to ${workspace.resultsFile}. The component ` +
+				`did not load, so nothing below is testing enforcement.`
+		);
+		assert.ok(threadsThatProbed(rows) >= 1, "no thread finished its probes");
+	});
 
-		test("NEGATIVE: spawn without a `name` option throws", () => {
-			const observed = rowsFor(rows, "no-name");
-			assert.ok(observed.length > 0, "the no-name probe never ran");
-			for (const row of observed) {
-				assert.equal(
-					row.threw,
-					true,
-					`thread ${row.threadId}: spawn without a name SUCCEEDED. Stock Node ignores ` +
-						`an unknown option and Harper v4 does not replace child_process at all, so ` +
-						`this runtime is not enforcing anything and every assertion below is vacuous.`
-				);
-				// Specifically the missing-name error, not the allowlist one. Harper
-				// checks the allowlist first, so a probe command that fell out of
-				// applications.allowedSpawnCommands would throw for the wrong reason
-				// and this assertion would still see `threw: true`.
-				assert.match(
-					row.error!,
-					/process "name"/i,
-					`thread ${row.threadId}: expected Harper's missing-name error, got: ${row.error}`
-				);
-			}
-		});
-
-		test("NEGATIVE: spawn of a non-allowlisted absolute path throws", () => {
-			const observed = rowsFor(rows, "not-allowlisted");
-			assert.ok(observed.length > 0, "the not-allowlisted probe never ran");
-			for (const row of observed) {
-				assert.equal(
-					row.threw,
-					true,
-					`thread ${row.threadId}: spawning ${workspace.deniedCommand} was permitted ` +
-						`although it is not in applications.allowedSpawnCommands`
-				);
-				assert.match(
-					row.error!,
-					/not allowed/i,
-					`thread ${row.threadId}: expected Harper's allowlist error, got: ${row.error}`
-				);
-			}
-		});
-
-		test("POSITIVE: spawn of an allowlisted path with a name runs", () => {
-			for (const name of [CORE_PROBE_NAME, TRACE_PROBE_NAME]) {
-				const observed = rowsFor(rows, `allowlisted:${name}`);
-				assert.ok(observed.length > 0, `the ${name} probe never ran`);
-				for (const row of observed) {
-					assert.equal(
-						row.threw,
-						false,
-						`thread ${row.threadId}: ${name} was rejected: ${row.error}`
-					);
-					assert.ok(
-						typeof row.pid === "number" && row.pid > 0,
-						`thread ${row.threadId}: ${name} returned no pid`
-					);
-				}
-			}
-		});
-
-		test("SINGLETON: N worker threads produce one process and one PID file", (t) => {
-			const threads = threadsThatProbed(rows);
-			if (threads < 2) {
-				// Not a pass. There was no race to observe, so the dedupe was never
-				// exercised, and saying so is the only honest outcome.
-				t.skip(
-					`only ${threads} thread loaded the component (threads.count=${REQUESTED_THREAD_COUNT} ` +
-						`was requested). Harper defaults to a single worker on macOS and Windows ` +
-						`(without SO_REUSEPORT extra HTTP workers cannot share the server ports), ` +
-						`and \`harper dev\` forces 1 via DEV_MODE. The PID-lock race needs at least 2 ` +
-						`threads; run this on Linux, or with an explicit threads.count that the ` +
-						`runtime honours.`
-				);
-				return;
-			}
-
-			for (const name of [CORE_PROBE_NAME, TRACE_PROBE_NAME]) {
-				const observed = rowsFor(rows, `allowlisted:${name}`);
-				assert.equal(
-					observed.length,
-					threads,
-					`${name}: every thread that probed should have attempted the spawn`
-				);
-
-				const winners = observed.filter((r) => r.hasSpawnargs === true);
-				assert.equal(
-					winners.length,
-					1,
-					`${name}: exactly one thread may win the PID-file lock and actually spawn; ` +
-						`${winners.length} did. More than one means ${threads} copies of the agent ` +
-						`per node.`
-				);
-
-				const pids = new Set(observed.map((r) => r.pid));
-				assert.equal(
-					pids.size,
-					1,
-					`${name}: every thread must end up holding the same pid (winner and losers ` +
-						`alike); saw ${[...pids].join(", ")}`
-				);
-
-				const filePid = readPidFile(ctx.harper.dataRootDir, name);
-				assert.equal(
-					filePid,
-					winners[0].pid,
-					`${name}: ${pidFilePath(ctx.harper.dataRootDir, name)} must hold the pid of ` +
-						`the one process that was started`
-				);
-				assert.ok(isAlive(filePid!), `${name}: pid ${filePid} is not running`);
-			}
-
-			// The check above is Harper's own bookkeeping. This one asks the OS.
-			const running = processesMatching(workspace.longLivedCommand);
+	test("NEGATIVE: spawn without a `name` option throws", () => {
+		const observed = rowsFor(rows, "no-name");
+		assert.ok(observed.length > 0, "the no-name probe never ran");
+		for (const row of observed) {
 			assert.equal(
-				running.length,
-				2,
-				`expected exactly two stub processes (one per name) across ${threads} threads, ` +
-					`found ${running.length}: ${running.join(", ")}`
+				row.threw,
+				true,
+				`thread ${row.threadId}: spawn without a name SUCCEEDED. Stock Node ignores ` +
+					`an unknown option and Harper v4 does not replace child_process at all, so ` +
+					`this runtime is not enforcing anything and every assertion below is vacuous.`
 			);
-		});
+			// Specifically the missing-name error, not the allowlist one. Harper
+			// checks the allowlist first, so a probe command that fell out of
+			// applications.allowedSpawnCommands would throw for the wrong reason
+			// and this assertion would still see `threw: true`.
+			assert.match(
+				row.error!,
+				/process "name"/i,
+				`thread ${row.threadId}: expected Harper's missing-name error, got: ${row.error}`
+			);
+		}
+	});
 
-		test("the loser of the race gets .pid but no .stdout", (t) => {
-			const losers = [CORE_PROBE_NAME, TRACE_PROBE_NAME].flatMap((name) =>
-				rowsFor(rows, `allowlisted:${name}`).filter(
-					(r) => r.hasSpawnargs === false
-				)
+	test("NEGATIVE: spawn of a non-allowlisted absolute path throws", () => {
+		const observed = rowsFor(rows, "not-allowlisted");
+		assert.ok(observed.length > 0, "the not-allowlisted probe never ran");
+		for (const row of observed) {
+			assert.equal(
+				row.threw,
+				true,
+				`thread ${row.threadId}: spawning ${workspace.deniedCommand} was permitted ` +
+					`although it is not in applications.allowedSpawnCommands`
 			);
-			if (losers.length === 0) {
-				const spawned = [CORE_PROBE_NAME, TRACE_PROBE_NAME].flatMap((name) =>
-					rowsFor(rows, `allowlisted:${name}`).filter((r) => r.threw === false)
-				).length;
-				t.skip(
-					`no thread lost the PID-file race: ${threadsThatProbed(rows)} thread(s) ` +
-						`probed and ${spawned} spawn(s) succeeded, so no ExistingProcessWrapper ` +
-						`was produced to inspect`
+			assert.match(
+				row.error!,
+				/not allowed/i,
+				`thread ${row.threadId}: expected Harper's allowlist error, got: ${row.error}`
+			);
+		}
+	});
+
+	test("POSITIVE: spawn of an allowlisted path with a name runs", () => {
+		for (const name of [CORE_PROBE_NAME, TRACE_PROBE_NAME]) {
+			const observed = rowsFor(rows, `allowlisted:${name}`);
+			assert.ok(observed.length > 0, `the ${name} probe never ran`);
+			for (const row of observed) {
+				assert.equal(
+					row.threw,
+					false,
+					`thread ${row.threadId}: ${name} was rejected: ${row.error}`
 				);
-				return;
-			}
-			for (const row of losers) {
-				// Component code that does child.stdout.on(...) throws TypeError on
-				// exactly these threads, which is why the launcher branches on
-				// spawnargs before touching stdio.
 				assert.ok(
 					typeof row.pid === "number" && row.pid > 0,
-					`thread ${row.threadId}: the wrapper must carry the running pid`
-				);
-				assert.equal(
-					row.hasStdout,
-					false,
-					`thread ${row.threadId}: wrapper has no stdio`
-				);
-				assert.equal(
-					row.hasKill,
-					true,
-					`thread ${row.threadId}: wrapper exposes kill()`
-				);
-				assert.equal(
-					row.hasUnref,
-					true,
-					`thread ${row.threadId}: wrapper exposes unref()`
+					`thread ${row.threadId}: ${name} returned no pid`
 				);
 			}
-		});
+		}
+	});
 
-		test("two distinct names yield two processes and two PID files", () => {
-			// This is the whole reason the core agent and the trace-agent can both run
-			// on one node: the lock is per `name`, not per command.
-			const corePid = readPidFile(ctx.harper.dataRootDir, CORE_PROBE_NAME);
-			const tracePid = readPidFile(ctx.harper.dataRootDir, TRACE_PROBE_NAME);
+	test("SINGLETON: N worker threads produce one process and one PID file", (t) => {
+		const threads = threadsThatProbed(rows);
+		if (threads < 2) {
+			// Not a pass. There was no race to observe, so the dedupe was never
+			// exercised, and saying so is the only honest outcome.
+			t.skip(
+				`only ${threads} thread loaded the component (threads.count=${REQUESTED_THREAD_COUNT} ` +
+					`was requested). Harper defaults to a single worker on macOS and Windows ` +
+					`(without SO_REUSEPORT extra HTTP workers cannot share the server ports), ` +
+					`and \`harper dev\` forces 1 via DEV_MODE. The PID-lock race needs at least 2 ` +
+					`threads; run this on Linux, or with an explicit threads.count that the ` +
+					`runtime honours.`
+			);
+			return;
+		}
 
-			assert.ok(
-				corePid,
-				`missing ${pidFilePath(ctx.harper.dataRootDir, CORE_PROBE_NAME)}`
+		for (const name of [CORE_PROBE_NAME, TRACE_PROBE_NAME]) {
+			const observed = rowsFor(rows, `allowlisted:${name}`);
+			assert.equal(
+				observed.length,
+				threads,
+				`${name}: every thread that probed should have attempted the spawn`
 			);
-			assert.ok(
-				tracePid,
-				`missing ${pidFilePath(ctx.harper.dataRootDir, TRACE_PROBE_NAME)}`
-			);
-			assert.notEqual(
-				corePid,
-				tracePid,
-				"the two names must lock independently and run as separate processes"
-			);
-			assert.ok(isAlive(corePid!), `core stub pid ${corePid} is not running`);
-			assert.ok(
-				isAlive(tracePid!),
-				`trace stub pid ${tracePid} is not running`
-			);
-		});
 
-		test("killing the child unlinks its PID file", async () => {
-			// Left last: it removes one of the processes the tests above assert on.
-			const pid = readPidFile(ctx.harper.dataRootDir, TRACE_PROBE_NAME);
-			assert.ok(pid, "no PID file to clean up");
-			const path = pidFilePath(ctx.harper.dataRootDir, TRACE_PROBE_NAME);
-
-			process.kill(pid!, "SIGTERM");
-
-			assert.ok(
-				await waitUntil(() => !existsSync(path)),
-				`${path} still exists after the process was killed. The 'exit' handler ` +
-					`Harper attaches is what releases the name; a stale PID file whose process ` +
-					`is gone blocks nothing, but one left holding a recycled pid would.`
+			const winners = observed.filter((r) => r.hasSpawnargs === true);
+			assert.equal(
+				winners.length,
+				1,
+				`${name}: exactly one thread may win the PID-file lock and actually spawn; ` +
+					`${winners.length} did. More than one means ${threads} copies of the agent ` +
+					`per node.`
 			);
-			assert.ok(
-				existsSync(pidFilePath(ctx.harper.dataRootDir, CORE_PROBE_NAME)),
-				"killing one agent must not release the other's lock"
+
+			const pids = new Set(observed.map((r) => r.pid));
+			assert.equal(
+				pids.size,
+				1,
+				`${name}: every thread must end up holding the same pid (winner and losers ` +
+					`alike); saw ${[...pids].join(", ")}`
 			);
-		});
-	}
-);
+
+			const filePid = readPidFile(ctx.harper.dataRootDir, name);
+			assert.equal(
+				filePid,
+				winners[0].pid,
+				`${name}: ${pidFilePath(ctx.harper.dataRootDir, name)} must hold the pid of ` +
+					`the one process that was started`
+			);
+			assert.ok(isAlive(filePid!), `${name}: pid ${filePid} is not running`);
+		}
+
+		// The check above is Harper's own bookkeeping. This one asks the OS.
+		const running = processesMatching(workspace.longLivedCommand);
+		assert.equal(
+			running.length,
+			2,
+			`expected exactly two stub processes (one per name) across ${threads} threads, ` +
+				`found ${running.length}: ${running.join(", ")}`
+		);
+	});
+
+	test("the loser of the race gets .pid but no .stdout", (t) => {
+		const losers = [CORE_PROBE_NAME, TRACE_PROBE_NAME].flatMap((name) =>
+			rowsFor(rows, `allowlisted:${name}`).filter(
+				(r) => r.hasSpawnargs === false
+			)
+		);
+		if (losers.length === 0) {
+			const spawned = [CORE_PROBE_NAME, TRACE_PROBE_NAME].flatMap((name) =>
+				rowsFor(rows, `allowlisted:${name}`).filter((r) => r.threw === false)
+			).length;
+			t.skip(
+				`no thread lost the PID-file race: ${threadsThatProbed(rows)} thread(s) ` +
+					`probed and ${spawned} spawn(s) succeeded, so no ExistingProcessWrapper ` +
+					`was produced to inspect`
+			);
+			return;
+		}
+		for (const row of losers) {
+			// Component code that does child.stdout.on(...) throws TypeError on
+			// exactly these threads, which is why the launcher branches on
+			// spawnargs before touching stdio.
+			assert.ok(
+				typeof row.pid === "number" && row.pid > 0,
+				`thread ${row.threadId}: the wrapper must carry the running pid`
+			);
+			assert.equal(
+				row.hasStdout,
+				false,
+				`thread ${row.threadId}: wrapper has no stdio`
+			);
+			assert.equal(
+				row.hasKill,
+				true,
+				`thread ${row.threadId}: wrapper exposes kill()`
+			);
+			assert.equal(
+				row.hasUnref,
+				true,
+				`thread ${row.threadId}: wrapper exposes unref()`
+			);
+		}
+	});
+
+	test("two distinct names yield two processes and two PID files", () => {
+		// This is the whole reason the core agent and the trace-agent can both run
+		// on one node: the lock is per `name`, not per command.
+		const corePid = readPidFile(ctx.harper.dataRootDir, CORE_PROBE_NAME);
+		const tracePid = readPidFile(ctx.harper.dataRootDir, TRACE_PROBE_NAME);
+
+		assert.ok(
+			corePid,
+			`missing ${pidFilePath(ctx.harper.dataRootDir, CORE_PROBE_NAME)}`
+		);
+		assert.ok(
+			tracePid,
+			`missing ${pidFilePath(ctx.harper.dataRootDir, TRACE_PROBE_NAME)}`
+		);
+		assert.notEqual(
+			corePid,
+			tracePid,
+			"the two names must lock independently and run as separate processes"
+		);
+		assert.ok(isAlive(corePid!), `core stub pid ${corePid} is not running`);
+		assert.ok(isAlive(tracePid!), `trace stub pid ${tracePid} is not running`);
+	});
+
+	test("killing the child unlinks its PID file", async () => {
+		// Left last: it removes one of the processes the tests above assert on.
+		const pid = readPidFile(ctx.harper.dataRootDir, TRACE_PROBE_NAME);
+		assert.ok(pid, "no PID file to clean up");
+		const path = pidFilePath(ctx.harper.dataRootDir, TRACE_PROBE_NAME);
+
+		process.kill(pid!, "SIGTERM");
+
+		assert.ok(
+			await waitUntil(() => !existsSync(path)),
+			`${path} still exists after the process was killed. The 'exit' handler ` +
+				`Harper attaches is what releases the name; a stale PID file whose process ` +
+				`is gone blocks nothing, but one left holding a recycled pid would.`
+		);
+		assert.ok(
+			existsSync(pidFilePath(ctx.harper.dataRootDir, CORE_PROBE_NAME)),
+			"killing one agent must not release the other's lock"
+		);
+	});
+});
 
 /**
  * Resolve both agent binaries the way a Harper application would. A version is
@@ -607,7 +605,9 @@ const BINARY_SKIP_REASON: string | false =
 suite(
 	"Datadog agent binaries under Harper spawn enforcement",
 	{ skip: BINARY_SKIP_REASON },
-	(ctx: ContextWithHarper) => {
+	(suiteContext) => {
+		// Same SuiteContext promotion as the suite above.
+		const ctx = suiteContext as ContextWithHarper;
 		const binaries = agentBinaries as { core: string; trace: string };
 		let workspace: Workspace;
 		let rows: ProbeRow[];
