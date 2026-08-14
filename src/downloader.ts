@@ -199,9 +199,7 @@ export class DatadogAgentDownloader {
 				throw new Error(`Failed to download source: ${response.statusText}`);
 			}
 
-			const arrayBuffer = await response.arrayBuffer();
-			const buffer = Buffer.from(arrayBuffer);
-			await fs.writeFile(tarballPath, buffer);
+			await fs.writeFile(tarballPath, Buffer.from(await response.arrayBuffer()));
 
 			logger.info('Extracting source code...');
 
