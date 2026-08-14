@@ -37,8 +37,14 @@ jobs:
       - name: Check formatting
         run: npm run lint:check
 
+      # Both configs. The root tsconfig excludes **/*.test.ts, and the
+      # integration suite runs under type stripping, which erases annotations
+      # without checking them; without the second command a type error in the
+      # suite merges green.
       - name: Type check
-        run: npm run typecheck
+        run: |
+          npm run typecheck
+          npm run typecheck:test
 
       # `npm test` is `node --test "test/**/*.test.js"`. The pattern is quoted so
       # node expands it rather than the shell, which is what makes the same
@@ -95,11 +101,10 @@ jobs:
         # The suite resolves binaries through dist/binary-manager.js.
         run: npm run build
 
-      # harper is not a devDependency: `npm test` must stay hermetic, and the
-      # unit tests never touch a real Harper. This suite boots one, so it is
-      # installed here; --no-save keeps package.json out of the diff.
-      - name: Install harper for the integration suite
-        run: npm i --no-save harper@^5.2.1
+      # harper is not a devDependency, but `npm ci` still installs the locked
+      # 5.2.1: @harperfast/integration-testing names it as a required peer and
+      # the lockfile pins the resolution. An explicit `npm i harper@^5.2.1`
+      # here would float past that pin to whatever 5.x npm serves today.
 
       # The Datadog-binary suite skips itself with a reason when the platform
       # package has no built binaries, so this passes on a checkout that has

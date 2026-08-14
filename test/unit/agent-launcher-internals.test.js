@@ -86,9 +86,18 @@ function findFreePort() {
 	});
 }
 
-/** An HTTP stub answering /info with `body`, or with a raw non-JSON payload. */
-function fakeReceiver({ status = 200, body, raw } = {}) {
+/**
+ * An HTTP stub answering only /info with `body`, or with a raw non-JSON
+ * payload. Any other path 404s: the probe URL is part of the contract under
+ * test, and a stub that answers everything lets a probe-path typo pass.
+ */
+function fakeReceiver({ status = 200, body, raw, path = "/info" } = {}) {
 	return http.createServer((request, response) => {
+		if (request.url !== path) {
+			response.writeHead(404, { "content-type": "application/json" });
+			response.end("{}");
+			return;
+		}
 		response.writeHead(status, { "content-type": "application/json" });
 		response.end(raw ?? JSON.stringify(body ?? {}));
 	});
@@ -166,6 +175,21 @@ test("a /info listing a /traces endpoint is the only healthy answer", async () =
 	const port = await listen(server);
 	try {
 		assert.equal(await isTraceReceiverHealthy(port), true);
+	} finally {
+		await closeServer(server);
+	}
+});
+
+test("the probe asks /info specifically, not just any answering path", async () => {
+	// A receiver serving the right body somewhere else must read as unhealthy,
+	// or a probe-URL typo in the launcher would ship green against this suite.
+	const server = fakeReceiver({
+		body: { endpoints: ["/v0.4/traces"] },
+		path: "/some-other-info",
+	});
+	const port = await listen(server);
+	try {
+		assert.equal(await isTraceReceiverHealthy(port), false);
 	} finally {
 		await closeServer(server);
 	}

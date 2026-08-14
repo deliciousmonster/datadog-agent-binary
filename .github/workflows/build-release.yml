@@ -56,8 +56,11 @@ jobs:
       - name: Check formatting
         run: npm run lint:check
 
+      # Both configs; the root tsconfig excludes **/*.test.ts.
       - name: Type check
-        run: npm run typecheck
+        run: |
+          npm run typecheck
+          npm run typecheck:test
 
       - name: Run npm test
         run: npm test

@@ -19,10 +19,12 @@ on:
   push:
     branches: [main]
     # A docs-only change does not need its own build of the Go agent. example/
-    # is NOT ignored: it ships in the package (see files[] in package.json), so
-    # an example-only change is a consumer-visible change and gets a release.
+    # is ignored because it no longer ships in the tarball (files[] in
+    # package.json); an example-only change reaches nobody through npm, so a
+    # release would rebuild four Go agents to publish identical content.
     paths-ignore:
       - "**/*.md"
+      - "example/**"
   workflow_dispatch:
     inputs:
       base:

@@ -257,12 +257,32 @@ jobs:
 
           echo "OK: the trace-agent bound 8126, advertised /v0.4/traces, and accepted a span."
 
-      # harper is not a devDependency: `npm test` must stay hermetic, and the
-      # unit tests never touch a real Harper. The integration suite boots one,
-      # so it is installed here; --no-save keeps package.json out of the diff.
-      - name: Install harper for the integration suite
+      # harper is not a devDependency, but `npm ci` already installed the locked
+      # 5.2.1: @harperfast/integration-testing names it as a required peer and
+      # the lockfile pins the resolution. An explicit `npm i harper@^5.2.1`
+      # here would float past that pin to whatever 5.x npm serves today.
+
+      # The suite turns any binary-resolution failure into a skip so test.yml
+      # stays green on binary-less checkouts, and the runner exits 0 on a
+      # skipped suite. Here the binaries were just built, so a skip IS the
+      # regression; resolve both the way the suite does and fail red first.
+      - name: Assert the built binaries are resolvable
         if: runner.os == 'Linux'
-        run: npm i --no-save harper@^5.2.1
+        run: |
+          node -e "
+          const { BinaryManager } = require('./dist/binary-manager.js');
+          const manager = new BinaryManager();
+          Promise.all([
+            manager.ensureBinary('core', 'not-a-published-version'),
+            manager.ensureBinary('trace', 'not-a-published-version'),
+          ]).then(([core, trace]) => {
+            console.log('resolvable:', core);
+            console.log('resolvable:', trace);
+          }).catch((error) => {
+            console.error('::error::built binaries are not resolvable, the suite below would silently skip: ' + error.message);
+            process.exit(1);
+          });
+          "
 
       # test.yml runs this suite against a checkout with no binaries, so its
       # Datadog-binary tests skip themselves. This is the one place the
