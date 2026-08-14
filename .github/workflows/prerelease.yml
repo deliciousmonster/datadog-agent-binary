@@ -2,16 +2,25 @@ name: Cut Prerelease
 
 # Creates and pushes the next `-next.N` tag, which triggers build-release.yml.
 #
+# Runs automatically on every push to main, and manually via workflow_dispatch.
+#
 # This exists so nobody hand-types a release tag. The tag is the only input to the
 # publish pipeline: it sets the npm version, and whether it parses as a semver
 # prerelease decides whether the build lands on `next` or takes over `latest` for every
 # consumer. A typo there is a bad default install, not a typo.
 #
-# The next prerelease number comes from the registry rather than package.json, because
-# the version in the working tree is whatever the last release set and says nothing
-# about what has been published since.
+# The next prerelease number is the highest already taken in EITHER the registry or the
+# git tags, plus one. Registry alone is not enough: a tag that failed to publish still
+# burns its number, and on a scope that is not published yet every lookup 404s and every
+# run would compute the same `.0`.
 
 on:
+  push:
+    branches: [main]
+    # A docs-only change does not need its own build of the Go agent.
+    paths-ignore:
+      - "**/*.md"
+      - "example/**"
   workflow_dispatch:
     inputs:
       base:
@@ -31,10 +40,19 @@ on:
         default: true
         type: boolean
 
+# Two pushes landing together must not compute the same N. Queue, never cancel:
+# a cancelled run leaves a commit on main with no release.
+concurrency:
+  group: cut-prerelease
+  cancel-in-progress: false
+
 jobs:
   cut:
     name: compute and push the tag
     runs-on: ubuntu-latest
+    # `[skip release]` in the subject is the escape hatch for a push that should not
+    # ship, e.g. a CI-only fix that would otherwise build four Go agents to prove nothing.
+    if: "!contains(github.event.head_commit.message, '[skip release]')"
     permissions:
       contents: write
     steps:
@@ -42,6 +60,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # A tag pushed with the default GITHUB_TOKEN does NOT start another workflow,
+          # so build-release.yml would never see it and this job would report success
+          # while shipping nothing. A PAT is the only thing that makes the chain fire.
+          token: ${{ secrets.REPO_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -59,40 +81,50 @@ jobs:
             BASE=$(node -p "require('./package.json').version.split('-')[0]")
           fi
           CHANNEL="${{ github.event.inputs.channel }}"
+          [ -z "$CHANNEL" ] && CHANNEL="next"
           PKG=$(node -p "require('./package.json').name")
 
           echo "Package: $PKG"
           echo "Base:    $BASE"
           echo "Channel: $CHANNEL"
 
-          # Ask the registry, not the working tree. A 404 (scope not published yet) is
-          # the normal bootstrap case and means we start at .0.
+          # A 404 (scope not published yet) is the normal bootstrap case, not an error.
           PUBLISHED=$(npm view "$PKG" versions --json 2>/dev/null || echo "[]")
+          # Tags are the other half of the truth: one exists for every release ever
+          # attempted, including the ones whose publish step failed.
+          TAGS=$(git tag -l "v${BASE}-${CHANNEL}.*" | tr '\n' ' ')
+
+          echo "Registry versions: $(echo "$PUBLISHED" | head -c 200)"
+          echo "Matching tags:     ${TAGS:-none}"
 
           NEXT=$(node -e '
-            const [base, channel, publishedJson] = process.argv.slice(1);
+            const [base, channel, publishedJson, tagList] = process.argv.slice(1);
+            const prefix = `${base}-${channel}.`;
+
             let published = [];
             try {
               const parsed = JSON.parse(publishedJson);
               published = Array.isArray(parsed) ? parsed : [parsed];
             } catch { /* nothing published yet */ }
 
-            const prefix = `${base}-${channel}.`;
-            const used = published
+            const fromTags = tagList.split(/\s+/).filter(Boolean).map((t) => t.replace(/^v/, ""));
+
+            const used = [...published, ...fromTags]
               .filter((v) => typeof v === "string" && v.startsWith(prefix))
               .map((v) => Number(v.slice(prefix.length)))
               .filter((n) => Number.isInteger(n));
 
             const n = used.length ? Math.max(...used) + 1 : 0;
             process.stdout.write(`${base}-${channel}.${n}`);
-          ' "$BASE" "$CHANNEL" "$PUBLISHED")
+          ' "$BASE" "$CHANNEL" "$PUBLISHED" "$TAGS")
 
           echo "Next version: $NEXT"
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"
           echo "tag=v$NEXT" >> "$GITHUB_OUTPUT"
 
-      # An existing tag is either rejected by the push or silently does nothing,
-      # leaving someone waiting for a release that never runs.
+      # Taking the max of both sources should make this unreachable. It stays because the
+      # failure it guards against is silent: an existing tag is either rejected by the
+      # push or does nothing, leaving someone waiting for a release that never runs.
       - name: Check the tag is free
         run: |
           set -euo pipefail
@@ -107,6 +139,23 @@ jobs:
           fi
           echo "OK: $TAG is free."
 
+      # A manual run defaults to a dry run so nobody ships by clicking the wrong button.
+      # An automatic run is the point of the workflow and always pushes.
+      - name: Decide whether to push
+        id: mode
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "push=true" >> "$GITHUB_OUTPUT"
+            echo "Automatic run: pushing the tag."
+          elif [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "push=false" >> "$GITHUB_OUTPUT"
+            echo "Dry run: nothing will be created."
+          else
+            echo "push=true" >> "$GITHUB_OUTPUT"
+            echo "Manual run with dry_run=false: pushing the tag."
+          fi
+
       - name: Summary
         run: |
           {
@@ -116,18 +165,18 @@ jobs:
             echo "|---|---|"
             echo "| Version | \`${{ steps.next.outputs.version }}\` |"
             echo "| Tag | \`${{ steps.next.outputs.tag }}\` |"
-            echo "| npm dist-tag | \`${{ github.event.inputs.channel }}\` |"
-            echo "| Dry run | \`${{ github.event.inputs.dry_run }}\` |"
+            echo "| Trigger | \`${{ github.event_name }}\` |"
+            echo "| Pushed | \`${{ steps.mode.outputs.push }}\` |"
             echo ""
             echo "Consumers install it with:"
             echo ""
             echo '```bash'
-            echo "npm install $(node -p "require('./package.json').name")@${{ github.event.inputs.channel }}"
+            echo "npm install $(node -p "require('./package.json').name")@next"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create and push the tag
-        if: github.event.inputs.dry_run != 'true'
+        if: steps.mode.outputs.push == 'true'
         run: |
           set -euo pipefail
           TAG="${{ steps.next.outputs.tag }}"
@@ -138,7 +187,7 @@ jobs:
           echo "Pushed $TAG. build-release.yml will now build and publish it."
 
       - name: Dry run notice
-        if: github.event.inputs.dry_run == 'true'
+        if: steps.mode.outputs.push != 'true'
         run: |
           echo "Dry run: nothing was created."
           echo "Re-run with dry_run=false to push ${{ steps.next.outputs.tag }}."

@@ -9,20 +9,20 @@ name: Verify Agent Build
 # src/downloader.ts) was never run until someone cut a release tag. A change that
 # broke it stayed invisible through review, merge, and every green `test` run.
 #
-# An agent build is tens of minutes, so this runs nightly and on pushes to main
-# rather than on every push; test.yml stays hermetic and fast.
+# No push trigger. prerelease.yml now cuts a tag on every push to main, and the
+# resulting build-release.yml run builds all four platforms and asserts the receiver,
+# so a push-triggered run here would be a fifth agent build proving a subset of the
+# same thing.
+#
+# The nightly is what this workflow is for now: the upstream pin, the toolchain, and
+# the Datadog build tasks can all break with no commit of ours, and nothing else
+# notices on a quiet day.
 #
 # One platform on purpose. linux-x86_64 is the deploy target (the Harper
 # component image), so a regression matters there first. The rest are covered at
 # release time. Use workflow_dispatch to build a different one before a release.
 
 on:
-  push:
-    branches: [main]
-    # Docs-only pushes cannot break a Go build.
-    paths-ignore:
-      - "**/*.md"
-      - "example/**"
   schedule:
     # Off the hour deliberately: jobs scheduled at :00 queue behind everyone
     # else's cron.
