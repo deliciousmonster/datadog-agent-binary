@@ -12,42 +12,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
-const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
-const isWindows = process.platform === 'win32';
+import { createDistSandbox, importDist } from '../support/harness.js';
 
-/**
- * getPinnedVersion() resolves the pin relative to its own module, so exercising
- * a missing or empty pin needs a copy of dist/ whose parent directory we own.
- * Same sandbox shape as test/e2e/harper-component.test.js, minus the stub
- * platform package it does not need.
- */
-function createSandbox() {
-	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ddpin-')));
-	fs.cpSync(path.join(REPO_ROOT, 'dist'), path.join(dir, 'dist'), {
-		recursive: true,
-	});
-	// The manifest carries "type": "module", which is what makes the copied dist/*.js
-	// load as ESM; without it Node falls back to per-file syntax detection.
-	fs.copyFileSync(path.join(REPO_ROOT, 'package.json'), path.join(dir, 'package.json'));
-	const targetModules = path.join(dir, 'node_modules');
-	fs.mkdirSync(targetModules);
-	const sourceModules = path.join(REPO_ROOT, 'node_modules');
-	for (const entry of fs.readdirSync(sourceModules)) {
-		const source = path.join(sourceModules, entry);
-		if (!fs.statSync(source).isDirectory()) continue;
-		fs.symlinkSync(source, path.join(targetModules, entry), isWindows ? 'junction' : 'dir');
-	}
-	return dir;
-}
-
-const sandbox = createSandbox();
+// getPinnedVersion() resolves the pin relative to its own module, so exercising
+// a missing or empty pin needs a copy of dist/ whose parent directory we own.
+const sandbox = createDistSandbox({ prefix: 'ddpin-' });
 const pinPath = path.join(sandbox, '.datadog-agent-version');
-// pathToFileURL because import() of a bare absolute path is rejected on Windows.
-const { DatadogAgentDownloader } = await import(pathToFileURL(path.join(sandbox, 'dist', 'downloader.js')).href);
+const { DatadogAgentDownloader } = await importDist('downloader.js', sandbox);
 
 test.after(() => {
 	fs.rmSync(sandbox, { recursive: true, force: true });

@@ -11,37 +11,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 import { findFreePort } from '../support/find-free-port.js';
+import { importDist, withEnv } from '../support/harness.js';
 
-const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
-const LAUNCHER_PATH = path.join(REPO_ROOT, 'dist', 'agent-launcher.js');
+const { receiverPort, isRunSubcommand, isTraceReceiverHealthy, onExit } = (await importDist('agent-launcher.js'))
+	.internalsForTesting;
 
-// pathToFileURL because import() of a bare absolute path is rejected on Windows.
-const { receiverPort, isRunSubcommand, isTraceReceiverHealthy, onExit } = (
-	await import(pathToFileURL(LAUNCHER_PATH).href)
-).internalsForTesting;
+/** The one variable every test here turns. */
+const withReceiverPort = (value, run) => withEnv('DD_APM_RECEIVER_PORT', value, run);
 
-async function withReceiverPortEnv(value, run) {
-	const previous = process.env.DD_APM_RECEIVER_PORT;
-	if (value === undefined) delete process.env.DD_APM_RECEIVER_PORT;
-	else process.env.DD_APM_RECEIVER_PORT = value;
+/** `run` against a server listening on an ephemeral 127.0.0.1 port. */
+async function withServer(server, run) {
+	const port = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 	try {
-		return await run();
+		return await run(port);
 	} finally {
-		if (previous === undefined) delete process.env.DD_APM_RECEIVER_PORT;
-		else process.env.DD_APM_RECEIVER_PORT = previous;
+		await new Promise((resolve) => server.close(resolve));
 	}
-}
-
-function listen(server) {
-	return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
-}
-
-function closeServer(server) {
-	return new Promise((resolve) => server.close(resolve));
 }
 
 /**
@@ -49,16 +36,19 @@ function closeServer(server) {
  * payload. Any other path 404s: the probe URL is part of the contract under
  * test, and a stub that answers everything lets a probe-path typo pass.
  */
-function fakeReceiver({ status = 200, body, raw, path = '/info' } = {}) {
-	return http.createServer((request, response) => {
-		if (request.url !== path) {
-			response.writeHead(404, { 'content-type': 'application/json' });
-			response.end('{}');
-			return;
-		}
-		response.writeHead(status, { 'content-type': 'application/json' });
-		response.end(raw ?? JSON.stringify(body ?? {}));
-	});
+function withReceiver({ status = 200, body, raw, path = '/info' } = {}, run) {
+	return withServer(
+		http.createServer((request, response) => {
+			if (request.url !== path) {
+				response.writeHead(404, { 'content-type': 'application/json' });
+				response.end('{}');
+				return;
+			}
+			response.writeHead(status, { 'content-type': 'application/json' });
+			response.end(raw ?? JSON.stringify(body ?? {}));
+		}),
+		run
+	);
 }
 
 /**
@@ -89,22 +79,20 @@ async function exitCodeFrom(run) {
 	}
 }
 
-test('receiverPort() defaults to 8126, the port dd-trace dials', async () => {
-	await withReceiverPortEnv(undefined, () => {
+test('receiverPort() defaults to 8126, the port dd-trace dials', () =>
+	withReceiverPort(undefined, () => {
 		assert.equal(receiverPort(), 8126);
-	});
-});
+	}));
 
-test('receiverPort() honours DD_APM_RECEIVER_PORT', async () => {
-	await withReceiverPortEnv('9126', () => {
+test('receiverPort() honours DD_APM_RECEIVER_PORT', () =>
+	withReceiverPort('9126', () => {
 		assert.equal(receiverPort(), 9126);
-	});
-});
+	}));
 
 test('receiverPort() falls back on an unusable override instead of binding it', async () => {
 	// listen(NaN) and listen(0) both "succeed", on a port no tracer will dial.
 	for (const bad of ['banana', '0', '-1']) {
-		await withReceiverPortEnv(bad, () => {
+		await withReceiverPort(bad, () => {
 			assert.equal(receiverPort(), 8126, `override "${bad}"`);
 		});
 	}
@@ -126,56 +114,33 @@ test('isTraceReceiverHealthy() is false when nothing listens', async () => {
 	assert.equal(await isTraceReceiverHealthy(await findFreePort()), false);
 });
 
-test('a /info listing a /traces endpoint is the only healthy answer', async () => {
-	const server = fakeReceiver({
-		body: { endpoints: ['/v0.4/traces', '/v0.7/config'] },
-	});
-	const port = await listen(server);
-	try {
+test('a /info listing a /traces endpoint is the only healthy answer', () =>
+	withReceiver({ body: { endpoints: ['/v0.4/traces', '/v0.7/config'] } }, async (port) => {
 		assert.equal(await isTraceReceiverHealthy(port), true);
-	} finally {
-		await closeServer(server);
-	}
-});
+	}));
 
-test('the probe asks /info specifically, not just any answering path', async () => {
+test('the probe asks /info specifically, not just any answering path', () =>
 	// A receiver serving the right body somewhere else must read as unhealthy,
 	// or a probe-URL typo in the launcher would ship green against this suite.
-	const server = fakeReceiver({
-		body: { endpoints: ['/v0.4/traces'] },
-		path: '/some-other-info',
-	});
-	const port = await listen(server);
-	try {
+	withReceiver({ body: { endpoints: ['/v0.4/traces'] }, path: '/some-other-info' }, async (port) => {
 		assert.equal(await isTraceReceiverHealthy(port), false);
-	} finally {
-		await closeServer(server);
-	}
-});
+	}));
 
 test('an HTTP listener without a /traces endpoint is not a receiver', async () => {
 	// Any leftover health-check stub accepts connections and answers 200;
 	// treating it as "APM is handled" is the failure this probe exists to stop.
 	for (const body of [{ endpoints: ['/health'] }, { endpoints: [] }, {}, { endpoints: 'not-an-array' }]) {
-		const server = fakeReceiver({ body });
-		const port = await listen(server);
-		try {
+		await withReceiver({ body }, async (port) => {
 			assert.equal(await isTraceReceiverHealthy(port), false, `body ${JSON.stringify(body)} passed for a trace-agent`);
-		} finally {
-			await closeServer(server);
-		}
+		});
 	}
 });
 
 test('a non-2xx or non-JSON /info answer is unhealthy, not an error', async () => {
 	for (const options of [{ status: 503, body: { endpoints: ['/v0.4/traces'] } }, { raw: '<html>It works!</html>' }]) {
-		const server = fakeReceiver(options);
-		const port = await listen(server);
-		try {
+		await withReceiver(options, async (port) => {
 			assert.equal(await isTraceReceiverHealthy(port), false);
-		} finally {
-			await closeServer(server);
-		}
+		});
 	}
 });
 
@@ -188,13 +153,13 @@ test('a listener that accepts and never answers times out to unhealthy', async (
 		sockets.add(socket);
 		socket.on('close', () => sockets.delete(socket));
 	});
-	const port = await listen(server);
-	try {
-		assert.equal(await isTraceReceiverHealthy(port, 250), false);
-	} finally {
-		for (const socket of sockets) socket.destroy();
-		await closeServer(server);
-	}
+	await withServer(server, async (port) => {
+		try {
+			assert.equal(await isTraceReceiverHealthy(port, 250), false);
+		} finally {
+			for (const socket of sockets) socket.destroy();
+		}
+	});
 });
 
 test('onExit() treats a signal as a clean stop', async () => {
@@ -209,25 +174,20 @@ test('a failing core agent exits non-zero; no receiver probe applies', async () 
 	assert.equal(await exitCodeFrom(() => onExit('core', 'datadog-agent', 1, null)), 1);
 });
 
-test('trace rc=1 with a healthy receiver on the port is already-running', async () => {
-	const server = fakeReceiver({ body: { endpoints: ['/v0.4/traces'] } });
-	const port = await listen(server);
-	try {
-		await withReceiverPortEnv(String(port), async () => {
+test('trace rc=1 with a healthy receiver on the port is already-running', () =>
+	withReceiver({ body: { endpoints: ['/v0.4/traces'] } }, (port) =>
+		withReceiverPort(String(port), async () => {
 			assert.equal(
 				await exitCodeFrom(() => onExit('trace', 'datadog-trace-agent', 1, null)),
 				0,
 				'EADDRINUSE against a live receiver means APM is served; rc must be 0'
 			);
-		});
-	} finally {
-		await closeServer(server);
-	}
-});
+		})
+	));
 
 test('trace rc=1 with nothing on the port stays a failure', async () => {
 	const port = await findFreePort();
-	await withReceiverPortEnv(String(port), async () => {
+	await withReceiverPort(String(port), async () => {
 		assert.equal(
 			await exitCodeFrom(() => onExit('trace', 'datadog-trace-agent', 1, null)),
 			1,
@@ -236,17 +196,12 @@ test('trace rc=1 with nothing on the port stays a failure', async () => {
 	});
 });
 
-test('trace rc=1 next to an unrelated listener stays a failure', async () => {
+test('trace rc=1 next to an unrelated listener stays a failure', () =>
 	// The regression guarded here: a bare port check cannot tell EADDRINUSE
 	// against a real receiver from a misconfigured agent dying beside a stray
 	// socket, and the latter must stay loud.
-	const server = fakeReceiver({ body: { endpoints: ['/health'] } });
-	const port = await listen(server);
-	try {
-		await withReceiverPortEnv(String(port), async () => {
+	withReceiver({ body: { endpoints: ['/health'] } }, (port) =>
+		withReceiverPort(String(port), async () => {
 			assert.equal(await exitCodeFrom(() => onExit('trace', 'datadog-trace-agent', 1, null)), 1);
-		});
-	} finally {
-		await closeServer(server);
-	}
-});
+		})
+	));

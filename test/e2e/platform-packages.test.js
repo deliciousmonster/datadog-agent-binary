@@ -1,24 +1,12 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
-function findRepoRoot(start) {
-	let dir = start;
-	while (!fs.existsSync(path.join(dir, 'package.json'))) {
-		const parent = path.dirname(dir);
-		if (parent === dir) throw new Error('Could not locate package root');
-		dir = parent;
-	}
-	return dir;
-}
+import { PACKAGE_MANIFEST as mainPkg, REPO_ROOT, makeTempDir } from '../support/harness.js';
 
-const REPO_ROOT = findRepoRoot(import.meta.dirname);
-const mainPkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
-// Derived, never hardcoded: a re-scope must not leave this test asserting the old one.
 const PACKAGE_NAME = mainPkg.name;
 
 // Every published binary, per platform: the accessor the platform package must
@@ -43,31 +31,20 @@ const WINDOWS_BINARIES = [
 const EXPECTED = {
 	// libc on the Linux entries: CGO_ENABLED=1 links glibc, so npm must skip
 	// these packages on musl instead of installing a binary that dies ENOENT.
-	'linux-x86_64': {
-		os: 'linux',
-		cpu: 'x64',
-		libc: ['glibc'],
-		binaries: UNIX_BINARIES,
-	},
-	'linux-arm64': {
-		os: 'linux',
-		cpu: 'arm64',
-		libc: ['glibc'],
-		binaries: UNIX_BINARIES,
-	},
+	'linux-x86_64': { os: 'linux', cpu: 'x64', libc: ['glibc'], binaries: UNIX_BINARIES },
+	'linux-arm64': { os: 'linux', cpu: 'arm64', libc: ['glibc'], binaries: UNIX_BINARIES },
 	'macos-arm64': { os: 'darwin', cpu: 'arm64', binaries: UNIX_BINARIES },
 	'windows-x86_64': { os: 'win32', cpu: 'x64', binaries: WINDOWS_BINARIES },
 };
 
 let workDir;
 let npmDir;
+/** Every generated package.json, read back once the generator has run. */
+let generated;
 
 before(() => {
 	// Run the generator in an isolated copy so we don't write into the repo.
-	// realpath: on macOS os.tmpdir() is /var/... which is a symlink to /private/var,
-	// and the generated index.js reports __dirname (already resolved). Without this
-	// the path assertions compare two spellings of the same directory.
-	workDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ddab-platform-pkgs-')));
+	workDir = makeTempDir('ddab-platform-pkgs-');
 	fs.mkdirSync(path.join(workDir, 'scripts'));
 	fs.mkdirSync(path.join(workDir, 'dist'));
 	fs.copyFileSync(
@@ -82,6 +59,7 @@ before(() => {
 		stdio: 'ignore',
 	});
 	npmDir = path.join(workDir, 'npm');
+	generated = readGenerated();
 });
 
 after(() => {
@@ -100,12 +78,10 @@ function readGenerated() {
 }
 
 test('generates exactly the expected set of platform packages', () => {
-	const generated = Object.keys(readGenerated()).sort();
-	assert.deepEqual(generated, Object.keys(EXPECTED).sort());
+	assert.deepEqual(Object.keys(generated).sort(), Object.keys(EXPECTED).sort());
 });
 
 test('each platform package has npm-valid os/cpu (Node values, not human-readable)', () => {
-	const generated = readGenerated();
 	for (const [name, expected] of Object.entries(EXPECTED)) {
 		const pkg = generated[name];
 		assert.ok(pkg, `missing generated package: ${name}`);
@@ -115,7 +91,7 @@ test('each platform package has npm-valid os/cpu (Node values, not human-readabl
 });
 
 test('generated package names exactly match the main package optionalDependencies', () => {
-	const generatedNames = Object.keys(readGenerated())
+	const generatedNames = Object.keys(generated)
 		.map((n) => `${PACKAGE_NAME}-${n}`)
 		.sort();
 	const declared = Object.keys(mainPkg.optionalDependencies).sort();
@@ -123,7 +99,6 @@ test('generated package names exactly match the main package optionalDependencie
 });
 
 test('all platform packages are pinned to the main package version', () => {
-	const generated = readGenerated();
 	for (const [name, pkg] of Object.entries(generated)) {
 		assert.equal(pkg.version, mainPkg.version, `${name} version should equal main package version ${mainPkg.version}`);
 	}
@@ -133,7 +108,6 @@ test('all platform packages are pinned to the main package version', () => {
 });
 
 test('linux packages declare libc glibc; everywhere else the field is absent', () => {
-	const generated = readGenerated();
 	for (const [name, expected] of Object.entries(EXPECTED)) {
 		const pkg = generated[name];
 		assert.ok(pkg, `missing generated package: ${name}`);
@@ -160,7 +134,7 @@ test("os/cpu never leak this project's internal platform names", () => {
 	// optional dependency was skipped in silence, which looks identical to "the
 	// platform isn't supported".
 	const INTERNAL_NAMES = new Set(['macos', 'windows', 'x86_64']);
-	for (const [name, pkg] of Object.entries(readGenerated())) {
+	for (const [name, pkg] of Object.entries(generated)) {
 		for (const value of [...pkg.os, ...pkg.cpu]) {
 			assert.ok(
 				!INTERNAL_NAMES.has(value),
@@ -184,9 +158,10 @@ function loadIndex(platformName) {
 	return requireCjs(indexPath);
 }
 
-test('every platform package exports an accessor for every binary it ships', () => {
+test('every binary has an exported accessor, resolving bin/<binary> inside its own package', () => {
 	for (const [name, expected] of Object.entries(EXPECTED)) {
 		const index = loadIndex(name);
+		const packageDir = path.join(npmDir, name);
 		for (const binary of expected.binaries) {
 			assert.equal(
 				typeof index[binary.accessor],
@@ -195,15 +170,6 @@ test('every platform package exports an accessor for every binary it ships', () 
 					`the ${binary.kind} binary by calling exactly that name, and a package ` +
 					`missing it resolves nothing while still installing cleanly`
 			);
-		}
-	}
-});
-
-test('each accessor resolves bin/<binary> inside its own package', () => {
-	for (const [name, expected] of Object.entries(EXPECTED)) {
-		const index = loadIndex(name);
-		const packageDir = path.join(npmDir, name);
-		for (const binary of expected.binaries) {
 			const resolved = index[binary.accessor]();
 			assert.equal(
 				resolved,
@@ -252,7 +218,7 @@ test('--dummy generates the package layout with no bin/ at all', () => {
 });
 
 test('every platform package publishes bin/ and index.js', () => {
-	for (const [name, pkg] of Object.entries(readGenerated())) {
+	for (const [name, pkg] of Object.entries(generated)) {
 		for (const entry of ['bin/', 'index.js']) {
 			assert.ok(
 				pkg.files.includes(entry),
