@@ -82,8 +82,10 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          # The image the component deploys onto is node:24-trixie.
-          node-version: "24"
+          # .nvmrc holds the one CI Node version (Harper v5's engines floor).
+          # The deploy image is node:24-trixie; the unit-test matrix above
+          # keeps 24 covered.
+          node-version-file: ".nvmrc"
           cache: "npm"
 
       - name: Install dependencies

@@ -17,7 +17,6 @@ on:
         required: false
 
 env:
-  NODE_VERSION: "22"
   # Must satisfy the go.mod `go` directive of the agent release pinned in
   # .datadog-agent-version; 7.79.x needs Go 1.25.x. Bump this when the pin moves
   # across a Go requirement.
@@ -48,7 +47,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: ".nvmrc"
           cache: "npm"
 
       - name: Install dependencies
@@ -79,7 +78,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: ".nvmrc"
 
       - name: Check the publish path before building
         env:
@@ -137,7 +136,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: ".nvmrc"
           cache: "npm"
 
       - name: Setup Go
@@ -580,7 +579,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: ".nvmrc"
           cache: "npm"
           registry-url: "https://registry.npmjs.org"
 
