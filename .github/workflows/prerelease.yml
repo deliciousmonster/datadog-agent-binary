@@ -58,7 +58,10 @@ jobs:
     # ship, e.g. a CI-only fix that would otherwise build four Go agents to prove nothing.
     if: "!contains(github.event.head_commit.message, '[skip release]')"
     permissions:
-      contents: write
+      # Read, not write: the tag is pushed with REPO_TOKEN (the PAT persisted by
+      # checkout), never with GITHUB_TOKEN, so write here would only widen what a
+      # compromised step could reach.
+      contents: read
       # The Test gate below reads workflow runs with the default GITHUB_TOKEN.
       actions: read
     steps:
@@ -71,16 +74,31 @@ jobs:
       - name: Determine release mode
         id: arm
         env:
+          # Both through env, never interpolated into the script: `${{ }}` is
+          # spliced in as text before bash parses the line, so a variable holding
+          # shell syntax would run inside a step that carries the PAT.
           REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+          RELEASE_ENABLED: ${{ vars.RELEASE_ENABLED }}
         run: |
           set -euo pipefail
-          if [ "${{ vars.RELEASE_ENABLED }}" != 'true' ]; then
-            echo "armed=false" >> "$GITHUB_OUTPUT"
-            echo "RELEASE_ENABLED is not 'true'. Computing the next version for the record; no tag, no publish."
-            exit 0
-          fi
+          # Exactly true, exactly false, or unset. Treating an unrecognized value
+          # as "not armed" would rebuild the very conflation this gate removes:
+          # someone who typed `True` believes releases are on, and every run
+          # would stay green while nothing ever shipped.
+          case "${RELEASE_ENABLED:-false}" in
+            true) ;;
+            false)
+              echo "armed=false" >> "$GITHUB_OUTPUT"
+              echo "Releases are not enabled. Computing the next version for the record; no tag, no publish."
+              exit 0
+              ;;
+            *)
+              echo "::error::RELEASE_ENABLED is '${RELEASE_ENABLED}', which is neither 'true' nor 'false'. Refusing to guess: if this was meant to arm releases, the run would otherwise stay green forever while shipping nothing."
+              exit 1
+              ;;
+          esac
           if [ -z "${REPO_TOKEN}" ]; then
-            echo "::error::RELEASE_ENABLED is 'true' but REPO_TOKEN is not set. A tag pushed with the default GITHUB_TOKEN does not start another workflow, so build-release.yml would never run and this job would report success while shipping nothing. Add a PAT with contents:write as REPO_TOKEN, or unset RELEASE_ENABLED to go back to reporting-only runs."
+            echo "::error::RELEASE_ENABLED is 'true' but REPO_TOKEN is not set. A tag pushed with the default GITHUB_TOKEN does not start another workflow, so build-release.yml would never run and this job would report success while shipping nothing. Add a PAT with contents:write as REPO_TOKEN, or set RELEASE_ENABLED to 'false' to go back to reporting-only runs."
             exit 1
           fi
           echo "armed=true" >> "$GITHUB_OUTPUT"
@@ -96,6 +114,10 @@ jobs:
           # The fallback is what lets an unarmed run still read tags and report the
           # version it would have cut; checkout rejects an empty token outright.
           token: ${{ secrets.REPO_TOKEN || github.token }}
+          # Persisting is what lets `git push origin <tag>` below reuse the PAT.
+          # An unarmed run never pushes, so leaving a credential in .git/config
+          # for the rest of the job would arm nothing but an attacker.
+          persist-credentials: ${{ steps.arm.outputs.armed == 'true' }}
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -162,21 +184,34 @@ jobs:
       # An automatic run is the point of the workflow and always pushes.
       - name: Decide whether to push
         id: mode
+        env:
+          ARMED: ${{ steps.arm.outputs.armed }}
+          EVENT: ${{ github.event_name }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: |
           set -euo pipefail
-          if [ "${{ steps.arm.outputs.armed }}" != 'true' ]; then
-            echo "push=false" >> "$GITHUB_OUTPUT"
-            echo "Releases are not enabled; nothing will be created."
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            echo "push=true" >> "$GITHUB_OUTPUT"
-            echo "Automatic run: pushing the tag."
-          elif [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            echo "push=false" >> "$GITHUB_OUTPUT"
-            echo "Dry run: nothing will be created."
-          else
-            echo "push=true" >> "$GITHUB_OUTPUT"
-            echo "Manual run with dry_run=false: pushing the tag."
+          if [ "${ARMED}" = 'true' ]; then
+            if [ "${EVENT}" = 'push' ]; then
+              echo "push=true" >> "$GITHUB_OUTPUT"
+              echo "Automatic run: pushing the tag."
+            elif [ "${DRY_RUN}" = 'true' ]; then
+              echo "push=false" >> "$GITHUB_OUTPUT"
+              echo "Dry run: nothing will be created."
+            else
+              echo "push=true" >> "$GITHUB_OUTPUT"
+              echo "Manual run with dry_run=false: pushing the tag."
+            fi
+            exit 0
           fi
+          # A push to main promised nothing, so reporting the version and stopping
+          # is honest. Dispatching with dry_run=false IS the promise, and answering
+          # it green would be the silent no-op this whole gate exists to prevent.
+          if [ "${EVENT}" != 'push' ] && [ "${DRY_RUN}" != 'true' ]; then
+            echo "::error::A release was requested (dry_run=false) but releases are not enabled, so no tag can be cut. Set RELEASE_ENABLED to 'true' and add REPO_TOKEN and NPM_TOKEN first."
+            exit 1
+          fi
+          echo "push=false" >> "$GITHUB_OUTPUT"
+          echo "Releases are not enabled; nothing will be created."
 
       # REPO_TOKEN gets the tag pushed and buys nothing at registry.npmjs.org. The
       # publish in build-release.yml fails only after every platform's Go build:
@@ -257,6 +292,10 @@ jobs:
               echo ""
               echo "Setting the variable without the secrets fails this job loudly, which"
               echo "is the point: once releases are promised, silence is a defect."
+            elif [ "${{ steps.mode.outputs.push }}" != 'true' ]; then
+              echo "**Dry run: the tag above was computed but not created.**"
+              echo ""
+              echo "Re-run with \`dry_run: false\` to cut it."
             else
               echo "Consumers install it with:"
               echo ""
