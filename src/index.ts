@@ -102,9 +102,21 @@ export class DatadogAgentBuilder {
 	}
 }
 
-export * from "./types.js";
-export * from "./platform.js";
-export * from "./downloader.js";
-export * from "./builders/index.js";
-export * from "./logger.js";
-export * from "./binary-manager.js";
+// The named public API, instead of six export *. Everything else (the launcher,
+// the logger, the per-OS builder classes, SUPPORTED_PLATFORMS) is reached through
+// its own module by the scripts and shims that need it, and a wildcard here would
+// silently promote every future internal helper to public surface.
+export { BinaryManager } from "./binary-manager.js";
+export { DatadogAgentDownloader } from "./downloader.js";
+export { createBuilder } from "./builders/index.js";
+export { Platform } from "./platform.js";
+export type {
+	AgentBinaryDescriptor,
+	AgentBinaryKind,
+	Architecture,
+	BuildConfig,
+	BuildResult,
+	DownloadConfig,
+	Logger,
+	OS,
+} from "./types.js";
