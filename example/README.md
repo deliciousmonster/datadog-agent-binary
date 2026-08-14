@@ -13,9 +13,24 @@ error on either side, so this example checks for it explicitly.
 
 | | Version | Why |
 | --- | --- | --- |
-| Harper | >= 5.2 | `threads.preload` / `threads.preloadRequire` |
+| Harper | `>= 5.1.18` | `threads.preload` / `threads.preloadRequire` |
 | Node | `^22.18 \|\| >=24` | Harper 5.2's `engines.node`; `dd-trace` 6 needs >= 22 |
 | `@deliciousmonster/datadog-agent-binary` | a build that ships `trace-agent` | Earlier releases packaged the core agent only |
+
+**Check your Harper version first; below the floor this fails silently.** `preloadRequire`
+landed in the 5.1 line at **5.1.18** (5.1.17 has no reference to it anywhere in `dist/`) and
+is in every 5.2. An older Harper does not reject the unknown config key — it ignores it, the
+tracer is never initialised, and `GET /Work/` still returns a real-looking `traceId` from a
+`NoopSpan`. The only signal is `tracerInitialized: false` in the response.
+
+```bash
+node -e "console.log(require('harper/package.json').version)"   # or: harper --version
+```
+
+Verified end to end on **5.1.22** and **5.2.2**: identical results on both — spawn
+interception active, one core agent and one trace-agent, `tracerInitialized: true`, spans
+reaching the intake, DogStatsD samples aggregating, and `hdb.log` tailed. The example needs
+no version-specific code.
 
 ## Files
 
@@ -24,7 +39,7 @@ error on either side, so this example checks for it explicitly.
 | `resources.js` | Component entry. REST resources that log and trace. |
 | `dd-supervisor.js` | Starts both agents. Reached by a **relative** import, which is what makes the singleton real. |
 | `config.yaml` | Component config: `rest` + `jsResource`. |
-| `harper-config.yaml` | Keys to merge into the node's `harperdb-config.yaml`. |
+| `harper-config.example.yaml` | Keys to merge into the node's `harperdb-config.yaml`. |
 | `conf.d/harperdb.d/conf.yaml` | Datadog log source template for `hdb.log`. |
 
 ## 1. Install
@@ -43,17 +58,30 @@ which until the release is published you build and install yourself:
 cd ..                                        # repo root
 npm run platform-package                     # builds the agents, writes npm/<platform>/
 cd npm/<your-platform> && npm pack --pack-destination ../..
-cd ../../example
-npm install --no-save ../deliciousmonster-datadog-agent-binary-*-*.tgz
+cd ..
+npm install --no-save ./deliciousmonster-datadog-agent-binary-*-*.tgz   # repo root, not example/
 ```
 
-Confirm the trace-agent is actually there before anything downstream. If this prints
-nothing, no amount of configuration will produce a trace:
+**Install that tarball at the repo root, not inside `example/`.** `file:..` makes
+`example/node_modules/@deliciousmonster/datadog-agent-binary` a symlink to the repo root,
+and Node resolves bare specifiers from the importing module's realpath — so
+`binary-manager.js` looks for the platform package in the *repo root's* `node_modules`.
+Install it under `example/` and it is never consulted: resolution silently falls through
+to the build-from-source path and uses `build/<platform>/bin/` instead. That still runs,
+which is the problem — it looks like the packaged install works when it has not been
+exercised at all.
+
+Confirm the trace-agent is actually there before anything downstream, and read the line
+above the path, not just the path:
 
 ```bash
 node -e "const {BinaryManager}=require('@deliciousmonster/datadog-agent-binary'); \
   new BinaryManager().ensureTraceAgentBinary().then(console.log)"
 ```
+
+`Using packaged Datadog trace agent binary: …/node_modules/@deliciousmonster/…` is the
+result you want. `falling back to the build-from-source lookup` means the platform package
+is not resolvable and you are testing something other than what ships.
 
 ## 2. Print the two binary paths
 
@@ -67,18 +95,32 @@ node -e "const {BinaryManager}=require('@deliciousmonster/datadog-agent-binary')
 ```
 
 ```
-core : /path/to/example/node_modules/@deliciousmonster/datadog-agent-binary-linux-x86_64/bin/datadog-agent
-trace: /path/to/example/node_modules/@deliciousmonster/datadog-agent-binary-linux-x86_64/bin/trace-agent
+core : /path/to/repo/node_modules/@deliciousmonster/datadog-agent-binary-linux-x86_64/bin/datadog-agent
+trace: /path/to/repo/node_modules/@deliciousmonster/datadog-agent-binary-linux-x86_64/bin/trace-agent
 ```
+
+Under this `file:..` layout the paths sit in the **repo root's** `node_modules`, not
+`example/`'s, for the resolution reason in step 1. In a normal deployment, where the
+package is installed from the registry rather than linked, they are under the
+application's own `node_modules`. Either way, use what the command prints.
 
 Neither path may contain a space: Harper compares `command.split(" ")[0]`, so a path with a
 space in it cannot be allowlisted by any configuration.
 
 ## 3. Configure the node
 
-Merge the blocks from `harper-config.yaml` into `<ROOTPATH>/harperdb-config.yaml`,
+Merge the blocks from `harper-config.example.yaml` into `<ROOTPATH>/harperdb-config.yaml`,
 substituting the two paths from step 2. Merge, do not replace: Harper reads the config file
 it finds and does not fall back to `defaultConfig.yaml` for keys a hand-written file omits.
+
+**The template's name ends in `.example.yaml` deliberately.** Harper resolves its node
+config as `harper-config.yaml` first (`HARPER_CONFIG_FILE`) and only then
+`harperdb-config.yaml` (`HDB_CONFIG_FILE`). A file literally named `harper-config.yaml`
+sitting in the application directory is therefore read as the node's real configuration:
+`harper run .` would load the placeholder paths below, leave `rootPath` unset so `database`
+and `keys/` resolve against the app directory, fail startup on
+`Specified path <app>/database does not exist`, and then **overwrite the template** with a
+generated config. Keep the shipped template under a name Harper does not claim.
 
 ```yaml
 applications:

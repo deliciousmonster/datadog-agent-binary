@@ -5,6 +5,54 @@ Datadog Agent version they ship.
 
 ## Unreleased
 
+### Changed: the bundled agent moves 7.79.1 → 7.82.1
+
+`.datadog-agent-version` now pins 7.82.1, the current upstream release. The pin is
+deliberate, not floating: see the version-pinning entry below for why `latest` is
+reachable only by asking for it.
+
+### Added: the build refuses a mismatched Go toolchain
+
+Upstream pins the compiler it tests against in `.go-version`, and nothing here read it.
+Three build paths had therefore drifted to three different compilers at once:
+
+| path | Go used | source asked for |
+| --- | --- | --- |
+| CI (`GO_VERSION`) | 1.25.8 | 1.25.10 |
+| local build | whatever was on `PATH` | 1.25.10 |
+
+That is how a package built from 1.25.10-pinned source came to ship a `go1.26.4` binary,
+the same class of silent drift as the floating agent version. `AgentBuilder` now reads
+`.go-version` from the cloned source before building:
+
+- A **minor** mismatch is fatal and names both versions, because Go's runtime and crypto
+  defaults move between minors.
+- A **patch** gap warns and continues, since upstream floats those.
+- A source shipping no `.go-version` has no opinion and is not blocked, so old tags still
+  build.
+
+`GO_VERSION` in both workflows moves 1.25.8 → 1.26.5 to match what 7.82.1 pins. It stays
+a literal because `setup-go` runs before the agent source is cloned; the guard above is
+what makes a stale copy fail loudly instead of silently building on the wrong compiler.
+
+### Changed: TypeScript 7
+
+`typescript` 5.9 → 7.0, `prettier` 3.6 → 3.9, `lint-staged` 16 → 17. All dev-only; the
+shipped runtime dependencies are still `commander` and `tar`.
+
+TypeScript 7 no longer auto-includes every package under `node_modules/@types`, so
+`tsconfig.json` now names `"types": ["node"]`. Without it the entire Node global surface
+(`process`, `console`, `node:*`) is invisible and the build fails with TS2591 on the
+first `process` reference.
+
+`@types/node` deliberately stays on the 22 line rather than moving to 26. The engines
+floor is `^22.18.0 || >=24.0.0`, and typing against Node 26 would let code that calls
+APIs absent from Node 22.18 compile clean and fail at runtime for a consumer on the
+version we advertise. The types track the floor, not the newest release.
+
+`lint-staged` 17 requires Node `>=22.22.1`, above our `^22.18.0` floor. That constrains
+contributors only, never consumers, since it never enters the published tarball.
+
 ### Removed: `--build-args`, `BuildOptions.buildArgs`, `BuildConfig.buildArgs` (breaking)
 
 The flag was parsed and stored, and nothing ever read it: build args resolve per

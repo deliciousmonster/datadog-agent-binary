@@ -1,4 +1,5 @@
 import { execSync, spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { AgentBinaryDescriptor, AgentBinaryKind, BuildConfig, BuildResult, OS } from './types.js';
 import { errorMessage, logger } from './logger.js';
@@ -92,7 +93,51 @@ export class AgentBuilder {
 		}
 	}
 
+	/** Absent on old tags rather than an error, so a missing file means "no opinion". */
+	protected async readGoVersionPin(): Promise<string | undefined> {
+		try {
+			return await readFile(path.join(this.config.sourceDir, '.go-version'), 'utf8');
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
+	 * Upstream pins the toolchain it tests against in `.go-version`. Nothing here used to
+	 * read it, so three build paths drifted to three different compilers: CI hardcoded
+	 * 1.25.8, a local build took whatever was on PATH, and the source asked for 1.25.10.
+	 * That is how a package built from 1.25.10-pinned source came to ship a go1.26.4
+	 * binary. A minor-version gap is refused because Go's runtime and crypto defaults
+	 * move between minors; a patch gap only warns, since upstream floats those.
+	 */
+	protected async checkGoVersion(): Promise<void> {
+		const pinned = (await this.readGoVersionPin())?.trim();
+		if (!pinned) {
+			logger.debug('Source ships no .go-version; skipping toolchain check');
+			return;
+		}
+		const local = /go(\d+\.\d+(?:\.\d+)?)/.exec(await this.executeCommand('go version'))?.[1];
+		if (!local) {
+			logger.warn(`Could not parse the local Go version; source pins ${pinned}`);
+			return;
+		}
+		const minor = (v: string) => v.split('.').slice(0, 2).join('.');
+		if (minor(local) !== minor(pinned)) {
+			throw new Error(
+				`Go ${minor(local)} cannot build this source, which pins Go ${pinned} in .go-version. ` +
+					`Install Go ${pinned} (or set GOTOOLCHAIN=go${pinned}) and build again.`
+			);
+		}
+		if (local !== pinned) {
+			logger.warn(`Building with Go ${local}; the source pins ${pinned}. Patch gap, continuing.`);
+		} else {
+			logger.debug(`Go ${local} matches the pinned toolchain`);
+		}
+	}
+
 	protected async buildCommon(): Promise<void> {
+		await this.checkGoVersion();
+
 		logger.info('Checking for dda installation...');
 		await this.ensureDdaInstalled();
 
@@ -258,21 +303,50 @@ export class AgentBuilder {
 		await mkdir(this.config.outputDir, { recursive: true });
 	}
 
+	/**
+	 * dda must land in an isolated environment, never a user-site install. It locates its
+	 * own data files at `sysconfig.get_path("data")/…/dda-data`, which resolves to the
+	 * interpreter *prefix*; `pip install --user` writes them to the *user* scheme instead,
+	 * so the two never meet and every subcommand dies with
+	 * `FileNotFoundError: .../dda-data/uv.lock`. A bare `pip install dda` behind a pyenv
+	 * shim is exactly that case, which is why it is refused rather than attempted: it
+	 * appears to succeed and breaks at the next command.
+	 *
+	 * No version floor is enforced here. dda reads `.dda/version` from its working
+	 * directory and aborts itself when it is too old ("Repo requires at least dda version
+	 * X"), and every invocation below runs with `cwd` at the agent source, so the floor is
+	 * already self-enforcing. It is a minimum, not an exact pin, so the newest dda is fine.
+	 */
 	protected async ensureDdaInstalled(): Promise<void> {
 		try {
 			await this.executeCommand('dda --version');
 			logger.debug('dda is already installed');
+			return;
 		} catch {
 			logger.info('dda not found, installing...');
-			try {
-				await this.executeCommand('which pipx');
-				logger.debug('pipx found, using pipx to install dda');
-				await this.executeCommand('pipx install dda');
-			} catch {
-				logger.debug('pipx failed, trying pip to install dda');
-				await this.executeCommand('pip install dda');
-			}
 		}
+
+		for (const [probe, install] of [
+			['uv --version', 'uv tool install dda'],
+			['pipx --version', 'pipx install dda'],
+		]) {
+			try {
+				await this.executeCommand(probe);
+			} catch {
+				continue;
+			}
+			logger.debug(`Installing dda with: ${install}`);
+			await this.executeCommand(install);
+			return;
+		}
+
+		throw new Error(
+			'dda is not installed and neither uv nor pipx is available to install it in an ' +
+				'isolated environment. Install one, or install dda yourself with ' +
+				'`uv tool install dda`. Do not use `pip install --user dda`: it resolves its ' +
+				'data directory to the interpreter prefix while pip writes to the user scheme, ' +
+				'so every dda command fails with a missing dda-data/uv.lock.'
+		);
 	}
 
 	protected async copyBinariesToOutput(): Promise<Partial<Record<AgentBinaryKind, string>>> {

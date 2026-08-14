@@ -338,8 +338,9 @@ export async function launchAgent(
 		// packageDependsOnHarper, and this manifest names no Harper-claimed id. On that
 		// native path createModule hands the URL to Node's own import() and wraps the result
 		// as a SyntheticModule, which has no linker, so the loader never sees this package's
-		// internal relative imports either. Measured against harper 5.2.1, jsLoader.js
-		// :499-517 and :656. test/unit/harper-loader-claim.test.js is what keeps the premise
+		// internal relative imports either. Measured against harper 5.2.1,
+		// dist/security/jsLoader.js:499-517 and :656 (the built file, not security/jsLoader.ts,
+		// whose line numbers differ). test/unit/harper-loader-claim.test.js keeps the premise
 		// true: harper in ANY dependency key flips the routing.
 		//
 		// Three ways a caller puts this module back under the loader, where the spawn would

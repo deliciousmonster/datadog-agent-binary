@@ -95,8 +95,7 @@ export class BinaryManager {
 			};
 			const pkg = (await import(packageName)) as PackageExports;
 			const accessor = (pkg[descriptor.accessorName] ?? pkg.default?.[descriptor.accessorName]) as
-				| (() => string)
-				| undefined;
+				(() => string) | undefined;
 			if (typeof accessor !== 'function') {
 				// The main and platform packages are version-locked but published and
 				// installed separately, so a rollout goes through a window where a new main

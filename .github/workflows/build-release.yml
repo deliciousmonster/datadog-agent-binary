@@ -20,7 +20,7 @@ env:
   # Must satisfy the go.mod `go` directive of the agent release pinned in
   # .datadog-agent-version; 7.79.x needs Go 1.25.x. Bump this when the pin moves
   # across a Go requirement.
-  GO_VERSION: '1.25.8'
+  GO_VERSION: '1.26.5'
   # The Datadog Agent version this package BUNDLES is NOT set here. It lives in
   # .datadog-agent-version, which src/downloader.ts reads when no --datadog-version
   # is passed. It used to be duplicated here, and two copies of a pin are two pins:
