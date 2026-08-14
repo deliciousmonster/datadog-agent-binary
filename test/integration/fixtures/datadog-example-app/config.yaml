@@ -1,0 +1,9 @@
+# A config.yaml replaces Harper's default component config entirely (no merge),
+# so this declares exactly what the fixture needs.
+#
+# There is deliberately no `rest: true` and no exported Resource. Everything is
+# observed at module load, which happens once in each worker thread, and lands in
+# a JSONL file; an HTTP endpoint would only ever reach the one thread that served
+# the request.
+jsResource:
+  files: resources.js
