@@ -83,14 +83,36 @@ unchecked, which is how a package published as `7.75.5` came to contain agent `7
 
 ### Changed
 
-- `BuildResult` gained `outputPaths`, a map of binary kind to path. `outputPath` is
-  unchanged and still points at the core agent. `datadog-agent-build build` prints one
-  line per binary, and `install` resolves every binary the platform ships.
-- `Platform` gained `getBinaries()`, `getBinary(kind)`, and `getTraceAgentBinaryName()`.
-  `getBinaryName()` still returns the core agent's filename.
-- Building, packaging, and runtime resolution all iterate one list of binary descriptors
-  instead of each assuming a single binary.
-- The npm tarball also carries `example/` (a runnable Harper v5 component that spawns
-  both agents as one-per-node singletons), `CHANGELOG.md`, and `.datadog-agent-version`.
+- `BuildResult` reports build output through `outputPaths`, a map of binary kind to
+  path. `datadog-agent-build build` prints one line per binary, and `install` resolves
+  every binary the platform ships.
+- `Platform` gained `getBinaries()` and `getBinary(kind)`, the descriptor list that
+  building, packaging, and runtime resolution all iterate instead of each assuming a
+  single binary.
+- `dist/index.js` exports a named public API (`BinaryManager`,
+  `DatadogAgentDownloader`, `createBuilder`, `Platform`, and the public types) instead
+  of six `export *`, so a future internal helper cannot become public surface by
+  omission. Symbols the wildcards used to expose (the launcher, the logger, the per-OS
+  builder classes, `SUPPORTED_PLATFORMS`) are reachable only inside this repo.
+- The npm tarball also carries `CHANGELOG.md` and `.datadog-agent-version`. The
+  runnable Harper v5 example (a component that spawns both agents as one-per-node
+  singletons) stays in the repository under `example/`, linked from the README; it is
+  not shipped in the tarball.
 - `npm test` discovers `test/**/*.test.js` instead of naming files individually.
   `npm run test:integration` runs the Harper-backed suite under `test/integration/`.
+
+### Removed
+
+Nothing below had ever been published, so no consumer can be depending on it. The
+removals are recorded because earlier drafts of these notes promised that some of
+these names would survive.
+
+- `BuildResult.outputPath`. `outputPaths` is the only build-output surface; reading
+  `.outputPath` in JS now yields `undefined`.
+- `Platform.getBinaryName()` and `getTraceAgentBinaryName()`. Filenames come from the
+  descriptors: `getBinary(kind).outputName`.
+- The `install --force` flag, which logged a line and changed no control flow.
+- `BinaryManager.createBinaryWrapper()`, `createBinaryWrappers()`, and
+  `installForCurrentPlatform()`. The wrapper-generation chain was reachable from
+  nothing; the committed `bin/` launchers are what the package ships.
+- `PACKAGE_SCOPE`, which nothing but its own definition referenced.
