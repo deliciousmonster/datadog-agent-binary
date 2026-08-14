@@ -27,24 +27,22 @@ import { suite, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { setupHarperWithFixture, teardownHarper, type ContextWithHarper } from '@harperfast/integration-testing';
 import {
 	darwinLoopbackSkipReason,
 	errorMessage,
 	makeTempDir,
+	PACKAGE_MANIFEST,
 	pollJsonlRows,
+	REPO_ROOT,
 	resolveHarperBinPath,
 } from './support/harness.ts';
 
 const require = createRequire(import.meta.url);
 
-const REPO_ROOT = resolve(import.meta.dirname, '..', '..');
-const PACKAGE_MANIFEST = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-// Derived from the manifest, not hardcoded, so a re-scope cannot leave this
-// suite proving importability of a name the package no longer publishes under.
-const PACKAGE_NAME: string = PACKAGE_MANIFEST.name;
+const PACKAGE_NAME = PACKAGE_MANIFEST.name;
 
 /**
  * The 5.2.1 baseline unioned with the installed harper's live list, shared

@@ -47,20 +47,14 @@ function createStubPlatformPackage(packageDir) {
 	const binDir = path.join(packageDir, 'bin');
 	fs.mkdirSync(binDir, { recursive: true });
 
-	fs.writeFileSync(
-		path.join(packageDir, 'package.json'),
-		JSON.stringify(
-			{
-				name: platformPkgName,
-				version: PACKAGE_MANIFEST.version,
-				main: 'index.js',
-				os: [process.platform],
-				cpu: [process.arch],
-			},
-			null,
-			'\t'
-		)
-	);
+	const manifest = {
+		name: platformPkgName,
+		version: PACKAGE_MANIFEST.version,
+		main: 'index.js',
+		os: [process.platform],
+		cpu: [process.arch],
+	};
+	fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify(manifest, null, '\t'));
 
 	const binaries = platform.getBinaries();
 	const accessors = binaries
@@ -113,11 +107,7 @@ before(async () => {
 	// The package scope is shadowed rather than symlinked so the stub platform
 	// package below is the one that resolves; bin/ travels because the shim tests
 	// execute it.
-	sandbox = createDistSandbox({
-		prefix: 'ddab-harper-',
-		include: ['bin'],
-		shadowed: [PACKAGE_SCOPE],
-	});
+	sandbox = createDistSandbox({ prefix: 'ddab-harper-', include: ['bin'], shadowed: [PACKAGE_SCOPE] });
 	sandboxBinaries = createStubPlatformPackage(path.join(sandbox, 'node_modules', ...platformPkgName.split('/')));
 
 	// The trace launcher refuses to start without an existing config file in a

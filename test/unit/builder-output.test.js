@@ -76,12 +76,7 @@ test('a tree missing the core agent is refused too; the gate is per binary', () 
 
 test('createBuilder() refuses an OS it has no builder for', () => {
 	assert.throws(
-		() =>
-			createBuilder({
-				platform: { getOS: () => 'beos' },
-				outputDir: '.',
-				sourceDir: '.',
-			}),
+		() => createBuilder({ platform: { getOS: () => 'beos' }, outputDir: '.', sourceDir: '.' }),
 		/Unsupported OS: beos/
 	);
 });

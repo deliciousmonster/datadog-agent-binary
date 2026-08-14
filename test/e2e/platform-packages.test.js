@@ -31,18 +31,8 @@ const WINDOWS_BINARIES = [
 const EXPECTED = {
 	// libc on the Linux entries: CGO_ENABLED=1 links glibc, so npm must skip
 	// these packages on musl instead of installing a binary that dies ENOENT.
-	'linux-x86_64': {
-		os: 'linux',
-		cpu: 'x64',
-		libc: ['glibc'],
-		binaries: UNIX_BINARIES,
-	},
-	'linux-arm64': {
-		os: 'linux',
-		cpu: 'arm64',
-		libc: ['glibc'],
-		binaries: UNIX_BINARIES,
-	},
+	'linux-x86_64': { os: 'linux', cpu: 'x64', libc: ['glibc'], binaries: UNIX_BINARIES },
+	'linux-arm64': { os: 'linux', cpu: 'arm64', libc: ['glibc'], binaries: UNIX_BINARIES },
 	'macos-arm64': { os: 'darwin', cpu: 'arm64', binaries: UNIX_BINARIES },
 	'windows-x86_64': { os: 'win32', cpu: 'x64', binaries: WINDOWS_BINARIES },
 };

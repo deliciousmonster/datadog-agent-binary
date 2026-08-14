@@ -15,6 +15,20 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const require = createRequire(import.meta.url);
 
+/** This repo's root; test/integration/support sits three levels below it. */
+export const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
+
+/**
+ * The repo manifest. Both suites derive the package name and version from it
+ * rather than hardcoding either, so a re-scope cannot leave one proving
+ * something about a name the package no longer publishes under.
+ */
+export const PACKAGE_MANIFEST = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as {
+	name: string;
+	version: string;
+	dependencies?: Record<string, string>;
+};
+
 /**
  * The `harper` package's exports map only exposes ".", so the harness's
  * auto-resolution of 'harper/dist/bin/harper.js' fails with

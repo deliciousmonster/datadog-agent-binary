@@ -33,11 +33,7 @@ function stageAll(dir, mutate = () => {}) {
 				? 'darwin'
 				: 'win32';
 		const nodeCpu = expected.platform.endsWith('arm64') ? 'arm64' : 'x64';
-		const spec = {
-			os: [nodeOs],
-			cpu: [nodeCpu],
-			binaries: expected.binaries,
-		};
+		const spec = { os: [nodeOs], cpu: [nodeCpu], binaries: expected.binaries };
 		mutate(expected.platform, spec);
 		stage(dir, expected.platform, spec);
 	}
@@ -131,22 +127,13 @@ test('optionalDependencies matches SUPPORTED_PLATFORMS, and drift is detected', 
 
 		// Stage a platform nobody declares. Without the negative case this test would
 		// still pass if the check were deleted from verify() entirely.
-		stage(dir, 'solaris-sparc', {
-			os: ['sunos'],
-			cpu: ['sparc'],
+		stage(dir, 'solaris-sparc', { os: ['sunos'], cpu: ['sparc'], binaries: ['datadog-agent', 'trace-agent'] });
+		const undeclared = {
+			platform: 'solaris-sparc',
+			name: `${PACKAGE_NAME}-solaris-sparc`,
 			binaries: ['datadog-agent', 'trace-agent'],
-		});
-		const rows = [
-			...rowsFor(dir),
-			readLocal(
-				{
-					platform: 'solaris-sparc',
-					name: `${PACKAGE_NAME}-solaris-sparc`,
-					binaries: ['datadog-agent', 'trace-agent'],
-				},
-				dir
-			),
-		];
+		};
+		const rows = [...rowsFor(dir), readLocal(undeclared, dir)];
 		assert.ok(
 			verify(rows, { mode: 'local' }).some((p) => /does not match SUPPORTED_PLATFORMS/.test(p)),
 			'an undeclared platform should be reported'
