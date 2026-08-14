@@ -13,7 +13,6 @@ const PACKAGE_NAME = parentPackageJson.name;
 if (!PACKAGE_NAME) {
 	throw new Error('package.json has no `name`; cannot derive package names.');
 }
-const version = parentPackageJson.version;
 
 function getPackageDir(platform) {
 	return path.join(import.meta.dirname, '..', 'npm', platform.getName());
@@ -109,24 +108,12 @@ function assertNodeOSAndCPU(packageJson) {
 	}
 }
 
-let platforms;
-let createDummyPackages = false;
 const lastArg = argv[argv.length - 1];
-switch (lastArg) {
-	case '--all':
-		platforms = SUPPORTED_PLATFORMS;
-		break;
-	case '--dummy':
-		platforms = SUPPORTED_PLATFORMS;
-		createDummyPackages = true;
-		break;
-	default:
-		platforms = [Platform.current()];
-}
+const createDummyPackages = lastArg === '--dummy';
+const platforms = lastArg === '--all' || createDummyPackages ? SUPPORTED_PLATFORMS : [Platform.current()];
 
 const packageTemplate = {
-	version,
-	description: '',
+	version: parentPackageJson.version,
 	main: 'index.js',
 	// Inherited, never hardcoded: npm publish --provenance verifies this against
 	// the building repo per package, platform packages publish first, and the
@@ -153,8 +140,7 @@ function jsString(value) {
 // index.js is CJS by Node's rules, and the main package loads it via `await import()`
 // with a default-interop fallback. Emitting ESM here would require republishing every
 // platform package in lockstep for zero consumer-visible gain.
-function renderIndexJs(platform) {
-	const descriptors = getDescriptors(platform);
+function renderIndexJs(descriptors) {
 	const accessors = descriptors.map(
 		(d) => `  ${d.accessorName}() {\n` + `    return path.join(__dirname, 'bin', ${jsString(d.outputName)});\n` + `  }`
 	);
@@ -172,6 +158,10 @@ function renderIndexJs(platform) {
 		`  }\n` +
 		`};\n`
 	);
+}
+
+function write(platform, file, contents) {
+	fs.writeFileSync(path.join(getPackageDir(platform), file), contents);
 }
 
 function writePlatformPackageJson(platform) {
@@ -197,23 +187,17 @@ function writePlatformPackageJson(platform) {
 	// The only place a platform package.json is written, so this covers every mode.
 	assertNodeOSAndCPU(packageJson);
 
-	fs.writeFileSync(path.join(getPackageDir(platform), 'package.json'), JSON.stringify(packageJson, null, '\t') + '\n');
+	write(platform, 'package.json', JSON.stringify(packageJson, null, '\t') + '\n');
 
 	return packageJson;
 }
 
-function writePlatformIndexJs(platform) {
-	fs.writeFileSync(path.join(getPackageDir(platform), 'index.js'), renderIndexJs(platform));
-}
-
-function writePlatformReadme(platform) {
+function renderReadme(platform, descriptors) {
 	const name = `${PACKAGE_NAME}-${platform.getName()}`;
 	const os = platform.getOS();
 	const arch = platform.getArch();
-	const binaryList = getDescriptors(platform)
-		.map((d) => `- \`${d.outputName}\`, resolved by \`${d.accessorName}()\``)
-		.join('\n');
-	const readme = `# ${name}
+	const binaryList = descriptors.map((d) => `- \`${d.outputName}\`, resolved by \`${d.accessorName}()\``).join('\n');
+	return `# ${name}
 
 Pre-built Datadog Agent binaries for **${os} ${arch}**:
 
@@ -241,7 +225,6 @@ for usage, configuration, and Harper integration details.
 Apache-2.0. The Datadog Agent binaries are distributed under the Apache-2.0
 license per the [Datadog Agent repository](https://github.com/DataDog/datadog-agent).
 `;
-	fs.writeFileSync(path.join(getPackageDir(platform), 'README.md'), readme);
 }
 
 // In --all mode (release), a platform whose binaries did not build is skipped with
@@ -265,13 +248,9 @@ platforms.forEach((platform) => {
 			return;
 		}
 	}
+	const descriptors = getDescriptors(platform);
 	const packageJson = writePlatformPackageJson(platform);
-	writePlatformIndexJs(platform);
-	writePlatformReadme(platform);
-	console.log(
-		`Created package: ${packageJson.name} ` +
-			`(${getDescriptors(platform)
-				.map((d) => d.outputName)
-				.join(', ')})`
-	);
+	write(platform, 'index.js', renderIndexJs(descriptors));
+	write(platform, 'README.md', renderReadme(platform, descriptors));
+	console.log(`Created package: ${packageJson.name} (${descriptors.map((d) => d.outputName).join(', ')})`);
 });

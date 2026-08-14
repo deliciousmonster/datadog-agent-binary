@@ -38,6 +38,7 @@ const mainPkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'),
 // wrong namespace.
 export const PACKAGE_NAME = mainPkg.name;
 export const PACKAGE_VERSION = mainPkg.version;
+const OPTIONAL_DEPS = mainPkg.optionalDependencies ?? {};
 
 // npm matches os/cpu against process.platform / process.arch. Anything outside
 // these sets, our own "macos"/"windows"/"x86_64" included, can never install.
@@ -57,22 +58,19 @@ function parseArgs(argv) {
 		format: 'text',
 	};
 	for (let i = 0; i < argv.length; i++) {
+		// The optional argument to --local/--registry. A following flag is not one.
+		const value = () => (argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : null);
 		const arg = argv[i];
 		if (arg === '--local') {
 			opts.mode = 'local';
-			if (argv[i + 1] && !argv[i + 1].startsWith('--')) opts.dir = argv[++i];
+			opts.dir = value() ?? opts.dir;
 		} else if (arg === '--registry') {
 			opts.mode = 'registry';
-			if (argv[i + 1] && !argv[i + 1].startsWith('--')) opts.version = argv[++i];
-		} else if (arg === '--deep') {
-			opts.deep = true;
-		} else if (arg === '--markdown') {
-			opts.format = 'markdown';
-		} else if (arg === '--json') {
-			opts.format = 'json';
-		} else if (arg === '--help' || arg === '-h') {
-			opts.help = true;
-		}
+			opts.version = value() ?? opts.version;
+		} else if (arg === '--deep') opts.deep = true;
+		else if (arg === '--markdown') opts.format = 'markdown';
+		else if (arg === '--json') opts.format = 'json';
+		else if (arg === '--help' || arg === '-h') opts.help = true;
 	}
 	return opts;
 }
@@ -88,29 +86,40 @@ export function expectedPackages() {
 	}));
 }
 
-export function readLocal(expected, dir) {
-	const packageDir = path.join(dir, expected.platform);
-	const manifestPath = path.join(packageDir, 'package.json');
-	if (!fs.existsSync(manifestPath)) {
-		return { ...expected, present: false, source: packageDir };
-	}
-	const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-	const binDir = path.join(packageDir, 'bin');
-	const files = fs.existsSync(binDir) ? fs.readdirSync(binDir).sort() : [];
-	const bytes = files.reduce((sum, f) => sum + fs.statSync(path.join(binDir, f)).size, 0);
+/** A package that is not where it was expected to be, staged or published. */
+function absentRow(expected, source, error) {
+	return { ...expected, present: false, source, error };
+}
+
+/**
+ * The row shape verify() and both renderers read. Shared by the two sources so a
+ * field checked in one mode cannot be silently absent in the other.
+ */
+function presentRow(expected, source, manifest, extra) {
 	return {
 		...expected,
 		present: true,
-		source: packageDir,
+		source,
 		version: manifest.version,
 		os: manifest.os ?? [],
 		cpu: manifest.cpu ?? [],
+		...extra,
+	};
+}
+
+export function readLocal(expected, dir) {
+	const packageDir = path.join(dir, expected.platform);
+	const manifestPath = path.join(packageDir, 'package.json');
+	if (!fs.existsSync(manifestPath)) return absentRow(expected, packageDir);
+	const binDir = path.join(packageDir, 'bin');
+	const files = fs.existsSync(binDir) ? fs.readdirSync(binDir).sort() : [];
+	return presentRow(expected, packageDir, JSON.parse(fs.readFileSync(manifestPath, 'utf8')), {
 		files,
-		bytes,
+		bytes: files.reduce((sum, f) => sum + fs.statSync(path.join(binDir, f)).size, 0),
 		// --dummy packages legitimately carry no binaries; record it and let the
 		// caller decide whether that is acceptable.
 		dummy: files.length === 0,
-	};
+	});
 }
 
 const REGISTRY = process.env.NPM_CONFIG_REGISTRY || 'https://registry.npmjs.org';
@@ -128,19 +137,13 @@ async function fetchPackument(name, retries) {
 	const url = `${REGISTRY}/${name.replace('/', '%2F')}`;
 	for (let attempt = 0; attempt <= retries; attempt++) {
 		try {
-			const response = await fetch(url, {
-				headers: { accept: 'application/json' },
-			});
+			const response = await fetch(url, { headers: { accept: 'application/json' } });
 			if (response.ok) return await response.json();
-			if (response.status !== 404) {
-				throw new Error(`HTTP ${response.status} for ${name}`);
-			}
+			if (response.status !== 404) throw new Error(`HTTP ${response.status} for ${name}`);
 		} catch (error) {
 			if (attempt === retries) throw error;
 		}
-		if (attempt < retries) {
-			await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
-		}
+		if (attempt < retries) await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
 	}
 	return null;
 }
@@ -173,16 +176,11 @@ async function readRegistry(expected, version, deep, retries) {
 	try {
 		packument = await fetchPackument(expected.name, retries);
 	} catch (error) {
-		return { ...expected, present: false, error: error.message };
+		return absentRow(expected, REGISTRY, error.message);
 	}
 	const manifest = packument?.versions?.[version];
 	if (!manifest) {
-		return {
-			...expected,
-			present: false,
-			source: REGISTRY,
-			error: packument ? `version ${version} not published` : 'package not found',
-		};
+		return absentRow(expected, REGISTRY, packument ? `version ${version} not published` : 'package not found');
 	}
 
 	let files = null;
@@ -194,20 +192,16 @@ async function readRegistry(expected, version, deep, retries) {
 		}
 	}
 
-	return {
-		...expected,
-		present: true,
-		source: REGISTRY,
+	return presentRow(expected, REGISTRY, manifest, {
+		// The version asked for, not the one the manifest self-reports.
 		version,
-		os: manifest.os ?? [],
-		cpu: manifest.cpu ?? [],
 		files,
 		// The cheap signal without --deep. A package carrying both binaries has 5
 		// files (2 binaries + index.js + package.json + README.md); the core-only
 		// packages that caused the original defect had 4.
 		fileCount: manifest.dist.fileCount,
 		bytes: manifest.dist.unpackedSize,
-	};
+	});
 }
 
 export function verify(rows) {
@@ -226,13 +220,11 @@ export function verify(rows) {
 		}
 
 		for (const [field, nodeField, allowed] of NODE_FIELDS) {
-			for (const value of row[field]) {
-				if (!allowed.has(value)) {
-					problems.push(
-						`${label}: ${field} "${value}" is not a Node process.${nodeField} ` +
-							`value (${[...allowed].join(', ')}). npm can never match this package.`
-					);
-				}
+			for (const value of row[field].filter((v) => !allowed.has(v))) {
+				problems.push(
+					`${label}: ${field} "${value}" is not a Node process.${nodeField} ` +
+						`value (${[...allowed].join(', ')}). npm can never match this package.`
+				);
 			}
 		}
 
@@ -245,14 +237,12 @@ export function verify(rows) {
 		}
 
 		if (Array.isArray(row.files) && !row.dummy) {
-			for (const required of row.binaries) {
-				if (!row.files.includes(required)) {
-					problems.push(
-						`${label}: missing ${required}. Shipping the core agent without the ` +
-							`trace-agent is the defect this package exists to fix: nothing binds ` +
-							`127.0.0.1:8126 and every span is dropped in silence.`
-					);
-				}
+			for (const required of row.binaries.filter((b) => !row.files.includes(b))) {
+				problems.push(
+					`${label}: missing ${required}. Shipping the core agent without the ` +
+						`trace-agent is the defect this package exists to fix: nothing binds ` +
+						`127.0.0.1:8126 and every span is dropped in silence.`
+				);
 			}
 		} else if (row.fileCount != null) {
 			const expectedCount = row.binaries.length + 3; // + index.js, package.json, README.md
@@ -268,7 +258,7 @@ export function verify(rows) {
 
 	// Drift between these two is how a platform ends up declared but never built,
 	// or built but never declared.
-	const declared = Object.keys(mainPkg.optionalDependencies ?? {}).sort();
+	const declared = Object.keys(OPTIONAL_DEPS).sort();
 	const expectedNames = rows.map((r) => r.name).sort();
 	if (JSON.stringify(declared) !== JSON.stringify(expectedNames)) {
 		problems.push(
@@ -280,7 +270,7 @@ export function verify(rows) {
 		);
 	}
 
-	for (const [dep, range] of Object.entries(mainPkg.optionalDependencies ?? {})) {
+	for (const [dep, range] of Object.entries(OPTIONAL_DEPS)) {
 		if (range !== PACKAGE_VERSION) {
 			problems.push(`optionalDependencies["${dep}"] is "${range}", expected exactly ` + `"${PACKAGE_VERSION}".`);
 		}
@@ -290,8 +280,7 @@ export function verify(rows) {
 }
 
 function mib(bytes) {
-	if (bytes == null) return '-';
-	return `${(bytes / 1024 / 1024).toFixed(0)} MB`;
+	return bytes == null ? '-' : `${(bytes / 1024 / 1024).toFixed(0)} MB`;
 }
 
 function binariesCell(row) {
@@ -369,22 +358,17 @@ async function main() {
 		console.error(
 			`Reading ${REGISTRY} for version ${opts.version}` + `${opts.deep ? ' (deep: downloading tarballs)' : ''}\n`
 		);
+		// One at a time: --deep holds a whole tarball, gzipped and expanded, in memory.
 		rows = [];
-		for (const e of expected) {
-			rows.push(await readRegistry(e, opts.version, opts.deep, retries));
-		}
+		for (const e of expected) rows.push(await readRegistry(e, opts.version, opts.deep, retries));
 	}
 
-	if (opts.format === 'json') {
-		console.log(JSON.stringify(rows, null, 2));
-	} else if (opts.format === 'markdown') {
-		console.log(renderMarkdown(rows));
-	} else {
-		console.log(renderText(rows));
-	}
+	if (opts.format === 'json') console.log(JSON.stringify(rows, null, 2));
+	else if (opts.format === 'markdown') console.log(renderMarkdown(rows));
+	else console.log(renderText(rows));
 
 	const problems = verify(rows);
-	const declaredCount = Object.keys(mainPkg.optionalDependencies ?? {}).length;
+	const declaredCount = Object.keys(OPTIONAL_DEPS).length;
 	const presentCount = rows.filter((r) => r.present).length;
 
 	console.log('');
@@ -396,9 +380,7 @@ async function main() {
 
 	if (problems.length > 0) {
 		console.log('');
-		for (const problem of problems) {
-			console.log(`::error::${problem}`);
-		}
+		for (const problem of problems) console.log(`::error::${problem}`);
 		return 1;
 	}
 	return 0;

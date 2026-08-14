@@ -61,6 +61,13 @@ function sleep(ms) {
 	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+/** npm puts the useful part on stderr; truncated so a page of registry HTML cannot bury the reason. */
+function npmError(error) {
+	return String(error.stderr || error.message)
+		.trim()
+		.slice(0, 200);
+}
+
 function npmExec(args, opts = {}) {
 	return execFileSync('npm', args, {
 		encoding: 'utf8',
@@ -77,13 +84,7 @@ export function isPublished(name, exec = npmExec) {
 			return true;
 		} catch (error) {
 			if (classifyNpmFailure(error.stderr) === 'not-published') return false;
-			if (attempt >= 3) {
-				throw new Error(
-					`registry unreachable while checking ${name}: ${String(error.stderr || error.message)
-						.trim()
-						.slice(0, 200)}`
-				);
-			}
+			if (attempt >= 3) throw new Error(`registry unreachable while checking ${name}: ${npmError(error)}`);
 			sleep(attempt * 2000);
 		}
 	}
@@ -110,12 +111,7 @@ function verifyToken(token, exec = npmExec) {
 					};
 				}
 				if (attempt >= 3) {
-					return {
-						ok: false,
-						reason: `registry unreachable while verifying NPM_TOKEN: ${String(error.stderr || error.message)
-							.trim()
-							.slice(0, 200)}`,
-					};
+					return { ok: false, reason: `registry unreachable while verifying NPM_TOKEN: ${npmError(error)}` };
 				}
 				sleep(attempt * 2000);
 			}
