@@ -12,9 +12,11 @@
 // Only two shapes are understood, `X.Y.Z` and `X.Y.Z-<channel>.N`. Anything else is
 // ignored rather than guessed at, and the caller is told what was skipped.
 
+import { isCliEntry } from './cli-entry.js';
+
 const CHANNEL_RE = /^[a-z][a-z0-9]*$/;
 
-function parseVersion(raw, channel) {
+export function parseVersion(raw, channel) {
 	const m = /^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/.exec(String(raw).replace(/^v/, ''));
 	if (!m) return null;
 	const [, maj, min, pat, pre] = m;
@@ -28,7 +30,7 @@ function parseVersion(raw, channel) {
 
 // Stable outranks a prerelease of the same triple, which is what makes 7.75.5 beat
 // 7.75.5-next.9 and forces the next prerelease onto a new patch.
-function compare(a, b) {
+export function compare(a, b) {
 	if (a.maj !== b.maj) return a.maj - b.maj;
 	if (a.min !== b.min) return a.min - b.min;
 	if (a.pat !== b.pat) return a.pat - b.pat;
@@ -47,7 +49,7 @@ function format(v, channel) {
  * @returns {{version: string, highest: string|null, ignored: string[]}}
  * @throws if the computed version does not sort strictly above every known version.
  */
-function nextPrerelease({ channel = 'next', tags = [], registry = [], packageVersion = null } = {}) {
+export function nextPrerelease({ channel = 'next', tags = [], registry = [], packageVersion = null } = {}) {
 	if (!CHANNEL_RE.test(channel)) {
 		throw new Error(`Channel must be lowercase alphanumeric, got "${channel}".`);
 	}
@@ -86,9 +88,7 @@ function nextPrerelease({ channel = 'next', tags = [], registry = [], packageVer
 	};
 }
 
-module.exports = { nextPrerelease, parseVersion, compare };
-
-if (require.main === module) {
+if (isCliEntry(import.meta.url)) {
 	const args = process.argv.slice(2);
 	const get = (flag) => {
 		const i = args.indexOf(flag);

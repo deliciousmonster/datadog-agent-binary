@@ -27,7 +27,7 @@ export class DatadogAgentDownloader {
 	 * directory.
 	 */
 	async getPinnedVersion(): Promise<string> {
-		const pinPath = path.join(__dirname, '..', PINNED_VERSION_FILE);
+		const pinPath = path.join(import.meta.dirname, '..', PINNED_VERSION_FILE);
 		let raw: string;
 		try {
 			raw = await fs.readFile(pinPath, 'utf8');

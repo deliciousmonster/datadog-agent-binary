@@ -1,14 +1,14 @@
-const { test } = require('node:test');
-const assert = require('node:assert');
+import { test } from 'node:test';
+import assert from 'node:assert';
 
-const {
+import {
 	packageNames,
 	normalizeRepoSlug,
 	classifyNpmFailure,
 	checkRepositoryMatch,
 	checkAuthPath,
 	isPublished,
-} = require('../../scripts/release-preflight.js');
+} from '../../scripts/release-preflight.js';
 
 const PKG = {
 	name: '@deliciousmonster/datadog-agent-binary',

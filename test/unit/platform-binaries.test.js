@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Descriptor correctness for every supported platform.
  *
@@ -11,10 +9,11 @@
  * here.
  */
 
-const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 function findRepoRoot(start) {
 	let dir = start;
@@ -26,9 +25,10 @@ function findRepoRoot(start) {
 	return dir;
 }
 
-const REPO_ROOT = findRepoRoot(__dirname);
-const { Platform, SUPPORTED_PLATFORMS, getAllSupportedPlatforms } = require(
-	path.join(REPO_ROOT, 'dist', 'platform.js')
+const REPO_ROOT = findRepoRoot(import.meta.dirname);
+// pathToFileURL because import() of a bare absolute path is rejected on Windows.
+const { Platform, SUPPORTED_PLATFORMS, getAllSupportedPlatforms } = await import(
+	pathToFileURL(path.join(REPO_ROOT, 'dist', 'platform.js')).href
 );
 
 /**

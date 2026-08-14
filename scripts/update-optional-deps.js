@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'node:fs';
+import path from 'node:path';
+import { getAllSupportedPlatforms } from '../dist/platform.js';
 
-const packageJsonPath = path.join(__dirname, '..', 'package.json');
+const packageJsonPath = path.join(import.meta.dirname, '..', 'package.json');
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
 
-const { getAllSupportedPlatforms } = require('../dist/platform.js');
 const platforms = getAllSupportedPlatforms();
 
 // Platform sub-packages are named `<this package>-<platform>`, derived from the

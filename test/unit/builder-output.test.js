@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * `copyBinariesToOutput()`, the last step of every build. It must ship BOTH
  * binaries or refuse loudly: a build that copies the core agent and quietly
@@ -9,15 +7,17 @@
  * Hermetic: stub files in temp dirs stand in for the compiled binaries; no
  * build toolchain runs (createBuilder() only selects a class).
  */
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
 // Via the package entry point, the same surface cli.ts builds against.
-const { createBuilder, Platform } = require(path.join(REPO_ROOT, 'dist', 'index.js'));
+// pathToFileURL because import() of a bare absolute path is rejected on Windows.
+const { createBuilder, Platform } = await import(pathToFileURL(path.join(REPO_ROOT, 'dist', 'index.js')).href);
 
 const platform = Platform.current();
 const isWindows = process.platform === 'win32';

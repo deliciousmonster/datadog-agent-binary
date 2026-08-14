@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 
 /**
@@ -21,10 +22,12 @@ interface PackageJson {
  * isolation.
  */
 function readPackageJson(): PackageJson {
-	let dir = __dirname;
+	let dir = import.meta.dirname;
 	for (let depth = 0; depth < 5; depth++) {
 		try {
-			const candidate = require(path.join(dir, 'package.json')) as PackageJson;
+			// readFileSync + JSON.parse rather than a JSON import: import attributes cannot
+			// take a computed path, and this walk's whole point is trying several.
+			const candidate = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as PackageJson;
 			if (candidate?.name) return candidate;
 		} catch {
 			// keep walking

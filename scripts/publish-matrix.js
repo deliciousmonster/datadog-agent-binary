@@ -22,24 +22,22 @@
  * --registry after, and on a schedule, since packages can be unpublished later.
  */
 
-'use strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import zlib from 'node:zlib';
+import { execFileSync } from 'node:child_process';
+import { SUPPORTED_PLATFORMS } from '../dist/platform.js';
+import { isCliEntry } from './cli-entry.js';
 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const zlib = require('zlib');
-const { execFileSync } = require('child_process');
-
-const REPO_ROOT = path.join(__dirname, '..');
-const mainPkg = require(path.join(REPO_ROOT, 'package.json'));
+const REPO_ROOT = path.join(import.meta.dirname, '..');
+const mainPkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
 
 // The generator and the runtime both derive platform package names from the main
 // package name, so this must too, or a re-scope leaves the checker validating the
 // wrong namespace.
-const PACKAGE_NAME = mainPkg.name;
-const PACKAGE_VERSION = mainPkg.version;
-
-const { SUPPORTED_PLATFORMS } = require(path.join(REPO_ROOT, 'dist', 'platform.js'));
+export const PACKAGE_NAME = mainPkg.name;
+export const PACKAGE_VERSION = mainPkg.version;
 
 // npm matches os/cpu against process.platform / process.arch. Anything outside
 // these sets, our own "macos"/"windows"/"x86_64" included, can never install.
@@ -80,7 +78,7 @@ function parseArgs(argv) {
 }
 
 /** Platform package names this project is supposed to publish. */
-function expectedPackages() {
+export function expectedPackages() {
 	return SUPPORTED_PLATFORMS.map((platform) => ({
 		platform: platform.getName(),
 		name: `${PACKAGE_NAME}-${platform.getName()}`,
@@ -90,7 +88,7 @@ function expectedPackages() {
 	}));
 }
 
-function readLocal(expected, dir) {
+export function readLocal(expected, dir) {
 	const packageDir = path.join(dir, expected.platform);
 	const manifestPath = path.join(packageDir, 'package.json');
 	if (!fs.existsSync(manifestPath)) {
@@ -212,7 +210,7 @@ async function readRegistry(expected, version, deep, retries) {
 	};
 }
 
-function verify(rows) {
+export function verify(rows) {
 	const problems = [];
 
 	for (const row of rows) {
@@ -303,7 +301,7 @@ function binariesCell(row) {
 	return `${row.fileCount} files`;
 }
 
-function renderText(rows) {
+export function renderText(rows) {
 	const header = ['PACKAGE', 'VERSION', 'OS', 'CPU', 'BINARIES', 'SIZE'];
 	const body = rows.map((r) => [
 		r.name,
@@ -325,7 +323,7 @@ function renderText(rows) {
 	return out.join('\n');
 }
 
-function renderMarkdown(rows) {
+export function renderMarkdown(rows) {
 	const out = [
 		`### Published platform matrix for \`${PACKAGE_NAME}@${PACKAGE_VERSION}\``,
 		'',
@@ -406,9 +404,9 @@ async function main() {
 	return 0;
 }
 
-// Guarded so tests can require this without the import running the report and
+// Guarded so tests can import this without the import running the report and
 // calling process.exit().
-if (require.main === module) {
+if (isCliEntry(import.meta.url)) {
 	main()
 		.then((code) => process.exit(code))
 		.catch((error) => {
@@ -416,13 +414,3 @@ if (require.main === module) {
 			process.exit(1);
 		});
 }
-
-module.exports = {
-	expectedPackages,
-	readLocal,
-	verify,
-	renderText,
-	renderMarkdown,
-	PACKAGE_NAME,
-	PACKAGE_VERSION,
-};

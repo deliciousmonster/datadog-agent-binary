@@ -19,15 +19,16 @@
  * at publish; everything checkable earlier is checked here.
  */
 
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const { execFileSync } = require('child_process');
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { isCliEntry } from './cli-entry.js';
 
 const REGISTRY = 'https://registry.npmjs.org';
 
 /** The five names the publish loop will hit: platform packages first, then main. */
-function packageNames(pkg) {
+export function packageNames(pkg) {
 	return [...Object.keys(pkg.optionalDependencies || {}), pkg.name];
 }
 
@@ -36,7 +37,7 @@ function packageNames(pkg) {
  * check, so all of them must be recognized or a legal manifest is blocked.
  * Returns lowercase "owner/name", or null when no GitHub repo is declared.
  */
-function normalizeRepoSlug(repository) {
+export function normalizeRepoSlug(repository) {
 	const url = typeof repository === 'string' ? repository : repository && repository.url;
 	if (!url) return null;
 	const m = String(url)
@@ -52,7 +53,7 @@ function normalizeRepoSlug(repository) {
  * Only the first means OIDC cannot work; the second must retry, not report a
  * virgin package and tell the operator to re-add the token they just deleted.
  */
-function classifyNpmFailure(stderr) {
+export function classifyNpmFailure(stderr) {
 	return /E404|404 Not Found/i.test(String(stderr)) ? 'not-published' : 'transient';
 }
 
@@ -69,7 +70,7 @@ function npmExec(args, opts = {}) {
 }
 
 /** true / false / throws after retries when the registry cannot answer. */
-function isPublished(name, exec = npmExec) {
+export function isPublished(name, exec = npmExec) {
 	for (let attempt = 1; ; attempt++) {
 		try {
 			exec(['view', name, 'version', '--registry', REGISTRY]);
@@ -124,7 +125,7 @@ function verifyToken(token, exec = npmExec) {
 	}
 }
 
-function checkRepositoryMatch(pkg, githubRepository) {
+export function checkRepositoryMatch(pkg, githubRepository) {
 	if (!githubRepository) {
 		return { ok: true, note: 'GITHUB_REPOSITORY unset; skipping (local run).' };
 	}
@@ -140,7 +141,7 @@ function checkRepositoryMatch(pkg, githubRepository) {
 	};
 }
 
-function checkAuthPath(pkg, token, exec = npmExec) {
+export function checkAuthPath(pkg, token, exec = npmExec) {
 	if (token) {
 		const verdict = verifyToken(token, exec);
 		if (!verdict.ok) return { ok: false, reason: verdict.reason };
@@ -167,7 +168,7 @@ function checkAuthPath(pkg, token, exec = npmExec) {
 }
 
 function main() {
-	const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+	const pkg = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf8'));
 	const results = [
 		checkRepositoryMatch(pkg, process.env.GITHUB_REPOSITORY),
 		checkAuthPath(pkg, (process.env.NPM_TOKEN || '').trim()),
@@ -185,13 +186,4 @@ function main() {
 	console.log('Preflight OK: the publish path is as ready as it can be proven.');
 }
 
-if (require.main === module) main();
-
-module.exports = {
-	packageNames,
-	normalizeRepoSlug,
-	classifyNpmFailure,
-	checkRepositoryMatch,
-	checkAuthPath,
-	isPublished,
-};
+if (isCliEntry(import.meta.url)) main();

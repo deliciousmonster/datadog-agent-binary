@@ -2,6 +2,7 @@
 	"name": "@deliciousmonster/datadog-agent-binary",
 	"version": "7.75.5",
 	"description": "Distributes the pre-compiled Datadog Agent as an npm package, so the agent is installed and versioned as a normal Node dependency instead of through a system package manager or a container sidecar. Intended for running the agent alongside a Node application, including inside Harper v5.",
+	"type": "module",
 	"main": "dist/index.js",
 	"exports": {
 		".": {

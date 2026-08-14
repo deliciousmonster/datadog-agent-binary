@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * The two invariants that keep a published binary the version its label claims:
  * `getPinnedVersion()` refuses to run without `.datadog-agent-version`, and
@@ -11,13 +9,14 @@
  * removed without touching the repo's own. No network; the network-dependent
  * resolveVersion()/getLatestVersion() paths are deliberately not called.
  */
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
 const isWindows = process.platform === 'win32';
 
 /**
@@ -31,6 +30,9 @@ function createSandbox() {
 	fs.cpSync(path.join(REPO_ROOT, 'dist'), path.join(dir, 'dist'), {
 		recursive: true,
 	});
+	// The manifest carries "type": "module", which is what makes the copied dist/*.js
+	// load as ESM; without it Node falls back to per-file syntax detection.
+	fs.copyFileSync(path.join(REPO_ROOT, 'package.json'), path.join(dir, 'package.json'));
 	const targetModules = path.join(dir, 'node_modules');
 	fs.mkdirSync(targetModules);
 	const sourceModules = path.join(REPO_ROOT, 'node_modules');
@@ -44,7 +46,8 @@ function createSandbox() {
 
 const sandbox = createSandbox();
 const pinPath = path.join(sandbox, '.datadog-agent-version');
-const { DatadogAgentDownloader } = require(path.join(sandbox, 'dist', 'downloader.js'));
+// pathToFileURL because import() of a bare absolute path is rejected on Windows.
+const { DatadogAgentDownloader } = await import(pathToFileURL(path.join(sandbox, 'dist', 'downloader.js')).href);
 
 test.after(() => {
 	fs.rmSync(sandbox, { recursive: true, force: true });

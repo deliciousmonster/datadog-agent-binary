@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * The launcher's supervision internals: `receiverPort()`, `isRunSubcommand()`,
  * `isTraceReceiverHealthy()`, and `onExit()`. Each guards a failure mode that
@@ -9,18 +7,22 @@
  * Hermetic: the only sockets are ephemeral 127.0.0.1 listeners standing in for
  * a receiver, the same device test/e2e/harper-component.test.js uses.
  */
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const http = require('node:http');
-const net = require('node:net');
-const path = require('node:path');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import net from 'node:net';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-const { findFreePort } = require('../support/find-free-port.js');
+import { findFreePort } from '../support/find-free-port.js';
 
-const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
 const LAUNCHER_PATH = path.join(REPO_ROOT, 'dist', 'agent-launcher.js');
 
-const { receiverPort, isRunSubcommand, isTraceReceiverHealthy, onExit } = require(LAUNCHER_PATH).internalsForTesting;
+// pathToFileURL because import() of a bare absolute path is rejected on Windows.
+const { receiverPort, isRunSubcommand, isTraceReceiverHealthy, onExit } = (
+	await import(pathToFileURL(LAUNCHER_PATH).href)
+).internalsForTesting;
 
 async function withReceiverPortEnv(value, run) {
 	const previous = process.env.DD_APM_RECEIVER_PORT;

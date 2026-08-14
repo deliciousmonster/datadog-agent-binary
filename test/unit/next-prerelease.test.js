@@ -1,7 +1,7 @@
-const { test } = require('node:test');
-const assert = require('node:assert');
+import { test } from 'node:test';
+import assert from 'node:assert';
 
-const { nextPrerelease, compare, parseVersion } = require('../../scripts/next-prerelease.js');
+import { nextPrerelease, compare, parseVersion } from '../../scripts/next-prerelease.js';
 
 // The state that shipped a regression: package.json trailed the tags, so a base taken
 // from it produced a version below both the stable release and the newest prerelease.

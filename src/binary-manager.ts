@@ -9,7 +9,7 @@ export class BinaryManager {
 	private readonly buildDir: string;
 
 	constructor() {
-		this.buildDir = path.join(__dirname, '..', 'build');
+		this.buildDir = path.join(import.meta.dirname, '..', 'build');
 	}
 
 	/**

@@ -16,14 +16,18 @@
  *
  * Hermetic: temp dirs and a zero-byte stub, no agent binary, no network.
  */
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const { preflightTraceAgentConfig, LaunchPreflightError } = require(path.join(REPO_ROOT, 'dist', 'agent-launcher.js'));
+const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
+// pathToFileURL because import() of a bare absolute path is rejected on Windows.
+const { preflightTraceAgentConfig, LaunchPreflightError } = await import(
+	pathToFileURL(path.join(REPO_ROOT, 'dist', 'agent-launcher.js')).href
+);
 
 const isWindows = process.platform === 'win32';
 

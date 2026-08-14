@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Single source of the module ids Harper's loader claims.
  *
@@ -18,10 +16,10 @@
  * stale silently when harper adds an id.
  */
 
-const fs = require('node:fs');
-const path = require('node:path');
+import fs from 'node:fs';
+import path from 'node:path';
 
-const BASELINE_CLAIMED_IDS = [
+export const BASELINE_CLAIMED_IDS = [
 	'harper',
 	'harperdb',
 	'harperdb/v1',
@@ -30,8 +28,8 @@ const BASELINE_CLAIMED_IDS = [
 	'@harperfast/harper-pro',
 ];
 
-const HARPER_LOADER_PATH = path.join(
-	__dirname,
+export const HARPER_LOADER_PATH = path.join(
+	import.meta.dirname,
 	'..',
 	'..',
 	'node_modules',
@@ -42,14 +40,14 @@ const HARPER_LOADER_PATH = path.join(
 );
 
 /** The string literals of `HARPER_MODULE_IDS = new Set([...])`, or null. */
-function extractClaimedIds(source) {
+export function extractClaimedIds(source) {
 	const block = source.match(/HARPER_MODULE_IDS\s*=\s*new Set\(\[([^\]]*)\]/);
 	if (!block) return null;
 	return [...block[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]);
 }
 
 /** The baseline unioned with the installed harper's live list, as a Set. */
-function claimedIds() {
+export function claimedIds() {
 	const ids = new Set(BASELINE_CLAIMED_IDS);
 	if (fs.existsSync(HARPER_LOADER_PATH)) {
 		const live = extractClaimedIds(fs.readFileSync(HARPER_LOADER_PATH, 'utf8'));
@@ -57,10 +55,3 @@ function claimedIds() {
 	}
 	return ids;
 }
-
-module.exports = {
-	BASELINE_CLAIMED_IDS,
-	HARPER_LOADER_PATH,
-	claimedIds,
-	extractClaimedIds,
-};

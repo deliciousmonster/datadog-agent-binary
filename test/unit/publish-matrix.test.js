@@ -1,18 +1,10 @@
-'use strict';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
-const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-
-const {
-	expectedPackages,
-	readLocal,
-	verify,
-	PACKAGE_NAME,
-	PACKAGE_VERSION,
-} = require('../../scripts/publish-matrix.js');
+import { expectedPackages, readLocal, verify, PACKAGE_NAME, PACKAGE_VERSION } from '../../scripts/publish-matrix.js';
 
 /** Stage a package dir on disk the way create-platform-packages.js would. */
 function stage(dir, platform, { os: pkgOs, cpu, version, binaries }) {

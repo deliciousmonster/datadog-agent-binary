@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * The published manifest must never name a module id Harper's loader claims.
  *
@@ -16,21 +14,21 @@
  * booted Harper; this file is the hermetic guard that runs on every npm test.
  */
 
-const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 // The claim-id list and its live derivation live in one support module because
 // test/integration/harper-import.test.ts scans the packed artifact against the
 // same ids; a private copy here or there goes stale when harper adds one.
-const {
+import {
 	BASELINE_CLAIMED_IDS,
 	HARPER_LOADER_PATH,
 	claimedIds,
 	extractClaimedIds,
-} = require('../support/harper-claimed-ids.js');
+} from '../support/harper-claimed-ids.js';
 
-const REPO_ROOT = path.join(__dirname, '..', '..');
+const REPO_ROOT = path.join(import.meta.dirname, '..', '..');
 
 /**
  * Every { key, name } pair a published manifest can use to name a dependency.

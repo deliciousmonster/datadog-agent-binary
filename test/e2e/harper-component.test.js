@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Resolution and launch behaviour, exercised against a stub platform package in
  * a throwaway sandbox.
@@ -10,15 +8,17 @@
  * Harper v5 in test/integration/harper-spawn.test.ts.
  */
 
-const { test, before, after } = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const child_process = require('node:child_process');
-const { EventEmitter } = require('node:events');
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import child_process from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { syncBuiltinESMExports } from 'node:module';
+import { pathToFileURL } from 'node:url';
 
-const { findFreePort } = require('../support/find-free-port.js');
+import { findFreePort } from '../support/find-free-port.js';
 
 function findRepoRoot(start) {
 	let dir = start;
@@ -30,9 +30,10 @@ function findRepoRoot(start) {
 	return dir;
 }
 
-const REPO_ROOT = findRepoRoot(__dirname);
-const mainPkg = require(path.join(REPO_ROOT, 'package.json'));
-const { Platform } = require(path.join(REPO_ROOT, 'dist', 'platform.js'));
+const REPO_ROOT = findRepoRoot(import.meta.dirname);
+const mainPkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
+// pathToFileURL because import() of a bare absolute path is rejected on Windows.
+const { Platform } = await import(pathToFileURL(path.join(REPO_ROOT, 'dist', 'platform.js')).href);
 
 const platform = Platform.current();
 const platformName = platform.getName();
@@ -136,9 +137,9 @@ function runToCompletion(child) {
 	});
 }
 
-before(() => {
-	// realpath so paths compared against __dirname-derived values agree on macOS,
-	// where os.tmpdir() is a symlink into /private.
+before(async () => {
+	// realpath so paths compared against module-location-derived values agree on
+	// macOS, where os.tmpdir() is a symlink into /private.
 	sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ddab-harper-')));
 	fs.cpSync(path.join(REPO_ROOT, 'dist'), path.join(sandbox, 'dist'), {
 		recursive: true,
@@ -146,6 +147,9 @@ before(() => {
 	fs.cpSync(path.join(REPO_ROOT, 'bin'), path.join(sandbox, 'bin'), {
 		recursive: true,
 	});
+	// The manifest carries "type": "module", which is what makes the copied dist/*.js
+	// load as ESM; without it Node falls back to per-file syntax detection.
+	fs.copyFileSync(path.join(REPO_ROOT, 'package.json'), path.join(sandbox, 'package.json'));
 	linkRuntimeDependencies(path.join(REPO_ROOT, 'node_modules'), path.join(sandbox, 'node_modules'));
 	sandboxBinaries = createStubPlatformPackage(path.join(sandbox, 'node_modules', ...platformPkgName.split('/')));
 
@@ -154,8 +158,8 @@ before(() => {
 	traceConfigPath = path.join(sandbox, 'datadog.yaml');
 	fs.writeFileSync(traceConfigPath, '');
 
-	({ BinaryManager } = require(path.join(sandbox, 'dist', 'binary-manager.js')));
-	({ launchAgent } = require(path.join(sandbox, 'dist', 'agent-launcher.js')));
+	({ BinaryManager } = await import(pathToFileURL(path.join(sandbox, 'dist', 'binary-manager.js')).href));
+	({ launchAgent } = await import(pathToFileURL(path.join(sandbox, 'dist', 'agent-launcher.js')).href));
 });
 
 after(() => {
@@ -314,8 +318,10 @@ test('end-to-end: the trace-agent shim resolves and executes the trace-agent', a
  * replaced by a throw so a launcher bailout surfaces as a test failure instead of
  * killing the test runner.
  *
- * The compiled launcher calls `(0, child_process_1.spawn)(...)`, a property read
- * at call time, so patching the builtin module object is enough.
+ * The ESM launcher holds `spawn` as a named import binding, which snapshots the
+ * builtin's export at link time; mutating the CJS module object alone would leave
+ * that binding pointing at the real spawn. syncBuiltinESMExports() re-points the
+ * ESM bindings at the patched (and later the restored) function.
  */
 async function withStubbedSpawn(fakeChild, run) {
 	const realSpawn = child_process.spawn;
@@ -325,6 +331,7 @@ async function withStubbedSpawn(fakeChild, run) {
 		calls.push({ command, args, options });
 		return fakeChild;
 	};
+	syncBuiltinESMExports();
 	process.exit = (code) => {
 		throw new Error(`launchAgent called process.exit(${code})`);
 	};
@@ -332,6 +339,7 @@ async function withStubbedSpawn(fakeChild, run) {
 		await run();
 	} finally {
 		child_process.spawn = realSpawn;
+		syncBuiltinESMExports();
 		process.exit = realExit;
 	}
 	return calls;

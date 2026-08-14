@@ -1,11 +1,10 @@
-'use strict';
-
-const { test, before, after } = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 
 function findRepoRoot(start) {
 	let dir = start;
@@ -17,8 +16,8 @@ function findRepoRoot(start) {
 	return dir;
 }
 
-const REPO_ROOT = findRepoRoot(__dirname);
-const mainPkg = require(path.join(REPO_ROOT, 'package.json'));
+const REPO_ROOT = findRepoRoot(import.meta.dirname);
+const mainPkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
 // Derived, never hardcoded: a re-scope must not leave this test asserting the old one.
 const PACKAGE_NAME = mainPkg.name;
 
@@ -172,11 +171,17 @@ test("os/cpu never leak this project's internal platform names", () => {
 	}
 });
 
-/** Load a generated platform package's index.js the way a consumer would. */
+/**
+ * Load a generated platform package's index.js the way a consumer would.
+ * createRequire, because the generated index.js is CommonJS BY CONTRACT: its
+ * manifest carries no "type" field, so it stays CJS even though the main
+ * package is ESM-only, and loading it through require() proves exactly that.
+ */
+const requireCjs = createRequire(import.meta.url);
 function loadIndex(platformName) {
 	const indexPath = path.join(npmDir, platformName, 'index.js');
 	assert.ok(fs.existsSync(indexPath), `${platformName}: no index.js was generated`);
-	return require(indexPath);
+	return requireCjs(indexPath);
 }
 
 test('every platform package exports an accessor for every binary it ships', () => {

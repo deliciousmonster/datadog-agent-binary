@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
-const fs = require('fs');
-const path = require('path');
-const { argv } = require('process');
-const { SUPPORTED_PLATFORMS, Platform } = require('../dist/platform.js');
+import fs from 'node:fs';
+import path from 'node:path';
+import { argv } from 'node:process';
+import { SUPPORTED_PLATFORMS, Platform } from '../dist/platform.js';
 
 // Platform sub-packages are named `<this package>-<platform>`. Deriving the prefix
 // from the manifest keeps packaging and runtime resolution in agreement and makes
 // re-scoping a one-line edit.
-const parentPackageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+const parentPackageJson = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf8'));
 const PACKAGE_NAME = parentPackageJson.name;
 if (!PACKAGE_NAME) {
 	throw new Error('package.json has no `name`; cannot derive package names.');
@@ -16,7 +16,7 @@ if (!PACKAGE_NAME) {
 const version = parentPackageJson.version;
 
 function getPackageDir(platform) {
-	return path.join(__dirname, '..', 'npm', platform.getName());
+	return path.join(import.meta.dirname, '..', 'npm', platform.getName());
 }
 
 /**
@@ -44,7 +44,7 @@ function getDescriptors(platform) {
 }
 
 function copyPlatformBinaries(platform) {
-	const buildBinDir = path.join(__dirname, '..', 'build', platform.getName(), 'bin');
+	const buildBinDir = path.join(import.meta.dirname, '..', 'build', platform.getName(), 'bin');
 	const resolved = getDescriptors(platform).map((descriptor) => ({
 		descriptor,
 		sourcePath: path.join(buildBinDir, descriptor.outputName),
@@ -147,6 +147,12 @@ function jsString(value) {
 // getBinaries() alone. The previous template hardcoded a single accessor and was
 // filled in with replace("BINARY_NAME", name), which substitutes only the first
 // occurrence, so it could not grow a second binary.
+//
+// The generated index.js stays CommonJS on purpose, even though this package is now
+// ESM-only: the platform manifests written below carry no "type" field, so their
+// index.js is CJS by Node's rules, and the main package loads it via `await import()`
+// with a default-interop fallback. Emitting ESM here would require republishing every
+// platform package in lockstep for zero consumer-visible gain.
 function renderIndexJs(platform) {
 	const descriptors = getDescriptors(platform);
 	const accessors = descriptors.map(
