@@ -146,18 +146,17 @@ function renderIndexJs(descriptors) {
 	);
 	const binaryMap = descriptors.map((d) => `    ${d.kind}: ${jsString(d.outputName)}`);
 
-	return (
-		`const path = require('path');\n` +
-		`\n` +
-		`module.exports = {\n` +
-		`${accessors.join(',\n')},\n` +
-		`  // Filenames in bin/ keyed by kind, so consumers and tests can enumerate\n` +
-		`  // what shipped instead of guessing per-platform names.\n` +
-		`  binaries: {\n` +
-		`${binaryMap.join(',\n')}\n` +
-		`  }\n` +
-		`};\n`
-	);
+	return `const path = require('path');
+
+module.exports = {
+${accessors.join(',\n')},
+  // Filenames in bin/ keyed by kind, so consumers and tests can enumerate
+  // what shipped instead of guessing per-platform names.
+  binaries: {
+${binaryMap.join(',\n')}
+  }
+};
+`;
 }
 
 function write(platform, file, contents) {
@@ -180,9 +179,7 @@ function writePlatformPackageJson(platform) {
 	// unexplained ENOENT at spawn. Declaring libc makes npm skip the optional
 	// dependency there, and the consumer gets the "no packaged binary" path
 	// instead of a binary that cannot run.
-	if (packageJson.os[0] === 'linux') {
-		packageJson.libc = ['glibc'];
-	}
+	if (packageJson.os[0] === 'linux') packageJson.libc = ['glibc'];
 
 	// The only place a platform package.json is written, so this covers every mode.
 	assertNodeOSAndCPU(packageJson);

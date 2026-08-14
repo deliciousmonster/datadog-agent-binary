@@ -97,16 +97,13 @@ if (isCliEntry(import.meta.url)) {
 	const split = (s) => (s ? s.split(/[\s,]+/).filter(Boolean) : []);
 
 	let registry = [];
-	const registryRaw = get('--registry');
-	if (registryRaw) {
-		try {
-			const parsed = JSON.parse(registryRaw);
-			// An unpublished scope answers with a well-formed `{"error":{...}}` body, so
-			// valid JSON is not the same as a version list. Keep only the strings.
-			registry = (Array.isArray(parsed) ? parsed : [parsed]).filter((v) => typeof v === 'string');
-		} catch {
-			registry = [];
-		}
+	try {
+		const parsed = JSON.parse(get('--registry') ?? 'null');
+		// An unpublished scope answers with a well-formed `{"error":{...}}` body, so
+		// valid JSON is not the same as a version list. Keep only the strings.
+		registry = (Array.isArray(parsed) ? parsed : [parsed]).filter((v) => typeof v === 'string');
+	} catch {
+		// Not JSON at all, so nothing published is known. Tags still decide.
 	}
 
 	try {
@@ -116,9 +113,7 @@ if (isCliEntry(import.meta.url)) {
 			registry,
 			packageVersion: get('--package-version'),
 		});
-		if (result.ignored.length) {
-			console.error(`Ignored unparseable versions: ${result.ignored.join(', ')}`);
-		}
+		if (result.ignored.length) console.error(`Ignored unparseable versions: ${result.ignored.join(', ')}`);
 		console.error(`Highest known: ${result.highest ?? 'none'}`);
 		process.stdout.write(result.version);
 	} catch (err) {
