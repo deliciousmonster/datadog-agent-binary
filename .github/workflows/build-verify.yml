@@ -26,13 +26,13 @@ on:
   schedule:
     # Off the hour deliberately: jobs scheduled at :00 queue behind everyone
     # else's cron.
-    - cron: "17 4 * * *"
+    - cron: '17 4 * * *'
   workflow_dispatch:
     inputs:
       platform:
-        description: "Platform to build"
+        description: 'Platform to build'
         required: false
-        default: "linux-x86_64"
+        default: 'linux-x86_64'
         type: choice
         options:
           - linux-x86_64
@@ -40,13 +40,13 @@ on:
           - macos-arm64
           - windows-x86_64
       datadog_version:
-        description: "Override the Datadog Agent version (default: .datadog-agent-version)"
+        description: 'Override the Datadog Agent version (default: .datadog-agent-version)'
         required: false
 
 env:
   # Must satisfy the go.mod `go` directive of the release pinned in
   # .datadog-agent-version. Keep in step with build-release.yml.
-  GO_VERSION: "1.25.8"
+  GO_VERSION: '1.25.8'
 
 jobs:
   build-verify:
@@ -67,8 +67,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version-file: ".nvmrc"
-          cache: "npm"
+          node-version-file: '.nvmrc'
+          cache: 'npm'
 
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
@@ -81,7 +81,7 @@ jobs:
           # dda is a Python CLI and the agent's build system is invoke-based, so
           # Python builds EITHER binary. Unrelated to the `python` build tag, which
           # is excluded from the core agent so it does not embed CPython.
-          python-version: "3.12"
+          python-version: '3.12'
 
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'

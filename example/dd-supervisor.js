@@ -19,23 +19,15 @@
  * failure mode here is silent by default.
  */
 
-import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-	accessSync,
-	constants,
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	renameSync,
-	writeFileSync,
-} from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { threadId } from "node:worker_threads";
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { threadId } from 'node:worker_threads';
 // Bare specifier, so Harper loads this natively. Fine: nothing in it spawns. The spawn stays
 // in this file, which Harper does instrument.
-import { BinaryManager } from "@deliciousmonster/datadog-agent-binary";
+import { BinaryManager } from '@deliciousmonster/datadog-agent-binary';
 
 /**
  * Harper seeds every application compartment with `logger`; entries land in hdb.log prefixed
@@ -43,13 +35,13 @@ import { BinaryManager } from "@deliciousmonster/datadog-agent-binary";
  * Harper the global is absent, and this module has to survive a native load long enough to
  * report that it was loaded natively.
  */
-const log = typeof logger === "undefined" ? console : logger;
+const log = typeof logger === 'undefined' ? console : logger;
 
 /** Default APM receiver port. dd-trace dials the same one with no configuration. */
 const RECEIVER_PORT = Number(process.env.DD_APM_RECEIVER_PORT || 8126);
 
 /** A command no machine has and no operator would allowlist. Only used to probe `spawn`. */
-const PROBE_COMMAND = "harper-datadog-spawn-probe-must-not-exist";
+const PROBE_COMMAND = 'harper-datadog-spawn-probe-must-not-exist';
 
 /**
  * `name` is load-bearing twice over: Harper rejects a spawn without it, and it is the PID
@@ -60,24 +52,24 @@ const PROBE_COMMAND = "harper-datadog-spawn-probe-must-not-exist";
  */
 const AGENTS = [
 	{
-		kind: "trace",
-		name: "datadog-trace-agent",
-		title: "trace-agent",
+		kind: 'trace',
+		name: 'datadog-trace-agent',
+		title: 'trace-agent',
 		resolve: (manager) => manager.ensureTraceAgentBinary(),
 		// The trace-agent's `-c` is a FILE. Its help text says "path to directory containing
 		// datadog.yaml", but that text is stale: upstream's `defaultConfigPath` is
 		// `<install>/etc/datadog.yaml` (cmd/trace-agent/command). Handing it the directory
 		// the core agent wants dies with "unable to load Datadog config file".
-		args: (paths) => ["run", "-c", paths.configFile],
+		args: (paths) => ['run', '-c', paths.configFile],
 	},
 	{
-		kind: "core",
-		name: "datadog-agent",
-		title: "core agent",
-		resolve: (manager) => manager.ensureBinary("core"),
+		kind: 'core',
+		name: 'datadog-agent',
+		title: 'core agent',
+		resolve: (manager) => manager.ensureBinary('core'),
 		// The core agent's `-c`/`--cfgpath` really is a DIRECTORY, verified against the
 		// shipped binary's `run --help`. The two binaries disagree about this flag.
-		args: (paths) => ["run", "-c", paths.runtimeDir],
+		args: (paths) => ['run', '-c', paths.runtimeDir],
 	},
 ];
 
@@ -97,7 +89,7 @@ const AGENTS = [
 export function assertSpawnInterception() {
 	let child;
 	try {
-		child = spawn(PROBE_COMMAND, [], { name: "dd-spawn-probe" });
+		child = spawn(PROBE_COMMAND, [], { name: 'dd-spawn-probe' });
 	} catch (error) {
 		if (/is not allowed/.test(error.message)) {
 			log.info(
@@ -120,7 +112,7 @@ export function assertSpawnInterception() {
 	// No throw: this is Node's real spawn, and the ENOENT for PROBE_COMMAND is still in flight
 	// as an 'error' event. Unhandled, it becomes an uncaught exception and kills this worker
 	// thread.
-	child.on("error", () => {});
+	child.on('error', () => {});
 	child.unref();
 
 	log.error(
@@ -137,7 +129,7 @@ export function assertSpawnInterception() {
 	);
 	return {
 		intercepted: false,
-		detail: "spawn of a bogus command was permitted",
+		detail: 'spawn of a bogus command was permitted',
 	};
 }
 
@@ -153,15 +145,14 @@ export function assertSpawnInterception() {
  * run directory out from under a live agent.
  */
 function resolveRuntimeDir() {
-	if (process.env.DD_HARPER_RUNTIME_DIR)
-		return process.env.DD_HARPER_RUNTIME_DIR;
+	if (process.env.DD_HARPER_RUNTIME_DIR) return process.env.DD_HARPER_RUNTIME_DIR;
 	// ROOTPATH is set by the harper-pro image and points at the mounted volume, so the
 	// Datadog tree sits next to Harper's own state and survives a restart.
-	if (process.env.ROOTPATH) return join(process.env.ROOTPATH, "datadog");
+	if (process.env.ROOTPATH) return join(process.env.ROOTPATH, 'datadog');
 	// Harper's default root path is in its boot properties file and is not derivable from
 	// here. Fall back to a directory writable both in the container (HOME=/home/harperdb) and
 	// in a developer shell.
-	return join(homedir(), ".harper-datadog");
+	return join(homedir(), '.harper-datadog');
 }
 
 /**
@@ -174,7 +165,7 @@ function resolveRuntimeDir() {
  */
 function resolveHarperLogPath() {
 	if (process.env.DD_HARPER_LOG_PATH) return process.env.DD_HARPER_LOG_PATH;
-	if (process.env.ROOTPATH) return join(process.env.ROOTPATH, "log", "hdb.log");
+	if (process.env.ROOTPATH) return join(process.env.ROOTPATH, 'log', 'hdb.log');
 	return null;
 }
 
@@ -192,9 +183,7 @@ function resolveHarperLogPath() {
  */
 function configVersion(...parts) {
 	// >>> 1 keeps it inside 2^31 so it round-trips through parseInt() unchanged.
-	return (
-		createHash("sha256").update(parts.join("\0")).digest().readUInt32BE(0) >>> 1
-	);
+	return createHash('sha256').update(parts.join('\0')).digest().readUInt32BE(0) >>> 1;
 }
 
 /** YAML-safe scalar. Double-quoted form also survives Windows drive letters. */
@@ -211,7 +200,7 @@ function yamlString(value) {
  */
 function writeFileAtomic(target, contents) {
 	const temp = `${target}.${process.pid}.${threadId}.tmp`;
-	writeFileSync(temp, contents, "utf-8");
+	writeFileSync(temp, contents, 'utf-8');
 	renameSync(temp, target);
 }
 
@@ -222,40 +211,40 @@ function writeFileAtomic(target, contents) {
  */
 function renderDatadogYaml(paths) {
 	return [
-		"# GENERATED by dd-supervisor.js on every Harper worker start. Edits are overwritten.",
-		"#",
-		"# Every path is relocated off the Datadog defaults, which are unwritable for the",
-		"# non-root user the deploy target runs as.",
-		"#",
-		"# api_key and site are absent by design: they come from DD_API_KEY / DD_SITE in the",
-		"# environment, which keeps the key out of this file.",
-		"",
+		'# GENERATED by dd-supervisor.js on every Harper worker start. Edits are overwritten.',
+		'#',
+		'# Every path is relocated off the Datadog defaults, which are unwritable for the',
+		'# non-root user the deploy target runs as.',
+		'#',
+		'# api_key and site are absent by design: they come from DD_API_KEY / DD_SITE in the',
+		'# environment, which keeps the key out of this file.',
+		'',
 		`confd_path: ${yamlString(paths.confd)}`,
 		`run_path: ${yamlString(paths.run)}`,
 		`auth_token_file_path: ${yamlString(paths.authToken)}`,
 		`ipc_cert_file_path: ${yamlString(paths.ipcCert)}`,
-		"",
-		"# The agents write their own log files under the runtime tree, relocated off the",
-		"# unwritable defaults. No worker thread collects their stdio: a pipe would tie both",
-		"# agents to the thread that won the spawn race, and harper dev replaces that thread",
-		"# on every save.",
-		"log_to_console: false",
+		'',
+		'# The agents write their own log files under the runtime tree, relocated off the',
+		'# unwritable defaults. No worker thread collects their stdio: a pipe would tie both',
+		'# agents to the thread that won the spawn race, and harper dev replaces that thread',
+		'# on every save.',
+		'log_to_console: false',
 		`log_file: ${yamlString(paths.coreLog)}`,
-		"",
-		"# Off by default in the agent. The source itself is in conf.d.",
-		"logs_enabled: true",
-		"",
-		"# Loopback only. Nothing here should be reachable from outside the container.",
+		'',
+		'# Off by default in the agent. The source itself is in conf.d.',
+		'logs_enabled: true',
+		'',
+		'# Loopback only. Nothing here should be reachable from outside the container.',
 		'bind_host: "127.0.0.1"',
-		"",
-		"apm_config:",
-		"  enabled: true",
+		'',
+		'apm_config:',
+		'  enabled: true',
 		`  receiver_port: ${RECEIVER_PORT}`,
-		"  # On, this binds 0.0.0.0 and accepts spans from anything that reaches the container.",
-		"  apm_non_local_traffic: false",
+		'  # On, this binds 0.0.0.0 and accepts spans from anything that reaches the container.',
+		'  apm_non_local_traffic: false',
 		`  log_file: ${yamlString(paths.traceLog)}`,
-		"",
-	].join("\n");
+		'',
+	].join('\n');
 }
 
 /**
@@ -264,13 +253,8 @@ function renderDatadogYaml(paths) {
  * placeholders substituted here. See conf.d/harperdb.d/conf.yaml for the multi_line rule.
  */
 function renderLogsConfig(componentDir, logPath, service) {
-	const template = readFileSync(
-		join(componentDir, "conf.d", "harperdb.d", "conf.yaml"),
-		"utf-8"
-	);
-	return template
-		.replaceAll("__HDB_LOG_PATH__", logPath)
-		.replaceAll("__DD_SERVICE__", service);
+	const template = readFileSync(join(componentDir, 'conf.d', 'harperdb.d', 'conf.yaml'), 'utf-8');
+	return template.replaceAll('__HDB_LOG_PATH__', logPath).replaceAll('__DD_SERVICE__', service);
 }
 
 /**
@@ -287,7 +271,7 @@ function preflightBinary(title, binaryPath) {
 	// containing a space can never be allowlisted by any config. Failing on it explicitly,
 	// because otherwise the error reads as a plain "not allowed" and sends people to edit a
 	// config that cannot help them.
-	if (binaryPath.includes(" ")) {
+	if (binaryPath.includes(' ')) {
 		throw new Error(
 			`The ${title} binary path contains a space: ${binaryPath}. Harper matches the ` +
 				`allowlist with command.split(" ")[0], so no applications.allowedSpawnCommands ` +
@@ -314,13 +298,11 @@ function launchOne(descriptor, binaryPath, paths, version) {
 	};
 
 	try {
-		if (!binaryPath) throw new Error("its path could not be resolved");
+		if (!binaryPath) throw new Error('its path could not be resolved');
 		preflightBinary(descriptor.title, binaryPath);
 	} catch (error) {
 		state.error = error.message;
-		log.error(
-			`Datadog supervisor: cannot start the ${descriptor.title}: ${error.message}`
-		);
+		log.error(`Datadog supervisor: cannot start the ${descriptor.title}: ${error.message}`);
 		return state;
 	}
 
@@ -337,7 +319,7 @@ function launchOne(descriptor, binaryPath, paths, version) {
 			// SIGPIPE at their next write, the PID file survives them, and every later
 			// thread adopts the corpse and reports "already running" forever. The agents
 			// write their own log files under the runtime tree instead (renderDatadogYaml).
-			stdio: ["ignore", "ignore", "ignore"],
+			stdio: ['ignore', 'ignore', 'ignore'],
 			env: process.env,
 		});
 	} catch (error) {
@@ -360,10 +342,8 @@ function launchOne(descriptor, binaryPath, paths, version) {
 	// ChildProcess becomes an uncaught exception that takes the worker thread with it. The
 	// event is asynchronous, so returning from here without this listener is a crash waiting
 	// on the next tick.
-	child.on("error", (error) => {
-		log.error(
-			`Datadog supervisor: the ${descriptor.title} failed to execute: ${error.message}`
-		);
+	child.on('error', (error) => {
+		log.error(`Datadog supervisor: the ${descriptor.title} failed to execute: ${error.message}`);
 	});
 
 	// Every loser of the PID-file race gets an ExistingProcessWrapper: an EventEmitter with
@@ -385,15 +365,13 @@ function launchOne(descriptor, binaryPath, paths, version) {
 	// Agent output no longer reaches hdb.log, so say where it went instead.
 	log.info(
 		`Datadog supervisor: started the ${descriptor.title} (pid ${child.pid}): ` +
-			`${binaryPath} ${args.join(" ")}. It logs to ` +
-			`${join(paths.runtimeDir, "logs")}.`
+			`${binaryPath} ${args.join(' ')}. It logs to ` +
+			`${join(paths.runtimeDir, 'logs')}.`
 	);
 
-	child.on("exit", (code, signal) => {
+	child.on('exit', (code, signal) => {
 		if (signal) {
-			log.warn(
-				`Datadog supervisor: the ${descriptor.title} was terminated by ${signal}.`
-			);
+			log.warn(`Datadog supervisor: the ${descriptor.title} was terminated by ${signal}.`);
 			return;
 		}
 		if (code === 0) {
@@ -416,18 +394,18 @@ function prepareRuntime(componentDir) {
 	const runtimeDir = resolveRuntimeDir();
 	const paths = {
 		runtimeDir,
-		configFile: join(runtimeDir, "datadog.yaml"),
-		confd: join(runtimeDir, "conf.d"),
-		run: join(runtimeDir, "run"),
-		authToken: join(runtimeDir, "run", "auth_token"),
-		ipcCert: join(runtimeDir, "run", "ipc_cert.pem"),
-		coreLog: join(runtimeDir, "logs", "agent.log"),
-		traceLog: join(runtimeDir, "logs", "trace-agent.log"),
+		configFile: join(runtimeDir, 'datadog.yaml'),
+		confd: join(runtimeDir, 'conf.d'),
+		run: join(runtimeDir, 'run'),
+		authToken: join(runtimeDir, 'run', 'auth_token'),
+		ipcCert: join(runtimeDir, 'run', 'ipc_cert.pem'),
+		coreLog: join(runtimeDir, 'logs', 'agent.log'),
+		traceLog: join(runtimeDir, 'logs', 'trace-agent.log'),
 	};
 
 	mkdirSync(paths.run, { recursive: true });
-	mkdirSync(join(runtimeDir, "logs"), { recursive: true });
-	mkdirSync(join(paths.confd, "harperdb.d"), { recursive: true });
+	mkdirSync(join(runtimeDir, 'logs'), { recursive: true });
+	mkdirSync(join(paths.confd, 'harperdb.d'), { recursive: true });
 
 	// The trace-agent writes its auth token beside the config file. Without write access it
 	// does not fail fast: it hangs for 30 seconds, then dies on "error while creating or
@@ -438,12 +416,12 @@ function prepareRuntime(componentDir) {
 	const datadogYaml = renderDatadogYaml(paths);
 	writeFileAtomic(paths.configFile, datadogYaml);
 
-	const service = process.env.DD_SERVICE || "harper";
+	const service = process.env.DD_SERVICE || 'harper';
 	const logPath = resolveHarperLogPath();
-	let logsYaml = "";
+	let logsYaml = '';
 	if (logPath) {
 		logsYaml = renderLogsConfig(componentDir, logPath, service);
-		writeFileAtomic(join(paths.confd, "harperdb.d", "conf.yaml"), logsYaml);
+		writeFileAtomic(join(paths.confd, 'harperdb.d', 'conf.yaml'), logsYaml);
 		if (!existsSync(logPath)) {
 			log.warn(
 				`Datadog supervisor: Harper's log file ${logPath} does not exist yet. The agent ` +
@@ -479,7 +457,7 @@ export function startDatadogAgents(componentDir) {
 		const status = {
 			interception: assertSpawnInterception(),
 			receiverPort: RECEIVER_PORT,
-			apiKey: process.env.DD_API_KEY ? "set" : "MISSING",
+			apiKey: process.env.DD_API_KEY ? 'set' : 'MISSING',
 			agents: [],
 		};
 
@@ -494,9 +472,9 @@ export function startDatadogAgents(componentDir) {
 			// batched, and dropped when the intake rejects them. dd-trace sees a successful
 			// flush either way, so an empty APM page is the only symptom.
 			log.warn(
-				"Datadog supervisor: DD_API_KEY is not set. Both agents will start and the " +
-					"trace-agent will accept spans from dd-trace, but the intake rejects the " +
-					"payloads and they are discarded. Nothing will appear in Datadog."
+				'Datadog supervisor: DD_API_KEY is not set. Both agents will start and the ' +
+					'trace-agent will accept spans from dd-trace, but the intake rejects the ' +
+					'payloads and they are discarded. Nothing will appear in Datadog.'
 			);
 		}
 
@@ -515,11 +493,8 @@ export function startDatadogAgents(componentDir) {
 			const binaries = await Promise.all(
 				AGENTS.map((descriptor) =>
 					descriptor.resolve(manager).catch((error) => {
-						log.error(
-							`Datadog supervisor: could not resolve the ${descriptor.title} ` +
-								`binary: ${error.message}`
-						);
-						return "";
+						log.error(`Datadog supervisor: could not resolve the ${descriptor.title} ` + `binary: ${error.message}`);
+						return '';
 					})
 				)
 			);
@@ -528,9 +503,9 @@ export function startDatadogAgents(componentDir) {
 			// rotated DD_API_KEY leaves the running agents posting the old key forever.
 			const version = configVersion(
 				runtime.fingerprint,
-				process.env.DD_API_KEY ?? "",
-				process.env.DD_SITE ?? "",
-				process.env.DD_ENV ?? "",
+				process.env.DD_API_KEY ?? '',
+				process.env.DD_SITE ?? '',
+				process.env.DD_ENV ?? '',
 				...binaries
 			);
 			status.version = version;
@@ -538,9 +513,7 @@ export function startDatadogAgents(componentDir) {
 			// In order, trace-agent first: it owns the socket dd-trace is already trying to
 			// reach.
 			for (const [index, descriptor] of AGENTS.entries()) {
-				status.agents.push(
-					launchOne(descriptor, binaries[index], runtime.paths, version)
-				);
+				status.agents.push(launchOne(descriptor, binaries[index], runtime.paths, version));
 			}
 		} catch (error) {
 			status.error = error.message;

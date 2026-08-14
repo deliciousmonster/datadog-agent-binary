@@ -16,8 +16,8 @@
 // registry, one that never had init() called on it. An uninitialised dd-trace is not visibly
 // inert: trace() still runs the callback and hands out spans with plausible trace ids, all of
 // them NoopSpans. isTracerLive() separates the two.
-import tracer from "dd-trace";
-import { startDatadogAgents } from "./dd-supervisor.js";
+import tracer from 'dd-trace';
+import { startDatadogAgents } from './dd-supervisor.js';
 
 /**
  * Started at component load, not on first request, and deliberately not awaited: a rejected
@@ -27,7 +27,7 @@ import { startDatadogAgents } from "./dd-supervisor.js";
 const supervisor = startDatadogAgents(import.meta.dirname);
 
 /** Harper seeds every component compartment with `logger`; entries land in hdb.log. */
-const log = typeof logger === "undefined" ? console : logger;
+const log = typeof logger === 'undefined' ? console : logger;
 
 /**
  * Whether the span we were handed came from a real, initialised tracer. The uninitialised
@@ -47,11 +47,11 @@ function isTracerLive(span) {
 export class Work extends Resource {
 	static async get() {
 		return tracer.trace(
-			"harper.work.request",
+			'harper.work.request',
 			{
-				resource: "GET /Work/",
-				type: "web",
-				tags: { component: "datadog-agent-binary-example" },
+				resource: 'GET /Work/',
+				type: 'web',
+				tags: { component: 'datadog-agent-binary-example' },
 			},
 			async (rootSpan) => {
 				const live = isTracerLive(rootSpan);
@@ -60,61 +60,50 @@ export class Work extends Resource {
 
 				if (!live) {
 					log.error(
-						"Datadog example: dd-trace is NOT initialised on this worker thread. The " +
-							"span below is a NoopSpan and will never reach the trace-agent, even " +
-							"though it has a trace id. Set threads.preloadRequire: dd-trace/init in " +
-							"harperdb-config.yaml and restart Harper. threads.preload alone is not " +
-							"enough: dd-trace/register.js only installs loader hooks, it does not " +
-							"call init()."
+						'Datadog example: dd-trace is NOT initialised on this worker thread. The ' +
+							'span below is a NoopSpan and will never reach the trace-agent, even ' +
+							'though it has a trace id. Set threads.preloadRequire: dd-trace/init in ' +
+							'harperdb-config.yaml and restart Harper. threads.preload alone is not ' +
+							'enough: dd-trace/register.js only installs loader hooks, it does not ' +
+							'call init().'
 					);
 				}
 
 				log.info(`Datadog example: handling GET /Work/ in trace ${traceId}`);
 
-				const sum = await tracer.trace(
-					"harper.work.compute",
-					{ resource: "sum-primes" },
-					async (span) => {
-						const total = sumPrimesBelow(20000);
-						span.setTag("work.result", total);
-						return total;
-					}
-				);
+				const sum = await tracer.trace('harper.work.compute', { resource: 'sum-primes' }, async (span) => {
+					const total = sumPrimesBelow(20000);
+					span.setTag('work.result', total);
+					return total;
+				});
 
-				const delayMs = await tracer.trace(
-					"harper.work.io",
-					{ resource: "simulated-io" },
-					async (span) => {
-						const ms = 25;
-						await new Promise((resolve) => setTimeout(resolve, ms));
-						span.setTag("work.delay_ms", ms);
-						return ms;
-					}
-				);
+				const delayMs = await tracer.trace('harper.work.io', { resource: 'simulated-io' }, async (span) => {
+					const ms = 25;
+					await new Promise((resolve) => setTimeout(resolve, ms));
+					span.setTag('work.delay_ms', ms);
+					return ms;
+				});
 
-				rootSpan.setTag("work.sum", sum);
+				rootSpan.setTag('work.sum', sum);
 
 				// Harper renders a logged Error across many lines, none of which start with a
 				// timestamp: the shape the multi_line rule in conf.d/harperdb.d/conf.yaml
 				// reassembles. Without that rule each `at ...` frame arrives as its own log.
 				log.warn(
-					"Datadog example: emitting a deliberate multi-line log entry to exercise the " +
-						"multi_line processing rule",
-					new Error(
-						"This error is intentional. It is here for its stack trace."
-					)
+					'Datadog example: emitting a deliberate multi-line log entry to exercise the ' + 'multi_line processing rule',
+					new Error('This error is intentional. It is here for its stack trace.')
 				);
 
 				return {
 					traceId,
 					traceId128,
 					tracerInitialized: live,
-					service: process.env.DD_SERVICE || "harper",
+					service: process.env.DD_SERVICE || 'harper',
 					sum,
 					delayMs,
 					hint: live
 						? `Search Datadog APM for trace_id:${traceId}`
-						: "Spans are being discarded: dd-trace is not initialised on this thread.",
+						: 'Spans are being discarded: dd-trace is not initialised on this thread.',
 				};
 			}
 		);
@@ -131,12 +120,10 @@ export class DatadogStatus extends Resource {
 		const status = await supervisor;
 		return {
 			...status,
-			tracerInitialized: tracer.trace("harper.status.probe", (span) =>
-				isTracerLive(span)
-			),
+			tracerInitialized: tracer.trace('harper.status.probe', (span) => isTracerLive(span)),
 			verify: {
 				receiver: `curl -s 127.0.0.1:${status.receiverPort}/info`,
-				traces: "curl -s -u <user>:<pass> http://localhost:9926/Work/",
+				traces: 'curl -s -u <user>:<pass> http://localhost:9926/Work/',
 			},
 		};
 	}

@@ -1,11 +1,11 @@
-import { spawn } from "node:child_process";
-import * as fs from "node:fs";
-import * as net from "node:net";
-import * as path from "node:path";
-import { BinaryManager } from "./binary-manager.js";
-import { errorMessage, logger } from "./logger.js";
-import { Platform } from "./platform.js";
-import { AgentBinaryKind } from "./types.js";
+import { spawn } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as net from 'node:net';
+import * as path from 'node:path';
+import { BinaryManager } from './binary-manager.js';
+import { errorMessage, logger } from './logger.js';
+import { Platform } from './platform.js';
+import { AgentBinaryKind } from './types.js';
 
 /**
  * The launcher shared by the `bin/datadog-agent` and `bin/trace-agent` shims. The only
@@ -29,15 +29,15 @@ export class LaunchPreflightError extends Error {}
  * the first thing to check when no logs or traces are arriving.
  */
 export function logDatadogEnv(kind: AgentBinaryKind): void {
-	const present = (name: string) => (process.env[name] ? "set" : "MISSING");
+	const present = (name: string) => (process.env[name] ? 'set' : 'MISSING');
 	logger.info(
 		`Datadog env visible to the ${kind} wrapper: ` +
-			`DD_API_KEY=${present("DD_API_KEY")}, ` +
-			`DD_SITE=${process.env.DD_SITE || "MISSING"}, ` +
-			`DD_ENV=${process.env.DD_ENV || "MISSING"}, ` +
-			`DD_HOSTNAME=${process.env.DD_HOSTNAME || "(default)"}, ` +
-			`DD_LOGS_ENABLED=${process.env.DD_LOGS_ENABLED || "(unset, default false)"}, ` +
-			`DD_LOG_TO_CONSOLE=${process.env.DD_LOG_TO_CONSOLE || "(unset, default true)"}`
+			`DD_API_KEY=${present('DD_API_KEY')}, ` +
+			`DD_SITE=${process.env.DD_SITE || 'MISSING'}, ` +
+			`DD_ENV=${process.env.DD_ENV || 'MISSING'}, ` +
+			`DD_HOSTNAME=${process.env.DD_HOSTNAME || '(default)'}, ` +
+			`DD_LOGS_ENABLED=${process.env.DD_LOGS_ENABLED || '(unset, default false)'}, ` +
+			`DD_LOG_TO_CONSOLE=${process.env.DD_LOG_TO_CONSOLE || '(unset, default true)'}`
 	);
 
 	// APM is a separate socket: the tracer talks to the trace-agent's receiver, not to the
@@ -45,46 +45,42 @@ export function logDatadogEnv(kind: AgentBinaryKind): void {
 	// receiver binds (DD_APM_RECEIVER_PORT) drops every span with no error on either side.
 	logger.info(
 		`APM env visible to the ${kind} wrapper: ` +
-			`DD_APM_ENABLED=${process.env.DD_APM_ENABLED || "(unset, default true)"}, ` +
-			`DD_APM_RECEIVER_PORT=${
-				process.env.DD_APM_RECEIVER_PORT ||
-				`(unset, default ${DEFAULT_RECEIVER_PORT})`
-			}, ` +
+			`DD_APM_ENABLED=${process.env.DD_APM_ENABLED || '(unset, default true)'}, ` +
+			`DD_APM_RECEIVER_PORT=${process.env.DD_APM_RECEIVER_PORT || `(unset, default ${DEFAULT_RECEIVER_PORT})`}, ` +
 			`DD_TRACE_AGENT_URL=${
-				process.env.DD_TRACE_AGENT_URL ||
-				`(unset, dd-trace dials http://127.0.0.1:${DEFAULT_RECEIVER_PORT})`
+				process.env.DD_TRACE_AGENT_URL || `(unset, dd-trace dials http://127.0.0.1:${DEFAULT_RECEIVER_PORT})`
 			}`
 	);
 
 	if (!process.env.DD_API_KEY) {
-		if (kind === "trace") {
+		if (kind === 'trace') {
 			// The receiver validates nothing at accept time. Spans are taken off the socket,
 			// batched, and discarded when the payload cannot be shipped, so a keyless
 			// trace-agent is indistinguishable from a working one on the application side.
 			logger.warn(
-				"DD_API_KEY is not set in this process. The trace-agent will still bind its " +
-					"receiver and accept spans from dd-trace, but the intake will reject the " +
-					"payloads and the spans are dropped. The application sees a successful flush " +
-					"either way, so an empty APM view is the only symptom. Export the API key into " +
-					"the spawning process (loadEnv) or set api_key in datadog.yaml."
+				'DD_API_KEY is not set in this process. The trace-agent will still bind its ' +
+					'receiver and accept spans from dd-trace, but the intake will reject the ' +
+					'payloads and the spans are dropped. The application sees a successful flush ' +
+					'either way, so an empty APM view is the only symptom. Export the API key into ' +
+					'the spawning process (loadEnv) or set api_key in datadog.yaml.'
 			);
 		} else {
 			logger.warn(
-				"DD_API_KEY is not set in this process. The agent will start but disable " +
-					"its connection to Datadog, so nothing will appear in env:development. " +
-					"Confirm the API key is exported into the spawning process (loadEnv) or " +
+				'DD_API_KEY is not set in this process. The agent will start but disable ' +
+					'its connection to Datadog, so nothing will appear in env:development. ' +
+					'Confirm the API key is exported into the spawning process (loadEnv) or ' +
 					"set in the component's datadog.yaml."
 			);
 		}
 	}
 
 	// Log collection is the core agent's job; the trace-agent ignores it entirely.
-	if (kind === "core" && !process.env.DD_LOGS_ENABLED) {
+	if (kind === 'core' && !process.env.DD_LOGS_ENABLED) {
 		logger.warn(
-			"DD_LOGS_ENABLED is not set (defaults to false). Log collection is OFF, so " +
-				"application logs will not be forwarded to Datadog even when the agent is " +
-				"running. Set DD_LOGS_ENABLED=true (or logs_enabled: true in datadog.yaml) " +
-				"and configure a logs source."
+			'DD_LOGS_ENABLED is not set (defaults to false). Log collection is OFF, so ' +
+				'application logs will not be forwarded to Datadog even when the agent is ' +
+				'running. Set DD_LOGS_ENABLED=true (or logs_enabled: true in datadog.yaml) ' +
+				'and configure a logs source.'
 		);
 	}
 }
@@ -94,13 +90,7 @@ export function logDatadogEnv(kind: AgentBinaryKind): void {
  * versions, so every spelling is accepted: guessing wrong would make the preflight below
  * check a file the agent never reads.
  */
-const CONFIG_FLAGS = new Set([
-	"-c",
-	"--config",
-	"-config",
-	"--cfgpath",
-	"-cfgpath",
-]);
+const CONFIG_FLAGS = new Set(['-c', '--config', '-config', '--cfgpath', '-cfgpath']);
 
 /**
  * Config file the trace-agent will load, as best as can be determined before it runs,
@@ -115,13 +105,10 @@ const CONFIG_FLAGS = new Set([
  * node_modules, which holds no datadog.yaml. Hence: derive from the binary, mark it as a
  * guess, and never let the guess block a launch.
  */
-function resolveConfigPath(
-	args: string[],
-	binaryPath?: string
-): { configPath: string; explicit: boolean } {
+function resolveConfigPath(args: string[], binaryPath?: string): { configPath: string; explicit: boolean } {
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
-		const eq = arg.indexOf("=");
+		const eq = arg.indexOf('=');
 		let value: string | null = null;
 		if (eq > 0 && CONFIG_FLAGS.has(arg.slice(0, eq))) {
 			value = arg.slice(eq + 1);
@@ -130,9 +117,7 @@ function resolveConfigPath(
 		}
 		if (value) {
 			return {
-				configPath: isDirectory(value)
-					? path.join(value, "datadog.yaml")
-					: value,
+				configPath: isDirectory(value) ? path.join(value, 'datadog.yaml') : value,
 				explicit: true,
 			};
 		}
@@ -141,27 +126,19 @@ function resolveConfigPath(
 	if (binaryPath) {
 		// <installRoot>/bin/trace-agent -> <installRoot>/etc/datadog.yaml
 		return {
-			configPath: path.join(
-				path.dirname(path.dirname(binaryPath)),
-				"etc",
-				"datadog.yaml"
-			),
+			configPath: path.join(path.dirname(path.dirname(binaryPath)), 'etc', 'datadog.yaml'),
 			explicit: false,
 		};
 	}
 
 	// No binary to derive from: upstream's compiled-in default, before osinit() rewrites it.
-	if (process.platform === "win32") {
+	if (process.platform === 'win32') {
 		return {
-			configPath: path.join(
-				process.env.ProgramData || "C:\\ProgramData",
-				"Datadog",
-				"datadog.yaml"
-			),
+			configPath: path.join(process.env.ProgramData || 'C:\\ProgramData', 'Datadog', 'datadog.yaml'),
 			explicit: false,
 		};
 	}
-	return { configPath: "/opt/datadog-agent/etc/datadog.yaml", explicit: false };
+	return { configPath: '/opt/datadog-agent/etc/datadog.yaml', explicit: false };
 }
 
 function isDirectory(target: string): boolean {
@@ -187,10 +164,7 @@ function isDirectory(target: string): boolean {
  * refusing to launch on a wrong guess turns a working configuration into a refused start;
  * in that case say what was checked and let the agent speak for itself.
  */
-export function preflightTraceAgentConfig(
-	args: string[],
-	binaryPath?: string
-): void {
+export function preflightTraceAgentConfig(args: string[], binaryPath?: string): void {
 	const { configPath, explicit } = resolveConfigPath(args, binaryPath);
 	const configDir = path.dirname(configPath);
 
@@ -220,16 +194,14 @@ export function preflightTraceAgentConfig(
 	} catch {
 		throw new LaunchPreflightError(
 			`The trace-agent config directory ${configDir} is not writable by uid ${
-				typeof process.getuid === "function" ? process.getuid() : "?"
+				typeof process.getuid === 'function' ? process.getuid() : '?'
 			}. The agent writes its auth_token there, and without write access it hangs for ` +
 				`30 seconds and dies with "error while creating or fetching auth token". Put ` +
 				`datadog.yaml somewhere this user owns and pass -c <path>.`
 		);
 	}
 
-	logger.debug(
-		`trace-agent config preflight passed: ${configPath} exists, ${configDir} is writable`
-	);
+	logger.debug(`trace-agent config preflight passed: ${configPath} exists, ${configDir} is writable`);
 }
 
 /** Receiver port the trace-agent will bind, matching `apm_config.receiver_port`. */
@@ -247,8 +219,8 @@ function receiverPort(): number {
  * up, so the already-running check must not swallow it.
  */
 function isRunSubcommand(args: string[]): boolean {
-	const firstPositional = args.find((arg) => !arg.startsWith("-"));
-	return firstPositional === undefined || firstPositional === "run";
+	const firstPositional = args.find((arg) => !arg.startsWith('-'));
+	return firstPositional === undefined || firstPositional === 'run';
 }
 
 /**
@@ -259,10 +231,7 @@ function isRunSubcommand(args: string[]): boolean {
  * handled" reproduces the exact failure this package fixes. `/info` is served only by the
  * trace-agent and lists the endpoints it accepts.
  */
-async function isTraceReceiverHealthy(
-	port: number,
-	timeoutMs = 1000
-): Promise<boolean> {
+async function isTraceReceiverHealthy(port: number, timeoutMs = 1000): Promise<boolean> {
 	try {
 		const response = await fetch(`http://127.0.0.1:${port}/info`, {
 			signal: AbortSignal.timeout(timeoutMs),
@@ -273,10 +242,7 @@ async function isTraceReceiverHealthy(
 		// trace-agent we can rely on.
 		return (
 			Array.isArray(body.endpoints) &&
-			body.endpoints.some(
-				(endpoint) =>
-					typeof endpoint === "string" && endpoint.includes("/traces")
-			)
+			body.endpoints.some((endpoint) => typeof endpoint === 'string' && endpoint.includes('/traces'))
 		);
 	} catch {
 		return false;
@@ -296,11 +262,11 @@ function isPortBound(port: number, timeoutMs = 250): Promise<boolean> {
 			socket.destroy();
 			resolve(bound);
 		};
-		const socket = net.createConnection({ port, host: "127.0.0.1" });
+		const socket = net.createConnection({ port, host: '127.0.0.1' });
 		socket.setTimeout(timeoutMs);
-		socket.once("connect", () => finish(true));
-		socket.once("timeout", () => finish(false));
-		socket.once("error", () => finish(false));
+		socket.once('connect', () => finish(true));
+		socket.once('timeout', () => finish(false));
+		socket.once('error', () => finish(false));
 	});
 }
 
@@ -315,7 +281,7 @@ function isPortBound(port: number, timeoutMs = 250): Promise<boolean> {
  *   arguments start at index 2 either way.
  */
 export async function launchAgent(
-	kind: AgentBinaryKind = "core",
+	kind: AgentBinaryKind = 'core',
 	args: string[] = process.argv.slice(2)
 ): Promise<void> {
 	// Error-path fallback only, so a getBinary() throw still has a name to report. The
@@ -340,11 +306,11 @@ export async function launchAgent(
 
 		// After resolution, not before: with no explicit -c the trace-agent derives its
 		// config path from where its own executable sits, so the check needs the binary.
-		if (kind === "trace") {
+		if (kind === 'trace') {
 			preflightTraceAgentConfig(args, binaryPath);
 		}
 
-		if (kind === "trace" && isRunSubcommand(args)) {
+		if (kind === 'trace' && isRunSubcommand(args)) {
 			const port = receiverPort();
 			if (await isTraceReceiverHealthy(port)) {
 				logger.info(
@@ -367,9 +333,7 @@ export async function launchAgent(
 			}
 		}
 
-		logger.info(
-			`Spawning ${processName}: ${binaryPath} ${args.join(" ")} (cwd=${process.cwd()})`
-		);
+		logger.info(`Spawning ${processName}: ${binaryPath} ${args.join(' ')} (cwd=${process.cwd()})`);
 
 		// `name` is passed for correctness, but do NOT rely on it here.
 		//
@@ -384,7 +348,7 @@ export async function launchAgent(
 		// relative ESM import; see example/dd-supervisor.js. The branch below is kept
 		// because `name` IS honoured when this module is loaded through Harper's ESM path.
 		const child = spawn(binaryPath, args, {
-			stdio: "inherit",
+			stdio: 'inherit',
 			env: process.env,
 			name: processName,
 		} as any);
@@ -393,9 +357,7 @@ export async function launchAgent(
 		// of a ChildProcess: an EventEmitter carrying pid, kill(), unref(), and an 'exit'
 		// event, with no stdio and no spawnargs. Its 1Hz liveness interval is not unref'd,
 		// so a thread that joined an existing process never goes idle unless it unrefs.
-		if (
-			!Array.isArray((child as unknown as { spawnargs?: string[] }).spawnargs)
-		) {
+		if (!Array.isArray((child as unknown as { spawnargs?: string[] }).spawnargs)) {
 			logger.info(
 				`${processName} is already running on this node (pid=${child.pid}); this ` +
 					`thread joined the existing process instead of starting a second one.`
@@ -406,11 +368,11 @@ export async function launchAgent(
 
 		logger.info(`${processName} child process started (pid=${child.pid})`);
 
-		child.on("exit", (code, signal) => {
+		child.on('exit', (code, signal) => {
 			void onExit(kind, processName, code, signal);
 		});
 
-		child.on("error", (error: Error) => {
+		child.on('error', (error: Error) => {
 			// Asynchronous spawn failures only: ENOENT, EACCES, and similar. Harper's
 			// allowlist rejection is not one of these; createSpawn throws synchronously
 			// before any child exists, so that case lands in the catch below.
@@ -430,7 +392,7 @@ export async function launchAgent(
 			logger.error(
 				`Harper rejected this spawn. Add this exact absolute path to ` +
 					`applications.allowedSpawnCommands and restart Harper (the allowlist is ` +
-					`read once at module load): ${resolvedBinaryPath ?? "<unresolved>"}`
+					`read once at module load): ${resolvedBinaryPath ?? '<unresolved>'}`
 			);
 		} else if (/must have a process "name"/.test(message)) {
 			logger.error(
@@ -438,7 +400,7 @@ export async function launchAgent(
 					`indicates a modified or unexpected call path.`
 			);
 		} else if (!(error instanceof LaunchPreflightError)) {
-			logger.info("You can build from source using: datadog-agent-build build");
+			logger.info('You can build from source using: datadog-agent-build build');
 		}
 		process.exit(1);
 	}
@@ -460,11 +422,7 @@ async function onExit(
 	// returns, and a bare port check cannot tell the two apart, so an unrelated listener
 	// would turn every startup failure into a reported success. Require a healthy /info
 	// response, which only a real trace-agent serves.
-	if (
-		kind === "trace" &&
-		code === 1 &&
-		(await isTraceReceiverHealthy(receiverPort()))
-	) {
+	if (kind === 'trace' && code === 1 && (await isTraceReceiverHealthy(receiverPort()))) {
 		logger.info(
 			`${processName} exited immediately while a healthy trace-agent receiver ` +
 				`answered on 127.0.0.1:${receiverPort()}, which means another instance ` +

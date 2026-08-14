@@ -19,12 +19,12 @@
  * at publish; everything checkable earlier is checked here.
  */
 
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { execFileSync } = require("child_process");
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFileSync } = require('child_process');
 
-const REGISTRY = "https://registry.npmjs.org";
+const REGISTRY = 'https://registry.npmjs.org';
 
 /** The five names the publish loop will hit: platform packages first, then main. */
 function packageNames(pkg) {
@@ -37,8 +37,7 @@ function packageNames(pkg) {
  * Returns lowercase "owner/name", or null when no GitHub repo is declared.
  */
 function normalizeRepoSlug(repository) {
-	const url =
-		typeof repository === "string" ? repository : repository && repository.url;
+	const url = typeof repository === 'string' ? repository : repository && repository.url;
 	if (!url) return null;
 	const m = String(url)
 		.trim()
@@ -54,9 +53,7 @@ function normalizeRepoSlug(repository) {
  * virgin package and tell the operator to re-add the token they just deleted.
  */
 function classifyNpmFailure(stderr) {
-	return /E404|404 Not Found/i.test(String(stderr))
-		? "not-published"
-		: "transient";
+	return /E404|404 Not Found/i.test(String(stderr)) ? 'not-published' : 'transient';
 }
 
 function sleep(ms) {
@@ -64,9 +61,9 @@ function sleep(ms) {
 }
 
 function npmExec(args, opts = {}) {
-	return execFileSync("npm", args, {
-		encoding: "utf8",
-		stdio: "pipe",
+	return execFileSync('npm', args, {
+		encoding: 'utf8',
+		stdio: 'pipe',
 		...opts,
 	});
 }
@@ -75,15 +72,13 @@ function npmExec(args, opts = {}) {
 function isPublished(name, exec = npmExec) {
 	for (let attempt = 1; ; attempt++) {
 		try {
-			exec(["view", name, "version", "--registry", REGISTRY]);
+			exec(['view', name, 'version', '--registry', REGISTRY]);
 			return true;
 		} catch (error) {
-			if (classifyNpmFailure(error.stderr) === "not-published") return false;
+			if (classifyNpmFailure(error.stderr) === 'not-published') return false;
 			if (attempt >= 3) {
 				throw new Error(
-					`registry unreachable while checking ${name}: ${String(
-						error.stderr || error.message
-					)
+					`registry unreachable while checking ${name}: ${String(error.stderr || error.message)
 						.trim()
 						.slice(0, 200)}`
 				);
@@ -95,36 +90,28 @@ function isPublished(name, exec = npmExec) {
 
 /** A token that whoami rejects would 401 after the build; catch it now. */
 function verifyToken(token, exec = npmExec) {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-npmrc-"));
-	const rc = path.join(dir, "npmrc");
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'preflight-npmrc-'));
+	const rc = path.join(dir, 'npmrc');
 	fs.writeFileSync(rc, `//registry.npmjs.org/:_authToken=${token}\n`, {
 		mode: 0o600,
 	});
 	try {
 		for (let attempt = 1; ; attempt++) {
 			try {
-				const user = exec([
-					"whoami",
-					"--userconfig",
-					rc,
-					"--registry",
-					REGISTRY,
-				]).trim();
+				const user = exec(['whoami', '--userconfig', rc, '--registry', REGISTRY]).trim();
 				return { ok: true, user };
 			} catch (error) {
 				if (/E401|ENEEDAUTH|Unauthorized/i.test(String(error.stderr))) {
 					return {
 						ok: false,
 						reason:
-							"NPM_TOKEN is set but the registry rejects it (revoked or expired). The publish would 401 after the full build.",
+							'NPM_TOKEN is set but the registry rejects it (revoked or expired). The publish would 401 after the full build.',
 					};
 				}
 				if (attempt >= 3) {
 					return {
 						ok: false,
-						reason: `registry unreachable while verifying NPM_TOKEN: ${String(
-							error.stderr || error.message
-						)
+						reason: `registry unreachable while verifying NPM_TOKEN: ${String(error.stderr || error.message)
 							.trim()
 							.slice(0, 200)}`,
 					};
@@ -139,7 +126,7 @@ function verifyToken(token, exec = npmExec) {
 
 function checkRepositoryMatch(pkg, githubRepository) {
 	if (!githubRepository) {
-		return { ok: true, note: "GITHUB_REPOSITORY unset; skipping (local run)." };
+		return { ok: true, note: 'GITHUB_REPOSITORY unset; skipping (local run).' };
 	}
 	const slug = normalizeRepoSlug(pkg.repository);
 	const expected = githubRepository.toLowerCase();
@@ -148,8 +135,8 @@ function checkRepositoryMatch(pkg, githubRepository) {
 		ok: false,
 		reason:
 			`repository.url resolves to "${slug}" but the build runs in "${githubRepository}". ` +
-			"npm publish --provenance verifies this per package after the full build. " +
-			"Platform manifests inherit the root repository field, so fix package.json.",
+			'npm publish --provenance verifies this per package after the full build. ' +
+			'Platform manifests inherit the root repository field, so fix package.json.',
 	};
 }
 
@@ -167,25 +154,23 @@ function checkAuthPath(pkg, token, exec = npmExec) {
 		return {
 			ok: false,
 			reason:
-				`no NPM_TOKEN, and Trusted Publishing cannot bootstrap never-published names: ${virgin.join(", ")}. ` +
-				"The publish loop would die ENEEDAUTH after the full build. Set NPM_TOKEN for the first publish of each new name.",
+				`no NPM_TOKEN, and Trusted Publishing cannot bootstrap never-published names: ${virgin.join(', ')}. ` +
+				'The publish loop would die ENEEDAUTH after the full build. Set NPM_TOKEN for the first publish of each new name.',
 		};
 	}
 	return {
 		ok: true,
 		note:
-			"No NPM_TOKEN; every package name is already published, so Trusted Publishing is possible. " +
-			"Whether a publisher is configured for this repo and workflow is not checkable from here.",
+			'No NPM_TOKEN; every package name is already published, so Trusted Publishing is possible. ' +
+			'Whether a publisher is configured for this repo and workflow is not checkable from here.',
 	};
 }
 
 function main() {
-	const pkg = JSON.parse(
-		fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")
-	);
+	const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
 	const results = [
 		checkRepositoryMatch(pkg, process.env.GITHUB_REPOSITORY),
-		checkAuthPath(pkg, (process.env.NPM_TOKEN || "").trim()),
+		checkAuthPath(pkg, (process.env.NPM_TOKEN || '').trim()),
 	];
 	let failed = false;
 	for (const result of results) {
@@ -197,9 +182,7 @@ function main() {
 		}
 	}
 	if (failed) process.exit(1);
-	console.log(
-		"Preflight OK: the publish path is as ready as it can be proven."
-	);
+	console.log('Preflight OK: the publish path is as ready as it can be proven.');
 }
 
 if (require.main === module) main();

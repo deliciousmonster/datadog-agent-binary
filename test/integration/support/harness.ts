@@ -6,10 +6,10 @@
  * same ifconfig instructions and the same pool-start parsing), so they live
  * here once. Not collected as a test: the runner glob only matches *.test.ts.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { createServer } from "node:net";
-import { dirname, resolve } from "node:path";
+import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { createServer } from 'node:net';
+import { dirname, resolve } from 'node:path';
 
 const require = createRequire(import.meta.url);
 
@@ -22,7 +22,7 @@ const require = createRequire(import.meta.url);
  */
 export function resolveHarperBinPath(): string | null {
 	try {
-		return resolve(dirname(require.resolve("harper")), "bin/harper.js");
+		return resolve(dirname(require.resolve('harper')), 'bin/harper.js');
 	} catch {
 		return null;
 	}
@@ -34,18 +34,13 @@ export function resolveHarperBinPath(): string | null {
  * the harness's first bind dies in LoopbackAddressValidationError. That is a
  * missing prerequisite, not a failure, so probe it up front and skip.
  */
-const LOOPBACK_POOL_START = Number.parseInt(
-	process.env.HARPER_INTEGRATION_TEST_LOOPBACK_POOL_START ?? "",
-	10
-);
-const LOOPBACK_PROBE_ADDRESS = `127.0.0.${
-	Number.isNaN(LOOPBACK_POOL_START) ? 2 : LOOPBACK_POOL_START
-}`;
+const LOOPBACK_POOL_START = Number.parseInt(process.env.HARPER_INTEGRATION_TEST_LOOPBACK_POOL_START ?? '', 10);
+const LOOPBACK_PROBE_ADDRESS = `127.0.0.${Number.isNaN(LOOPBACK_POOL_START) ? 2 : LOOPBACK_POOL_START}`;
 
 function canBindLoopbackAddress(address: string): Promise<boolean> {
 	return new Promise((resolve) => {
 		const server = createServer();
-		server.once("error", () => resolve(false));
+		server.once('error', () => resolve(false));
 		// Port 0: the probe is about the address; any bindable port proves it.
 		server.listen({ host: address, port: 0 }, () => {
 			server.close(() => resolve(true));
@@ -59,7 +54,7 @@ function canBindLoopbackAddress(address: string): Promise<boolean> {
  * the message, or false anywhere the probe succeeds or does not apply.
  */
 export async function darwinLoopbackSkipReason(): Promise<string | false> {
-	if (process.platform !== "darwin") return false;
+	if (process.platform !== 'darwin') return false;
 	if (await canBindLoopbackAddress(LOOPBACK_PROBE_ADDRESS)) return false;
 	return (
 		`this machine cannot bind ${LOOPBACK_PROBE_ADDRESS}, the first address in ` +
@@ -72,8 +67,8 @@ export async function darwinLoopbackSkipReason(): Promise<string | false> {
 /** Rows of a probe-results file holding one JSON record per line. */
 export function readJsonlRows<T>(resultsFile: string): T[] {
 	if (!existsSync(resultsFile)) return [];
-	return readFileSync(resultsFile, "utf8")
-		.split("\n")
+	return readFileSync(resultsFile, 'utf8')
+		.split('\n')
 		.filter((line) => line.trim().length > 0)
 		.flatMap((line) => {
 			try {

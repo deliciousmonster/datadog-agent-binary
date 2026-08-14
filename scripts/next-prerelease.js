@@ -15,9 +15,7 @@
 const CHANNEL_RE = /^[a-z][a-z0-9]*$/;
 
 function parseVersion(raw, channel) {
-	const m = /^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/.exec(
-		String(raw).replace(/^v/, "")
-	);
+	const m = /^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/.exec(String(raw).replace(/^v/, ''));
 	if (!m) return null;
 	const [, maj, min, pat, pre] = m;
 	if (pre === undefined) {
@@ -49,23 +47,12 @@ function format(v, channel) {
  * @returns {{version: string, highest: string|null, ignored: string[]}}
  * @throws if the computed version does not sort strictly above every known version.
  */
-function nextPrerelease({
-	channel = "next",
-	tags = [],
-	registry = [],
-	packageVersion = null,
-} = {}) {
+function nextPrerelease({ channel = 'next', tags = [], registry = [], packageVersion = null } = {}) {
 	if (!CHANNEL_RE.test(channel)) {
-		throw new Error(
-			`Channel must be lowercase alphanumeric, got "${channel}".`
-		);
+		throw new Error(`Channel must be lowercase alphanumeric, got "${channel}".`);
 	}
 
-	const candidates = [
-		...tags,
-		...registry,
-		...(packageVersion ? [packageVersion] : []),
-	];
+	const candidates = [...tags, ...registry, ...(packageVersion ? [packageVersion] : [])];
 	const ignored = [];
 	const known = [];
 	for (const c of candidates) {
@@ -89,9 +76,7 @@ function nextPrerelease({
 			: { ...highest, pre: highest.pre + 1 };
 
 	if (compare(next, highest) <= 0) {
-		throw new Error(
-			`Computed ${format(next, channel)} does not sort above ${format(highest, channel)}.`
-		);
+		throw new Error(`Computed ${format(next, channel)} does not sort above ${format(highest, channel)}.`);
 	}
 
 	return {
@@ -112,15 +97,13 @@ if (require.main === module) {
 	const split = (s) => (s ? s.split(/[\s,]+/).filter(Boolean) : []);
 
 	let registry = [];
-	const registryRaw = get("--registry");
+	const registryRaw = get('--registry');
 	if (registryRaw) {
 		try {
 			const parsed = JSON.parse(registryRaw);
 			// An unpublished scope answers with a well-formed `{"error":{...}}` body, so
 			// valid JSON is not the same as a version list. Keep only the strings.
-			registry = (Array.isArray(parsed) ? parsed : [parsed]).filter(
-				(v) => typeof v === "string"
-			);
+			registry = (Array.isArray(parsed) ? parsed : [parsed]).filter((v) => typeof v === 'string');
 		} catch {
 			registry = [];
 		}
@@ -128,17 +111,15 @@ if (require.main === module) {
 
 	try {
 		const result = nextPrerelease({
-			channel: get("--channel") || "next",
-			tags: split(get("--tags")),
+			channel: get('--channel') || 'next',
+			tags: split(get('--tags')),
 			registry,
-			packageVersion: get("--package-version"),
+			packageVersion: get('--package-version'),
 		});
 		if (result.ignored.length) {
-			console.error(
-				`Ignored unparseable versions: ${result.ignored.join(", ")}`
-			);
+			console.error(`Ignored unparseable versions: ${result.ignored.join(', ')}`);
 		}
-		console.error(`Highest known: ${result.highest ?? "none"}`);
+		console.error(`Highest known: ${result.highest ?? 'none'}`);
 		process.stdout.write(result.version);
 	} catch (err) {
 		console.error(`::error::${err.message}`);

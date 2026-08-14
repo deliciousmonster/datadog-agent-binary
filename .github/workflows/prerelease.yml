@@ -23,23 +23,23 @@ on:
     # package.json); an example-only change reaches nobody through npm, so a
     # release would rebuild four Go agents to publish identical content.
     paths-ignore:
-      - "**/*.md"
-      - "example/**"
+      - '**/*.md'
+      - 'example/**'
   workflow_dispatch:
     inputs:
       base:
-        description: "Base version, e.g. 7.75.6. Default: the version in package.json."
+        description: 'Base version, e.g. 7.75.6. Default: the version in package.json.'
         required: false
       channel:
-        description: "Prerelease channel"
+        description: 'Prerelease channel'
         required: false
-        default: "next"
+        default: 'next'
         type: choice
         options:
           - next
           - rc
       dry_run:
-        description: "Compute and print the tag without creating it"
+        description: 'Compute and print the tag without creating it'
         required: false
         default: true
         type: boolean
@@ -87,8 +87,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version-file: ".nvmrc"
-          cache: "npm"
+          node-version-file: '.nvmrc'
+          cache: 'npm'
 
       - name: Compute the next prerelease version
         id: next

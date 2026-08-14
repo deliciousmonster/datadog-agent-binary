@@ -5,7 +5,7 @@ on:
   # them, not just PRs. "**" matches branches only, so release tag pushes stay
   # with build-release.yml instead of running this workflow twice.
   push:
-    branches: ["**"]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
@@ -19,7 +19,7 @@ jobs:
         # Harper v5 declares engines.node "^22.18.0 || >=24.0.0", so it cannot
         # install on Node 20 at all, and the image the component deploys onto is
         # node:24-trixie. 22 and 24 are the two versions that exist in the field.
-        node: ["22", "24"]
+        node: ['22', '24']
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -29,7 +29,7 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node }}
-          cache: "npm"
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
@@ -91,7 +91,7 @@ jobs:
         # the node:24-trixie deploy image. An explicit matrix instead of
         # node-version-file, because that key reads one version and would pin
         # this job to the floor while deploys run on 24.
-        node: ["22.18", "24"]
+        node: ['22.18', '24']
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -100,7 +100,7 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node }}
-          cache: "npm"
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci

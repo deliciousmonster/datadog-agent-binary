@@ -1,6 +1,6 @@
-"use strict";
+'use strict';
 
-const net = require("node:net");
+const net = require('node:net');
 
 /**
  * A 127.0.0.1 port with nothing listening on it. Callers need the trace
@@ -10,8 +10,8 @@ const net = require("node:net");
 function findFreePort() {
 	return new Promise((resolve, reject) => {
 		const server = net.createServer();
-		server.once("error", reject);
-		server.listen(0, "127.0.0.1", () => {
+		server.once('error', reject);
+		server.listen(0, '127.0.0.1', () => {
 			const { port } = server.address();
 			server.close(() => resolve(port));
 		});

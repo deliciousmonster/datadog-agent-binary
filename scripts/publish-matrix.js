@@ -22,16 +22,16 @@
  * --registry after, and on a schedule, since packages can be unpublished later.
  */
 
-"use strict";
+'use strict';
 
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
-const zlib = require("zlib");
-const { execFileSync } = require("child_process");
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const zlib = require('zlib');
+const { execFileSync } = require('child_process');
 
-const REPO_ROOT = path.join(__dirname, "..");
-const mainPkg = require(path.join(REPO_ROOT, "package.json"));
+const REPO_ROOT = path.join(__dirname, '..');
+const mainPkg = require(path.join(REPO_ROOT, 'package.json'));
 
 // The generator and the runtime both derive platform package names from the main
 // package name, so this must too, or a re-scope leaves the checker validating the
@@ -39,43 +39,40 @@ const mainPkg = require(path.join(REPO_ROOT, "package.json"));
 const PACKAGE_NAME = mainPkg.name;
 const PACKAGE_VERSION = mainPkg.version;
 
-const { SUPPORTED_PLATFORMS } = require(
-	path.join(REPO_ROOT, "dist", "platform.js")
-);
+const { SUPPORTED_PLATFORMS } = require(path.join(REPO_ROOT, 'dist', 'platform.js'));
 
 // npm matches os/cpu against process.platform / process.arch. Anything outside
 // these sets, our own "macos"/"windows"/"x86_64" included, can never install.
-const NODE_OS = new Set(["linux", "darwin", "win32"]);
-const NODE_CPU = new Set(["x64", "arm64"]);
+const NODE_OS = new Set(['linux', 'darwin', 'win32']);
+const NODE_CPU = new Set(['x64', 'arm64']);
 const NODE_FIELDS = [
-	["os", "platform", NODE_OS],
-	["cpu", "arch", NODE_CPU],
+	['os', 'platform', NODE_OS],
+	['cpu', 'arch', NODE_CPU],
 ];
 
 function parseArgs(argv) {
 	const opts = {
-		mode: "local",
-		dir: path.join(REPO_ROOT, "npm"),
+		mode: 'local',
+		dir: path.join(REPO_ROOT, 'npm'),
 		version: PACKAGE_VERSION,
 		deep: false,
-		format: "text",
+		format: 'text',
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
-		if (arg === "--local") {
-			opts.mode = "local";
-			if (argv[i + 1] && !argv[i + 1].startsWith("--")) opts.dir = argv[++i];
-		} else if (arg === "--registry") {
-			opts.mode = "registry";
-			if (argv[i + 1] && !argv[i + 1].startsWith("--"))
-				opts.version = argv[++i];
-		} else if (arg === "--deep") {
+		if (arg === '--local') {
+			opts.mode = 'local';
+			if (argv[i + 1] && !argv[i + 1].startsWith('--')) opts.dir = argv[++i];
+		} else if (arg === '--registry') {
+			opts.mode = 'registry';
+			if (argv[i + 1] && !argv[i + 1].startsWith('--')) opts.version = argv[++i];
+		} else if (arg === '--deep') {
 			opts.deep = true;
-		} else if (arg === "--markdown") {
-			opts.format = "markdown";
-		} else if (arg === "--json") {
-			opts.format = "json";
-		} else if (arg === "--help" || arg === "-h") {
+		} else if (arg === '--markdown') {
+			opts.format = 'markdown';
+		} else if (arg === '--json') {
+			opts.format = 'json';
+		} else if (arg === '--help' || arg === '-h') {
 			opts.help = true;
 		}
 	}
@@ -95,17 +92,14 @@ function expectedPackages() {
 
 function readLocal(expected, dir) {
 	const packageDir = path.join(dir, expected.platform);
-	const manifestPath = path.join(packageDir, "package.json");
+	const manifestPath = path.join(packageDir, 'package.json');
 	if (!fs.existsSync(manifestPath)) {
 		return { ...expected, present: false, source: packageDir };
 	}
-	const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-	const binDir = path.join(packageDir, "bin");
+	const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+	const binDir = path.join(packageDir, 'bin');
 	const files = fs.existsSync(binDir) ? fs.readdirSync(binDir).sort() : [];
-	const bytes = files.reduce(
-		(sum, f) => sum + fs.statSync(path.join(binDir, f)).size,
-		0
-	);
+	const bytes = files.reduce((sum, f) => sum + fs.statSync(path.join(binDir, f)).size, 0);
 	return {
 		...expected,
 		present: true,
@@ -121,8 +115,7 @@ function readLocal(expected, dir) {
 	};
 }
 
-const REGISTRY =
-	process.env.NPM_CONFIG_REGISTRY || "https://registry.npmjs.org";
+const REGISTRY = process.env.NPM_CONFIG_REGISTRY || 'https://registry.npmjs.org';
 
 const RETRY_DELAY_MS = 5000;
 
@@ -134,11 +127,11 @@ const RETRY_DELAY_MS = 5000;
  * flaky, which is worse than no check because people learn to ignore it.
  */
 async function fetchPackument(name, retries) {
-	const url = `${REGISTRY}/${name.replace("/", "%2F")}`;
+	const url = `${REGISTRY}/${name.replace('/', '%2F')}`;
 	for (let attempt = 0; attempt <= retries; attempt++) {
 		try {
 			const response = await fetch(url, {
-				headers: { accept: "application/json" },
+				headers: { accept: 'application/json' },
 			});
 			if (response.ok) return await response.json();
 			if (response.status !== 404) {
@@ -157,20 +150,19 @@ async function fetchPackument(name, retries) {
 /** Download a tarball and list its `package/bin/` entries. */
 async function listTarballBinaries(tarballUrl) {
 	const response = await fetch(tarballUrl);
-	if (!response.ok)
-		throw new Error(`HTTP ${response.status} for ${tarballUrl}`);
+	if (!response.ok) throw new Error(`HTTP ${response.status} for ${tarballUrl}`);
 	const gz = Buffer.from(await response.arrayBuffer());
-	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ddab-matrix-"));
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ddab-matrix-'));
 	try {
-		const tarPath = path.join(tmp, "pkg.tar");
+		const tarPath = path.join(tmp, 'pkg.tar');
 		fs.writeFileSync(tarPath, zlib.gunzipSync(gz));
 		// `tar -t` rather than extracting: >150 MB per platform, and only the entry
 		// names matter.
-		const listing = execFileSync("tar", ["-tf", tarPath], { encoding: "utf8" });
+		const listing = execFileSync('tar', ['-tf', tarPath], { encoding: 'utf8' });
 		return listing
-			.split("\n")
+			.split('\n')
 			.filter((line) => /^package\/bin\/.+/.test(line))
-			.map((line) => line.replace("package/bin/", "").trim())
+			.map((line) => line.replace('package/bin/', '').trim())
 			.filter(Boolean)
 			.sort();
 	} finally {
@@ -191,9 +183,7 @@ async function readRegistry(expected, version, deep, retries) {
 			...expected,
 			present: false,
 			source: REGISTRY,
-			error: packument
-				? `version ${version} not published`
-				: "package not found",
+			error: packument ? `version ${version} not published` : 'package not found',
 		};
 	}
 
@@ -242,7 +232,7 @@ function verify(rows) {
 				if (!allowed.has(value)) {
 					problems.push(
 						`${label}: ${field} "${value}" is not a Node process.${nodeField} ` +
-							`value (${[...allowed].join(", ")}). npm can never match this package.`
+							`value (${[...allowed].join(', ')}). npm can never match this package.`
 					);
 				}
 			}
@@ -271,7 +261,7 @@ function verify(rows) {
 			if (row.fileCount < expectedCount) {
 				problems.push(
 					`${label}: fileCount ${row.fileCount} is below the ${expectedCount} a ` +
-						`package carrying ${row.binaries.join(" + ")} should have. Re-run with ` +
+						`package carrying ${row.binaries.join(' + ')} should have. Re-run with ` +
 						`--deep to list the tarball contents.`
 				);
 			}
@@ -285,21 +275,16 @@ function verify(rows) {
 	if (JSON.stringify(declared) !== JSON.stringify(expectedNames)) {
 		problems.push(
 			`optionalDependencies does not match SUPPORTED_PLATFORMS.\n` +
-				`  declared: ${declared.join(", ") || "(none)"}\n` +
-				`  expected: ${expectedNames.join(", ")}\n` +
+				`  declared: ${declared.join(', ') || '(none)'}\n` +
+				`  expected: ${expectedNames.join(', ')}\n` +
 				`  Run \`npm run update-optional-deps\`, and make sure every platform here ` +
 				`has a leg in build-release.yml.`
 		);
 	}
 
-	for (const [dep, range] of Object.entries(
-		mainPkg.optionalDependencies ?? {}
-	)) {
+	for (const [dep, range] of Object.entries(mainPkg.optionalDependencies ?? {})) {
 		if (range !== PACKAGE_VERSION) {
-			problems.push(
-				`optionalDependencies["${dep}"] is "${range}", expected exactly ` +
-					`"${PACKAGE_VERSION}".`
-			);
+			problems.push(`optionalDependencies["${dep}"] is "${range}", expected exactly ` + `"${PACKAGE_VERSION}".`);
 		}
 	}
 
@@ -307,55 +292,53 @@ function verify(rows) {
 }
 
 function mib(bytes) {
-	if (bytes == null) return "-";
+	if (bytes == null) return '-';
 	return `${(bytes / 1024 / 1024).toFixed(0)} MB`;
 }
 
 function binariesCell(row) {
-	if (!row.present) return "-";
-	if (row.dummy) return "(dummy)";
-	if (Array.isArray(row.files)) return row.files.join(", ") || "(none)";
+	if (!row.present) return '-';
+	if (row.dummy) return '(dummy)';
+	if (Array.isArray(row.files)) return row.files.join(', ') || '(none)';
 	return `${row.fileCount} files`;
 }
 
 function renderText(rows) {
-	const header = ["PACKAGE", "VERSION", "OS", "CPU", "BINARIES", "SIZE"];
+	const header = ['PACKAGE', 'VERSION', 'OS', 'CPU', 'BINARIES', 'SIZE'];
 	const body = rows.map((r) => [
 		r.name,
-		r.present ? (r.version ?? "-") : "-",
-		r.present ? r.os.join(",") : "MISSING",
-		r.present ? r.cpu.join(",") : "-",
+		r.present ? (r.version ?? '-') : '-',
+		r.present ? r.os.join(',') : 'MISSING',
+		r.present ? r.cpu.join(',') : '-',
 		binariesCell(r),
 		mib(r.bytes),
 	]);
-	const widths = header.map((h, i) =>
-		Math.max(h.length, ...body.map((row) => String(row[i]).length))
-	);
+	const widths = header.map((h, i) => Math.max(h.length, ...body.map((row) => String(row[i]).length)));
 	const line = (cells) =>
 		cells
 			.map((c, i) => String(c).padEnd(widths[i]))
-			.join("  ")
+			.join('  ')
 			.trimEnd();
 
-	const out = [line(header), line(widths.map((w) => "-".repeat(w)))];
+	const out = [line(header), line(widths.map((w) => '-'.repeat(w)))];
 	for (const row of body) out.push(line(row));
-	return out.join("\n");
+	return out.join('\n');
 }
 
 function renderMarkdown(rows) {
 	const out = [
 		`### Published platform matrix for \`${PACKAGE_NAME}@${PACKAGE_VERSION}\``,
-		"",
-		"| Package | OS | CPU | Binaries | Size |",
-		"|---|---|---|---|---|",
+		'',
+		'| Package | OS | CPU | Binaries | Size |',
+		'|---|---|---|---|---|',
 	];
 	for (const row of rows) {
 		out.push(
-			`| \`${row.name}\` | ${row.present ? row.os.join(", ") : "**missing**"} | ` +
-				`${row.present ? row.cpu.join(", ") : "-"} | ${binariesCell(row)} | ${mib(row.bytes)} |`
+			`| \`${row.name}\` | ${row.present ? row.os.join(', ') : '**missing**'} | ` +
+				`${row.present ? row.cpu.join(', ') : '-'} | ${binariesCell(row)} | ${mib(row.bytes)} |`
 		);
 	}
-	return out.join("\n");
+	return out.join('\n');
 }
 
 async function main() {
@@ -363,14 +346,14 @@ async function main() {
 	if (opts.help) {
 		console.log(
 			[
-				"Usage:",
-				"  node scripts/publish-matrix.js --local [dir]        verify staged packages (offline)",
-				"  node scripts/publish-matrix.js --registry [version] verify what is published",
-				"",
-				"  --deep       registry mode: download tarballs and list bin/ exactly",
-				"  --markdown   emit a GitHub table",
-				"  --json       emit raw rows",
-			].join("\n")
+				'Usage:',
+				'  node scripts/publish-matrix.js --local [dir]        verify staged packages (offline)',
+				'  node scripts/publish-matrix.js --registry [version] verify what is published',
+				'',
+				'  --deep       registry mode: download tarballs and list bin/ exactly',
+				'  --markdown   emit a GitHub table',
+				'  --json       emit raw rows',
+			].join('\n')
 		);
 		return 0;
 	}
@@ -378,18 +361,15 @@ async function main() {
 	const expected = expectedPackages();
 	let rows;
 
-	if (opts.mode === "local") {
+	if (opts.mode === 'local') {
 		rows = expected.map((e) => readLocal(e, opts.dir));
 		console.error(`Reading staged packages from ${opts.dir}\n`);
 	} else {
 		// Retries only matter right after a publish; a scheduled drift check wants a
 		// fast answer instead.
-		const retries = process.env.MATRIX_RETRIES
-			? Number(process.env.MATRIX_RETRIES)
-			: 0;
+		const retries = process.env.MATRIX_RETRIES ? Number(process.env.MATRIX_RETRIES) : 0;
 		console.error(
-			`Reading ${REGISTRY} for version ${opts.version}` +
-				`${opts.deep ? " (deep: downloading tarballs)" : ""}\n`
+			`Reading ${REGISTRY} for version ${opts.version}` + `${opts.deep ? ' (deep: downloading tarballs)' : ''}\n`
 		);
 		rows = [];
 		for (const e of expected) {
@@ -397,9 +377,9 @@ async function main() {
 		}
 	}
 
-	if (opts.format === "json") {
+	if (opts.format === 'json') {
 		console.log(JSON.stringify(rows, null, 2));
-	} else if (opts.format === "markdown") {
+	} else if (opts.format === 'markdown') {
 		console.log(renderMarkdown(rows));
 	} else {
 		console.log(renderText(rows));
@@ -409,15 +389,15 @@ async function main() {
 	const declaredCount = Object.keys(mainPkg.optionalDependencies ?? {}).length;
 	const presentCount = rows.filter((r) => r.present).length;
 
-	console.log("");
+	console.log('');
 	console.log(
 		`declared in optionalDependencies: ${declaredCount}    ` +
-			`${opts.mode === "local" ? "staged" : "published"}: ${presentCount}    ` +
-			`${problems.length === 0 ? "OK" : `${problems.length} problem(s)`}`
+			`${opts.mode === 'local' ? 'staged' : 'published'}: ${presentCount}    ` +
+			`${problems.length === 0 ? 'OK' : `${problems.length} problem(s)`}`
 	);
 
 	if (problems.length > 0) {
-		console.log("");
+		console.log('');
 		for (const problem of problems) {
 			console.log(`::error::${problem}`);
 		}

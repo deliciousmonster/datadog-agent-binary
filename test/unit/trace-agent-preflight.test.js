@@ -16,21 +16,19 @@
  *
  * Hermetic: temp dirs and a zero-byte stub, no agent binary, no network.
  */
-const test = require("node:test");
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
-const REPO_ROOT = path.resolve(__dirname, "..", "..");
-const { preflightTraceAgentConfig, LaunchPreflightError } = require(
-	path.join(REPO_ROOT, "dist", "agent-launcher.js")
-);
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const { preflightTraceAgentConfig, LaunchPreflightError } = require(path.join(REPO_ROOT, 'dist', 'agent-launcher.js'));
 
-const isWindows = process.platform === "win32";
+const isWindows = process.platform === 'win32';
 
 function withTempDir(fn) {
-	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ddpf-")));
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ddpf-')));
 	try {
 		return fn(dir);
 	} finally {
@@ -43,16 +41,16 @@ function withTempDir(fn) {
  * The inferred config path is <root>/etc/datadog.yaml.
  */
 function stubBinary(root) {
-	fs.mkdirSync(path.join(root, "bin"), { recursive: true });
-	const binaryPath = path.join(root, "bin", "trace-agent");
-	fs.writeFileSync(binaryPath, "");
+	fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
+	const binaryPath = path.join(root, 'bin', 'trace-agent');
+	fs.writeFileSync(binaryPath, '');
 	return binaryPath;
 }
 
 function captureWarnings(fn) {
 	const warnings = [];
 	const realWarn = console.warn;
-	console.warn = (...args) => warnings.push(args.join(" "));
+	console.warn = (...args) => warnings.push(args.join(' '));
 	try {
 		fn();
 	} finally {
@@ -61,40 +59,34 @@ function captureWarnings(fn) {
 	return warnings;
 }
 
-test("an explicitly named config file that does not exist is fatal", () => {
+test('an explicitly named config file that does not exist is fatal', () => {
 	withTempDir((dir) => {
-		assert.throws(
-			() =>
-				preflightTraceAgentConfig(["-c", path.join(dir, "absent.yaml"), "run"]),
-			LaunchPreflightError
-		);
+		assert.throws(() => preflightTraceAgentConfig(['-c', path.join(dir, 'absent.yaml'), 'run']), LaunchPreflightError);
 	});
 });
 
-test("an explicitly named config file that exists passes", () => {
+test('an explicitly named config file that exists passes', () => {
 	withTempDir((dir) => {
-		const configPath = path.join(dir, "datadog.yaml");
+		const configPath = path.join(dir, 'datadog.yaml');
 		// Zero bytes on purpose: the agent's requirement is presence, not content.
-		fs.writeFileSync(configPath, "");
-		assert.doesNotThrow(() =>
-			preflightTraceAgentConfig(["-c", configPath, "run"])
-		);
+		fs.writeFileSync(configPath, '');
+		assert.doesNotThrow(() => preflightTraceAgentConfig(['-c', configPath, 'run']));
 	});
 });
 
-test("every spelling of the config flag makes its missing file fatal, including the = form", () => {
+test('every spelling of the config flag makes its missing file fatal, including the = form', () => {
 	// Asserted through the throw, not through doesNotThrow against a file that
 	// exists: a spelling that stops being recognised degrades the stated path to
 	// an inferred guess, and an inferred guess only warns, so the doesNotThrow
 	// form stayed green with the recognition deleted.
 	withTempDir((dir) => {
-		const absent = path.join(dir, "absent.yaml");
+		const absent = path.join(dir, 'absent.yaml');
 		for (const argv of [
-			["-c", absent],
-			["--config", absent],
-			["-config", absent],
-			["--cfgpath", absent],
-			["-cfgpath", absent],
+			['-c', absent],
+			['--config', absent],
+			['-config', absent],
+			['--cfgpath', absent],
+			['-cfgpath', absent],
 			[`-c=${absent}`],
 			[`--config=${absent}`],
 		]) {
@@ -111,78 +103,66 @@ test("every spelling of the config flag makes its missing file fatal, including 
 	});
 });
 
-test("a config flag pointing at a directory is checked at <dir>/datadog.yaml", () => {
+test('a config flag pointing at a directory is checked at <dir>/datadog.yaml', () => {
 	withTempDir((dir) => {
 		// The directory exists and its datadog.yaml does not. A preflight that
 		// stats the directory value as the config file sees it exist and passes,
 		// so only the resolved <dir>/datadog.yaml can make this throw.
 		assert.throws(
-			() => preflightTraceAgentConfig(["-c", dir, "run"]),
-			(error) =>
-				error instanceof LaunchPreflightError &&
-				error.message.includes(path.join(dir, "datadog.yaml")),
-			"the directory value must be resolved to <dir>/datadog.yaml"
+			() => preflightTraceAgentConfig(['-c', dir, 'run']),
+			(error) => error instanceof LaunchPreflightError && error.message.includes(path.join(dir, 'datadog.yaml')),
+			'the directory value must be resolved to <dir>/datadog.yaml'
 		);
 	});
 });
 
-test("an inferred config path that does not exist warns instead of refusing", () => {
+test('an inferred config path that does not exist warns instead of refusing', () => {
 	withTempDir((dir) => {
 		const binaryPath = stubBinary(dir);
 		// No config flag, so the path is derived from the binary's own location.
 		// Blocking a launch on that guess is the regression this asserts against.
-		const warnings = captureWarnings(() =>
-			assert.doesNotThrow(() => preflightTraceAgentConfig(["run"], binaryPath))
-		);
-		assert.equal(warnings.length, 1, "the guess must be reported, not silent");
-		assert.match(
-			warnings[0],
-			/No config flag was passed/,
-			"the warning must say the path was inferred"
-		);
+		const warnings = captureWarnings(() => assert.doesNotThrow(() => preflightTraceAgentConfig(['run'], binaryPath)));
+		assert.equal(warnings.length, 1, 'the guess must be reported, not silent');
+		assert.match(warnings[0], /No config flag was passed/, 'the warning must say the path was inferred');
 		assert.ok(
-			warnings[0].includes(path.join(dir, "etc", "datadog.yaml")),
+			warnings[0].includes(path.join(dir, 'etc', 'datadog.yaml')),
 			`the warning must name the derived path; got: ${warnings[0]}`
 		);
 	});
 });
 
-test("the inferred path is derived from the binary, not from /etc/datadog-agent", () => {
+test('the inferred path is derived from the binary, not from /etc/datadog-agent', () => {
 	withTempDir((dir) => {
 		const binaryPath = stubBinary(dir);
 		// <root>/etc/datadog.yaml is what upstream's InstallPath resolves to once
 		// osinit() rewrites it from the executable location. A launcher still
 		// checking the core agent's /etc/datadog-agent/datadog.yaml would warn here.
-		fs.mkdirSync(path.join(dir, "etc"), { recursive: true });
-		fs.writeFileSync(path.join(dir, "etc", "datadog.yaml"), "");
-		const warnings = captureWarnings(() =>
-			assert.doesNotThrow(() => preflightTraceAgentConfig(["run"], binaryPath))
-		);
+		fs.mkdirSync(path.join(dir, 'etc'), { recursive: true });
+		fs.writeFileSync(path.join(dir, 'etc', 'datadog.yaml'), '');
+		const warnings = captureWarnings(() => assert.doesNotThrow(() => preflightTraceAgentConfig(['run'], binaryPath)));
 		assert.deepEqual(warnings, []);
 	});
 });
 
-test("an unwritable config directory is fatal", (t) => {
+test('an unwritable config directory is fatal', (t) => {
 	if (isWindows) {
-		t.skip("POSIX mode bits do not gate directory writes on Windows");
+		t.skip('POSIX mode bits do not gate directory writes on Windows');
 		return;
 	}
-	if (typeof process.getuid === "function" && process.getuid() === 0) {
-		t.skip("root ignores the mode bits this test relies on");
+	if (typeof process.getuid === 'function' && process.getuid() === 0) {
+		t.skip('root ignores the mode bits this test relies on');
 		return;
 	}
 	withTempDir((dir) => {
-		const locked = path.join(dir, "locked");
+		const locked = path.join(dir, 'locked');
 		fs.mkdirSync(locked);
-		fs.writeFileSync(path.join(locked, "datadog.yaml"), "");
+		fs.writeFileSync(path.join(locked, 'datadog.yaml'), '');
 		fs.chmodSync(locked, 0o500);
 		try {
 			assert.throws(
-				() =>
-					preflightTraceAgentConfig(["-c", path.join(locked, "datadog.yaml")]),
+				() => preflightTraceAgentConfig(['-c', path.join(locked, 'datadog.yaml')]),
 				/not writable/,
-				"the agent writes auth_token beside the config; without write access it " +
-					"hangs 30s and dies"
+				'the agent writes auth_token beside the config; without write access it ' + 'hangs 30s and dies'
 			);
 		} finally {
 			// Restore before the temp dir is removed, or rmSync cannot descend.

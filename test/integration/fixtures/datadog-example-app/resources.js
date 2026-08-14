@@ -14,11 +14,11 @@
  * thread while it happens; an HTTP-driven probe would reach whichever single
  * thread served the request.
  */
-import { spawn } from "node:child_process";
-import { appendFileSync } from "node:fs";
-import { join } from "node:path";
-import { threadId } from "node:worker_threads";
-import { startDatadogAgents } from "./dd-supervisor.js";
+import { spawn } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { threadId } from 'node:worker_threads';
+import { startDatadogAgents } from './dd-supervisor.js';
 
 const PROBE_DIR = process.env.DD_SPAWN_PROBE_DIR;
 /** Allowlisted command for the no-name probe below. */
@@ -29,10 +29,7 @@ const PROBE_COMMAND = process.env.DD_SPAWN_PROBE_COMMAND;
  * is written in one syscall, so threads interleave whole lines, not fragments.
  */
 function record(entry) {
-	appendFileSync(
-		join(PROBE_DIR, "probe-results.jsonl"),
-		JSON.stringify({ threadId, ...entry }) + "\n"
-	);
+	appendFileSync(join(PROBE_DIR, 'probe-results.jsonl'), JSON.stringify({ threadId, ...entry }) + '\n');
 }
 
 if (PROBE_DIR && PROBE_COMMAND) {
@@ -46,12 +43,12 @@ if (PROBE_DIR && PROBE_COMMAND) {
 		const child = spawn(PROBE_COMMAND, []);
 		// Enforcement is off, so this is a real child; keep its async ENOENT-style
 		// 'error' from killing the thread and let the test report the failure.
-		child.on("error", () => {});
+		child.on('error', () => {});
 		child.unref();
-		record({ probe: "no-name", threw: false });
+		record({ probe: 'no-name', threw: false });
 	} catch (error) {
 		record({
-			probe: "no-name",
+			probe: 'no-name',
 			threw: true,
 			error: String(error?.message ?? error),
 		});
@@ -60,7 +57,7 @@ if (PROBE_DIR && PROBE_COMMAND) {
 	// Not awaited at top level, mirroring example/resources.js: the promise is
 	// held and reported instead, and startDatadogAgents() never rejects.
 	startDatadogAgents(import.meta.dirname).then((status) => {
-		record({ probe: "status", status });
-		record({ probe: "done", threw: false });
+		record({ probe: 'status', status });
+		record({ probe: 'done', threw: false });
 	});
 }

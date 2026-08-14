@@ -1,15 +1,15 @@
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import { errorMessage, logger } from "./logger.js";
-import { Platform } from "./platform.js";
-import { PACKAGE_NAME, platformPackageName } from "./package-identity.js";
-import { AgentBinaryDescriptor, AgentBinaryKind } from "./types.js";
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { errorMessage, logger } from './logger.js';
+import { Platform } from './platform.js';
+import { PACKAGE_NAME, platformPackageName } from './package-identity.js';
+import { AgentBinaryDescriptor, AgentBinaryKind } from './types.js';
 
 export class BinaryManager {
 	private readonly buildDir: string;
 
 	constructor() {
-		this.buildDir = path.join(__dirname, "..", "build");
+		this.buildDir = path.join(__dirname, '..', 'build');
 	}
 
 	/**
@@ -17,10 +17,7 @@ export class BinaryManager {
 	 * because it is the axis callers vary; it defaults to `core` so a zero-arg call in an
 	 * existing consumer is unchanged.
 	 */
-	async ensureBinary(
-		kind: AgentBinaryKind = "core",
-		version?: string
-	): Promise<string> {
+	async ensureBinary(kind: AgentBinaryKind = 'core', version?: string): Promise<string> {
 		const platform = Platform.current();
 		const descriptor = this.getDescriptor(platform, kind);
 		logger.info(
@@ -31,14 +28,9 @@ export class BinaryManager {
 
 		// The optional platform package (e.g. <package name>-linux-x86_64) is the path
 		// taken when this package is installed from npm.
-		const packagedBinary = await this.resolveFromPlatformPackage(
-			platform,
-			descriptor
-		);
+		const packagedBinary = await this.resolveFromPlatformPackage(platform, descriptor);
 		if (packagedBinary) {
-			logger.info(
-				`Using packaged Datadog ${kind} agent binary: ${packagedBinary}`
-			);
+			logger.info(`Using packaged Datadog ${kind} agent binary: ${packagedBinary}`);
 			return packagedBinary;
 		}
 
@@ -54,17 +46,11 @@ export class BinaryManager {
 		// issued a network call on every cache miss. Observed: the pin was 7.79.1 while the
 		// error cited build/7.82.1-macos-arm64.
 		const targetVersion = version ?? (await this.resolvePinnedVersion());
-		const candidates = this.getLocalBuildPaths(
-			platform,
-			descriptor,
-			targetVersion
-		);
+		const candidates = this.getLocalBuildPaths(platform, descriptor, targetVersion);
 
 		for (const candidate of candidates) {
 			if (await this.binaryExists(candidate)) {
-				logger.info(
-					`Using locally built Datadog ${kind} agent binary: ${candidate}`
-				);
+				logger.info(`Using locally built Datadog ${kind} agent binary: ${candidate}`);
 				return candidate;
 			}
 		}
@@ -74,7 +60,7 @@ export class BinaryManager {
 				`${platform.getName()}. Checked the optional platform package ` +
 				`${platformPackageName(platform.getName())} (via its ` +
 				`${descriptor.accessorName}() accessor) and these local build paths: ` +
-				`${candidates.join(", ")}. None resolved a runnable binary.`
+				`${candidates.join(', ')}. None resolved a runnable binary.`
 		);
 	}
 
@@ -83,16 +69,13 @@ export class BinaryManager {
 	 * it is findable by anyone grepping for APM rather than hidden behind a string argument.
 	 */
 	async ensureTraceAgentBinary(version?: string): Promise<string> {
-		return this.ensureBinary("trace", version);
+		return this.ensureBinary('trace', version);
 	}
 
-	private getDescriptor(
-		platform: Platform,
-		kind: AgentBinaryKind
-	): AgentBinaryDescriptor {
+	private getDescriptor(platform: Platform, kind: AgentBinaryKind): AgentBinaryDescriptor {
 		// A caller written against the old one-arg signature passes a version string here,
 		// which would otherwise surface as an opaque "No 7.75.5 binary is defined".
-		if (kind !== "core" && kind !== "trace") {
+		if (kind !== 'core' && kind !== 'trace') {
 			throw new Error(
 				`ensureBinary() received "${String(kind)}" as its first argument. That ` +
 					`parameter is now the binary kind ("core" | "trace") and the version moved ` +
@@ -116,9 +99,10 @@ export class BinaryManager {
 				default?: Record<string, unknown>;
 			};
 			const pkg = (await import(packageName)) as PackageExports;
-			const accessor = (pkg[descriptor.accessorName] ??
-				pkg.default?.[descriptor.accessorName]) as (() => string) | undefined;
-			if (typeof accessor !== "function") {
+			const accessor = (pkg[descriptor.accessorName] ?? pkg.default?.[descriptor.accessorName]) as
+				| (() => string)
+				| undefined;
+			if (typeof accessor !== 'function') {
 				// The main and platform packages are version-locked but published and
 				// installed separately, so a rollout goes through a window where a new main
 				// package sits on top of an old platform package. A missing accessor is that
@@ -134,15 +118,12 @@ export class BinaryManager {
 				return null;
 			}
 			const binaryPath = accessor();
-			logger.debug(
-				`${packageName} reports ${descriptor.kind} binary path: ${binaryPath}`
-			);
+			logger.debug(`${packageName} reports ${descriptor.kind} binary path: ${binaryPath}`);
 			if (await this.binaryExists(binaryPath)) {
 				return binaryPath;
 			}
 			logger.warn(
-				`Platform package ${packageName} resolved but its ${descriptor.kind} binary ` +
-					`is missing at ${binaryPath}.`
+				`Platform package ${packageName} resolved but its ${descriptor.kind} binary ` + `is missing at ${binaryPath}.`
 			);
 			return null;
 		} catch (error) {
@@ -167,23 +148,10 @@ export class BinaryManager {
 	 * written, so the build-from-source fallback could never succeed. The second entry
 	 * keeps that old layout resolvable for a tree built by an older version.
 	 */
-	private getLocalBuildPaths(
-		platform: Platform,
-		descriptor: AgentBinaryDescriptor,
-		version: string
-	): string[] {
+	private getLocalBuildPaths(platform: Platform, descriptor: AgentBinaryDescriptor, version: string): string[] {
 		return [
-			path.join(
-				this.buildDir,
-				platform.getName(),
-				"bin",
-				descriptor.outputName
-			),
-			path.join(
-				this.buildDir,
-				`${version}-${platform.getName()}`,
-				descriptor.outputName
-			),
+			path.join(this.buildDir, platform.getName(), 'bin', descriptor.outputName),
+			path.join(this.buildDir, `${version}-${platform.getName()}`, descriptor.outputName),
 		];
 	}
 
@@ -204,7 +172,7 @@ export class BinaryManager {
 	 * API is both a startup-latency risk and a silent failure on an egress-restricted node.
 	 */
 	private async resolvePinnedVersion(): Promise<string> {
-		const { DatadogAgentDownloader } = await import("./downloader.js");
+		const { DatadogAgentDownloader } = await import('./downloader.js');
 		return new DatadogAgentDownloader().getPinnedVersion();
 	}
 }

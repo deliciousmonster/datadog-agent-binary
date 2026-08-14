@@ -1,12 +1,12 @@
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import * as tar from "tar";
-import { DownloadConfig } from "./types.js";
-import { errorMessage, logger } from "./logger.js";
-import { Platform } from "./platform.js";
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import * as tar from 'tar';
+import { DownloadConfig } from './types.js';
+import { errorMessage, logger } from './logger.js';
+import { Platform } from './platform.js';
 
-const DATADOG_AGENT_REPO = "https://github.com/DataDog/datadog-agent";
-const GITHUB_API_BASE = "https://api.github.com/repos/DataDog/datadog-agent";
+const DATADOG_AGENT_REPO = 'https://github.com/DataDog/datadog-agent';
+const GITHUB_API_BASE = 'https://api.github.com/repos/DataDog/datadog-agent';
 
 /**
  * Single source of truth for the upstream Datadog Agent release this package builds.
@@ -18,7 +18,7 @@ const GITHUB_API_BASE = "https://api.github.com/repos/DataDog/datadog-agent";
  * Deliberately NOT the npm package version: the two move on different cadences, and
  * conflating them produced the defect described on `resolveVersion()` below.
  */
-const PINNED_VERSION_FILE = ".datadog-agent-version";
+const PINNED_VERSION_FILE = '.datadog-agent-version';
 
 export class DatadogAgentDownloader {
 	/**
@@ -27,10 +27,10 @@ export class DatadogAgentDownloader {
 	 * directory.
 	 */
 	async getPinnedVersion(): Promise<string> {
-		const pinPath = path.join(__dirname, "..", PINNED_VERSION_FILE);
+		const pinPath = path.join(__dirname, '..', PINNED_VERSION_FILE);
 		let raw: string;
 		try {
-			raw = await fs.readFile(pinPath, "utf8");
+			raw = await fs.readFile(pinPath, 'utf8');
 		} catch (error) {
 			throw new Error(
 				`Could not read the pinned Datadog Agent version from ${pinPath}: ` +
@@ -41,9 +41,7 @@ export class DatadogAgentDownloader {
 		}
 		const version = raw.trim();
 		if (!version) {
-			throw new Error(
-				`${pinPath} is empty; it must contain a Datadog Agent tag.`
-			);
+			throw new Error(`${pinPath} is empty; it must contain a Datadog Agent tag.`);
 		}
 		return version;
 	}
@@ -67,7 +65,7 @@ export class DatadogAgentDownloader {
 	 * so both must come from the same ref: a resolver that can float can mismatch them.
 	 */
 	async resolveVersion(requested?: string): Promise<string> {
-		if (requested && requested.toLowerCase() === "latest") {
+		if (requested && requested.toLowerCase() === 'latest') {
 			// Opting into a floating build is allowed, but only explicitly.
 			const latest = await this.getLatestVersion();
 			logger.warn(
@@ -81,7 +79,7 @@ export class DatadogAgentDownloader {
 		const version = requested ?? (await this.getPinnedVersion());
 		logger.info(
 			`Using Datadog Agent version ${version} ` +
-				`(${requested ? "explicitly requested" : `pinned in ${PINNED_VERSION_FILE}`})`
+				`(${requested ? 'explicitly requested' : `pinned in ${PINNED_VERSION_FILE}`})`
 		);
 		await this.assertRefExists(version);
 		return version;
@@ -112,9 +110,7 @@ export class DatadogAgentDownloader {
 		}
 
 		if (response.status !== 404) {
-			logger.warn(
-				`Tag check for ${version} returned HTTP ${response.status}; continuing.`
-			);
+			logger.warn(`Tag check for ${version} returned HTTP ${response.status}; continuing.`);
 			return;
 		}
 
@@ -122,25 +118,21 @@ export class DatadogAgentDownloader {
 		throw new Error(
 			`Datadog Agent tag "${version}" does not exist on ${DATADOG_AGENT_REPO}. ` +
 				`Update ${PINNED_VERSION_FILE} to a real upstream release.` +
-				(nearby.length
-					? ` Tags in that series: ${nearby.join(", ")}.`
-					: ` No tags found in that series.`)
+				(nearby.length ? ` Tags in that series: ${nearby.join(', ')}.` : ` No tags found in that series.`)
 		);
 	}
 
 	/** Best-effort list of released tags sharing the requested version's major.minor. */
 	private async findNearbyTags(version: string): Promise<string[]> {
-		const series = version.split(".").slice(0, 2).join(".");
+		const series = version.split('.').slice(0, 2).join('.');
 		if (!series) return [];
 		try {
-			const response = await fetch(
-				`${GITHUB_API_BASE}/git/matching-refs/tags/${encodeURIComponent(series)}.`
-			);
+			const response = await fetch(`${GITHUB_API_BASE}/git/matching-refs/tags/${encodeURIComponent(series)}.`);
 			if (!response.ok) return [];
 			const refs = (await response.json()) as { ref: string }[];
 			return (
 				refs
-					.map((r) => r.ref.replace("refs/tags/", ""))
+					.map((r) => r.ref.replace('refs/tags/', ''))
 					// Drop rc/beta/feature-branch tags; only stable releases are useful here.
 					.filter((tag) => /^\d+\.\d+\.\d+$/.test(tag))
 					.slice(-6)
@@ -155,7 +147,7 @@ export class DatadogAgentDownloader {
 	 * builds; it must never be the implicit default. See `resolveVersion()`.
 	 */
 	async getLatestVersion(): Promise<string> {
-		logger.info("Fetching latest Datadog Agent version...");
+		logger.info('Fetching latest Datadog Agent version...');
 
 		const response = await fetch(`${GITHUB_API_BASE}/releases/latest`);
 		if (!response.ok) {
@@ -174,9 +166,9 @@ export class DatadogAgentDownloader {
 		await fs.mkdir(path.dirname(extractTo), { recursive: true });
 		await fs.rm(extractTo, { recursive: true, force: true });
 
-		logger.info("Cloning Datadog Agent repository...");
+		logger.info('Cloning Datadog Agent repository...');
 
-		const { execSync } = await import("node:child_process");
+		const { execSync } = await import('node:child_process');
 
 		// Tracked outside the try/catch: a clone that succeeds but lands on the wrong ref
 		// must be fatal, not a reason to retry via tarball. Asserting inside the try would
@@ -184,27 +176,21 @@ export class DatadogAgentDownloader {
 		let clonedVersion: string | undefined;
 
 		try {
-			execSync(
-				`git clone --depth 1 --branch ${version} ${DATADOG_AGENT_REPO} "${extractTo}"`,
-				{
-					stdio: ["inherit", "pipe", "inherit"],
-				}
-			);
+			execSync(`git clone --depth 1 --branch ${version} ${DATADOG_AGENT_REPO} "${extractTo}"`, {
+				stdio: ['inherit', 'pipe', 'inherit'],
+			});
 
-			const gitOutput = execSync(
-				`git -C "${extractTo}" describe --tags --always`,
-				{ encoding: "utf8", stdio: ["inherit", "pipe", "inherit"] }
-			);
+			const gitOutput = execSync(`git -C "${extractTo}" describe --tags --always`, {
+				encoding: 'utf8',
+				stdio: ['inherit', 'pipe', 'inherit'],
+			});
 			clonedVersion = gitOutput.trim();
 			logger.info(`Repository cloned at version: ${clonedVersion}`);
 		} catch {
-			logger.warn("Git clone failed, falling back to tarball download...");
+			logger.warn('Git clone failed, falling back to tarball download...');
 
 			const tarballUrl = `${DATADOG_AGENT_REPO}/archive/refs/tags/${version}.tar.gz`;
-			const tarballPath = path.join(
-				path.dirname(extractTo),
-				`datadog-agent-${version}.tar.gz`
-			);
+			const tarballPath = path.join(path.dirname(extractTo), `datadog-agent-${version}.tar.gz`);
 
 			logger.debug(`Downloading from: ${tarballUrl}`);
 
@@ -217,7 +203,7 @@ export class DatadogAgentDownloader {
 			const buffer = Buffer.from(arrayBuffer);
 			await fs.writeFile(tarballPath, buffer);
 
-			logger.info("Extracting source code...");
+			logger.info('Extracting source code...');
 
 			await fs.mkdir(extractTo, { recursive: true });
 
@@ -232,8 +218,8 @@ export class DatadogAgentDownloader {
 			// The build's ldflags read the version from `git describe`; a tarball carries no
 			// git metadata, so synthesize it.
 			try {
-				execSync(`git -C "${extractTo}" init`, { stdio: "ignore" });
-				execSync(`git -C "${extractTo}" tag ${version}`, { stdio: "ignore" });
+				execSync(`git -C "${extractTo}" init`, { stdio: 'ignore' });
+				execSync(`git -C "${extractTo}" tag ${version}`, { stdio: 'ignore' });
 			} catch {
 				// Best effort; the version also reaches the build through the environment.
 			}
@@ -273,29 +259,29 @@ export class DatadogAgentDownloader {
 		logger.info(`Checking build dependencies for ${platform.getName()}...`);
 
 		const requirements: Record<string, string[]> = {
-			linux: ["go", "make", "gcc", "git"],
-			macos: ["go", "make", "gcc", "git", "xcode-select"],
-			windows: ["go", "make", "gcc", "git"],
+			linux: ['go', 'make', 'gcc', 'git'],
+			macos: ['go', 'make', 'gcc', 'git', 'xcode-select'],
+			windows: ['go', 'make', 'gcc', 'git'],
 		};
 
 		const platformRequirements = requirements[platform.getOS()] || [];
 		const missing: string[] = [];
 
 		logger.debug(`checkBuildDependencies PATH: ${process.env.PATH}`);
-		const { execSync } = await import("node:child_process");
+		const { execSync } = await import('node:child_process');
 		for (const tool of platformRequirements) {
 			try {
-				execSync(`which ${tool}`, { stdio: "ignore" });
+				execSync(`which ${tool}`, { stdio: 'ignore' });
 			} catch {
 				missing.push(tool);
 			}
 		}
 
 		if (missing.length > 0) {
-			logger.warn(`Missing build dependencies: ${missing.join(", ")}`);
-			logger.warn("Please install missing dependencies before building");
+			logger.warn(`Missing build dependencies: ${missing.join(', ')}`);
+			logger.warn('Please install missing dependencies before building');
 		} else {
-			logger.info("All build dependencies satisfied");
+			logger.info('All build dependencies satisfied');
 		}
 	}
 }

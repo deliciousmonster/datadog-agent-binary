@@ -1,9 +1,9 @@
-import * as path from "node:path";
-import { DatadogAgentDownloader } from "./downloader.js";
-import { createBuilder } from "./builders/index.js";
-import { errorMessage, logger } from "./logger.js";
-import { BuildConfig, BuildResult } from "./types.js";
-import { Platform } from "./platform.js";
+import * as path from 'node:path';
+import { DatadogAgentDownloader } from './downloader.js';
+import { createBuilder } from './builders/index.js';
+import { errorMessage, logger } from './logger.js';
+import { BuildConfig, BuildResult } from './types.js';
+import { Platform } from './platform.js';
 
 export class DatadogAgentBuilder {
 	private downloader: DatadogAgentDownloader;
@@ -31,11 +31,11 @@ export class DatadogAgentBuilder {
 		// tag exists before we clone.
 		const version = await this.downloader.resolveVersion(options.version);
 		const platformName = platform.getName();
-		const outputDir = options.outputDir || "./build";
+		const outputDir = options.outputDir || './build';
 
-		const platformBuildDir = path.join(process.cwd(), "build", platformName);
-		const sourceDir = path.join(platformBuildDir, "src");
-		const platformGoPath = path.join(platformBuildDir, "go");
+		const platformBuildDir = path.join(process.cwd(), 'build', platformName);
+		const sourceDir = path.join(platformBuildDir, 'src');
+		const platformGoPath = path.join(platformBuildDir, 'go');
 
 		logger.info(`Building Datadog Agent ${version} for ${platformName}`);
 
@@ -61,16 +61,13 @@ export class DatadogAgentBuilder {
 		return await builder.build();
 	}
 
-	private async setupGoPathStructure(
-		goPath: string,
-		sourceDir: string
-	): Promise<void> {
-		const { mkdir, symlink, stat } = await import("node:fs/promises");
+	private async setupGoPathStructure(goPath: string, sourceDir: string): Promise<void> {
+		const { mkdir, symlink, stat } = await import('node:fs/promises');
 
-		const goSrcDir = path.join(goPath, "src", "github.com", "DataDog");
+		const goSrcDir = path.join(goPath, 'src', 'github.com', 'DataDog');
 		await mkdir(goSrcDir, { recursive: true });
 
-		const symlinkPath = path.join(goSrcDir, "datadog-agent");
+		const symlinkPath = path.join(goSrcDir, 'datadog-agent');
 		const relativePath = path.relative(goSrcDir, sourceDir);
 
 		try {
@@ -78,10 +75,8 @@ export class DatadogAgentBuilder {
 			logger.debug(`GOPATH symlink already exists: ${symlinkPath}`);
 		} catch {
 			try {
-				await symlink(relativePath, symlinkPath, "dir");
-				logger.debug(
-					`Created GOPATH symlink: ${symlinkPath} -> ${relativePath}`
-				);
+				await symlink(relativePath, symlinkPath, 'dir');
+				logger.debug(`Created GOPATH symlink: ${symlinkPath} -> ${relativePath}`);
 			} catch (error) {
 				logger.error(`Failed to create symlink: ${errorMessage(error)}`);
 				throw error;
@@ -106,10 +101,10 @@ export class DatadogAgentBuilder {
 // the logger, the per-OS builder classes, SUPPORTED_PLATFORMS) is reached through
 // its own module by the scripts and shims that need it, and a wildcard here would
 // silently promote every future internal helper to public surface.
-export { BinaryManager } from "./binary-manager.js";
-export { DatadogAgentDownloader } from "./downloader.js";
-export { createBuilder } from "./builders/index.js";
-export { Platform } from "./platform.js";
+export { BinaryManager } from './binary-manager.js';
+export { DatadogAgentDownloader } from './downloader.js';
+export { createBuilder } from './builders/index.js';
+export { Platform } from './platform.js';
 export type {
 	AgentBinaryDescriptor,
 	AgentBinaryKind,
@@ -119,4 +114,4 @@ export type {
 	DownloadConfig,
 	Logger,
 	OS,
-} from "./types.js";
+} from './types.js';

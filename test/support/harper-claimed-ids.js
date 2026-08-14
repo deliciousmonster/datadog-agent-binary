@@ -1,4 +1,4 @@
-"use strict";
+'use strict';
 
 /**
  * Single source of the module ids Harper's loader claims.
@@ -18,27 +18,27 @@
  * stale silently when harper adds an id.
  */
 
-const fs = require("node:fs");
-const path = require("node:path");
+const fs = require('node:fs');
+const path = require('node:path');
 
 const BASELINE_CLAIMED_IDS = [
-	"harper",
-	"harperdb",
-	"harperdb/v1",
-	"harperdb/v2",
-	"@harperfast/harper",
-	"@harperfast/harper-pro",
+	'harper',
+	'harperdb',
+	'harperdb/v1',
+	'harperdb/v2',
+	'@harperfast/harper',
+	'@harperfast/harper-pro',
 ];
 
 const HARPER_LOADER_PATH = path.join(
 	__dirname,
-	"..",
-	"..",
-	"node_modules",
-	"harper",
-	"dist",
-	"security",
-	"jsLoader.js"
+	'..',
+	'..',
+	'node_modules',
+	'harper',
+	'dist',
+	'security',
+	'jsLoader.js'
 );
 
 /** The string literals of `HARPER_MODULE_IDS = new Set([...])`, or null. */
@@ -52,7 +52,7 @@ function extractClaimedIds(source) {
 function claimedIds() {
 	const ids = new Set(BASELINE_CLAIMED_IDS);
 	if (fs.existsSync(HARPER_LOADER_PATH)) {
-		const live = extractClaimedIds(fs.readFileSync(HARPER_LOADER_PATH, "utf8"));
+		const live = extractClaimedIds(fs.readFileSync(HARPER_LOADER_PATH, 'utf8'));
 		for (const id of live ?? []) ids.add(id);
 	}
 	return ids;

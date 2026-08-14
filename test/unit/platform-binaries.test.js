@@ -1,4 +1,4 @@
-"use strict";
+'use strict';
 
 /**
  * Descriptor correctness for every supported platform.
@@ -11,16 +11,16 @@
  * here.
  */
 
-const { test } = require("node:test");
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 function findRepoRoot(start) {
 	let dir = start;
-	while (!fs.existsSync(path.join(dir, "package.json"))) {
+	while (!fs.existsSync(path.join(dir, 'package.json'))) {
 		const parent = path.dirname(dir);
-		if (parent === dir) throw new Error("Could not locate package root");
+		if (parent === dir) throw new Error('Could not locate package root');
 		dir = parent;
 	}
 	return dir;
@@ -28,7 +28,7 @@ function findRepoRoot(start) {
 
 const REPO_ROOT = findRepoRoot(__dirname);
 const { Platform, SUPPORTED_PLATFORMS, getAllSupportedPlatforms } = require(
-	path.join(REPO_ROOT, "dist", "platform.js")
+	path.join(REPO_ROOT, 'dist', 'platform.js')
 );
 
 /**
@@ -36,7 +36,7 @@ const { Platform, SUPPORTED_PLATFORMS, getAllSupportedPlatforms } = require(
  * into the build tree, producing a core agent that only runs on the machine that
  * built it. `systemd` pulls in libsystemd.
  */
-const CORE_BUILD_ARGS = "--build-exclude=systemd,python";
+const CORE_BUILD_ARGS = '--build-exclude=systemd,python';
 
 /**
  * `buildStem`/`outputStem` are extension-free; the tests append `.exe` on
@@ -44,43 +44,38 @@ const CORE_BUILD_ARGS = "--build-exclude=systemd,python";
  */
 const EXPECTED = {
 	core: {
-		buildTask: "agent.build",
-		buildDir: "agent",
-		buildStem: "agent",
-		outputStem: "datadog-agent",
-		buildArgsEnvVar: "DD_AGENT_BUILD_ARGS",
-		accessorName: "getBinaryPath",
-		processName: "datadog-agent",
+		buildTask: 'agent.build',
+		buildDir: 'agent',
+		buildStem: 'agent',
+		outputStem: 'datadog-agent',
+		buildArgsEnvVar: 'DD_AGENT_BUILD_ARGS',
+		accessorName: 'getBinaryPath',
+		processName: 'datadog-agent',
 	},
 	trace: {
-		buildTask: "trace-agent.build",
-		buildDir: "trace-agent",
-		buildStem: "trace-agent",
-		outputStem: "trace-agent",
-		buildArgsEnvVar: "DD_TRACE_AGENT_BUILD_ARGS",
-		accessorName: "getTraceAgentBinaryPath",
-		processName: "datadog-trace-agent",
+		buildTask: 'trace-agent.build',
+		buildDir: 'trace-agent',
+		buildStem: 'trace-agent',
+		outputStem: 'trace-agent',
+		buildArgsEnvVar: 'DD_TRACE_AGENT_BUILD_ARGS',
+		accessorName: 'getTraceAgentBinaryPath',
+		processName: 'datadog-trace-agent',
 	},
 };
 
-const EXPECTED_KINDS = ["core", "trace"];
+const EXPECTED_KINDS = ['core', 'trace'];
 
 // Must match SUPPORTED_PLATFORMS and the build-release.yml matrix. macOS x86_64
 // is absent because GitHub retired the macos-13 Intel runner: declaring a platform
 // nobody builds publishes an optionalDependency that never resolves, and npm skips
 // it silently.
-const EXPECTED_PLATFORM_NAMES = [
-	"linux-x86_64",
-	"linux-arm64",
-	"macos-arm64",
-	"windows-x86_64",
-];
+const EXPECTED_PLATFORM_NAMES = ['linux-x86_64', 'linux-arm64', 'macos-arm64', 'windows-x86_64'];
 
 function ext(platform) {
-	return platform.getOS() === "windows" ? ".exe" : "";
+	return platform.getOS() === 'windows' ? '.exe' : '';
 }
 
-test("SUPPORTED_PLATFORMS is exactly the published platform set", () => {
+test('SUPPORTED_PLATFORMS is exactly the published platform set', () => {
 	assert.deepEqual(
 		SUPPORTED_PLATFORMS.map((p) => p.getName()),
 		EXPECTED_PLATFORM_NAMES
@@ -88,7 +83,7 @@ test("SUPPORTED_PLATFORMS is exactly the published platform set", () => {
 	assert.deepEqual(getAllSupportedPlatforms(), EXPECTED_PLATFORM_NAMES);
 });
 
-test("every supported platform ships exactly the core agent and the trace-agent", () => {
+test('every supported platform ships exactly the core agent and the trace-agent', () => {
 	for (const platform of SUPPORTED_PLATFORMS) {
 		const binaries = platform.getBinaries();
 		assert.equal(
@@ -100,13 +95,12 @@ test("every supported platform ships exactly the core agent and the trace-agent"
 		assert.deepEqual(
 			binaries.map((b) => b.kind),
 			EXPECTED_KINDS,
-			`${platform.getName()}: kinds must be core then trace, the order the ` +
-				`upstream build tasks run in`
+			`${platform.getName()}: kinds must be core then trace, the order the ` + `upstream build tasks run in`
 		);
 	}
 });
 
-test("descriptor fields match the upstream build contract on every platform", () => {
+test('descriptor fields match the upstream build contract on every platform', () => {
 	for (const platform of SUPPORTED_PLATFORMS) {
 		const name = platform.getName();
 		const suffix = ext(platform);
@@ -114,16 +108,8 @@ test("descriptor fields match the upstream build contract on every platform", ()
 			const expected = EXPECTED[binary.kind];
 			assert.ok(expected, `${name}: unexpected binary kind ${binary.kind}`);
 
-			assert.equal(
-				binary.buildTask,
-				expected.buildTask,
-				`${name}/${binary.kind}: buildTask`
-			);
-			assert.equal(
-				binary.buildDir,
-				expected.buildDir,
-				`${name}/${binary.kind}: buildDir`
-			);
+			assert.equal(binary.buildTask, expected.buildTask, `${name}/${binary.kind}: buildTask`);
+			assert.equal(binary.buildDir, expected.buildDir, `${name}/${binary.kind}: buildDir`);
 			assert.equal(
 				binary.buildName,
 				`${expected.buildStem}${suffix}`,
@@ -134,11 +120,7 @@ test("descriptor fields match the upstream build contract on every platform", ()
 				`${expected.outputStem}${suffix}`,
 				`${name}/${binary.kind}: outputName is the filename published inside the platform package`
 			);
-			assert.equal(
-				binary.buildArgsEnvVar,
-				expected.buildArgsEnvVar,
-				`${name}/${binary.kind}: buildArgsEnvVar`
-			);
+			assert.equal(binary.buildArgsEnvVar, expected.buildArgsEnvVar, `${name}/${binary.kind}: buildArgsEnvVar`);
 			assert.equal(
 				binary.accessorName,
 				expected.accessorName,
@@ -153,10 +135,10 @@ test("descriptor fields match the upstream build contract on every platform", ()
 	}
 });
 
-test("the core agent carries the rtloader/CPython build excludes", () => {
+test('the core agent carries the rtloader/CPython build excludes', () => {
 	for (const platform of SUPPORTED_PLATFORMS) {
 		assert.equal(
-			platform.getBinary("core").buildArgs,
+			platform.getBinary('core').buildArgs,
 			CORE_BUILD_ARGS,
 			`${platform.getName()}: without --build-exclude=systemd,python the core agent ` +
 				`links an embedded CPython by an rpath into the build tree and only runs on ` +
@@ -165,9 +147,9 @@ test("the core agent carries the rtloader/CPython build excludes", () => {
 	}
 });
 
-test("the trace-agent carries NO build args at all", () => {
+test('the trace-agent carries NO build args at all', () => {
 	for (const platform of SUPPORTED_PLATFORMS) {
-		const trace = platform.getBinary("trace");
+		const trace = platform.getBinary('trace');
 		// Equality against "" rather than a falsiness check: the regression is
 		// someone forwarding the core agent's excludes here. `tasks/trace_agent.py`
 		// builds with a plain go_build that takes no rtloader parameters, and
@@ -175,14 +157,14 @@ test("the trace-agent carries NO build args at all", () => {
 		// are wrong here rather than merely redundant.
 		assert.equal(
 			trace.buildArgs,
-			"",
+			'',
 			`${platform.getName()}: trace-agent.build takes no build excludes. Got ` +
 				`"${trace.buildArgs}". The core agent's --build-exclude flags do not apply ` +
 				`to a plain go_build and must not be forwarded here.`
 		);
 		assert.notEqual(
 			trace.buildArgsEnvVar,
-			platform.getBinary("core").buildArgsEnvVar,
+			platform.getBinary('core').buildArgsEnvVar,
 			`${platform.getName()}: core and trace must have separate build-arg env vars, ` +
 				`or overriding one silently overrides both`
 		);
@@ -191,12 +173,12 @@ test("the trace-agent carries NO build args at all", () => {
 
 test("Windows binary names end in .exe and no other platform's do", () => {
 	for (const platform of SUPPORTED_PLATFORMS) {
-		const isWindows = platform.getOS() === "windows";
+		const isWindows = platform.getOS() === 'windows';
 		for (const binary of platform.getBinaries()) {
-			for (const field of ["buildName", "outputName"]) {
+			for (const field of ['buildName', 'outputName']) {
 				const value = binary[field];
 				assert.equal(
-					value.endsWith(".exe"),
+					value.endsWith('.exe'),
 					isWindows,
 					`${platform.getName()}/${binary.kind}: ${field} = "${value}". .exe is ` +
 						`required on Windows and forbidden everywhere else`
@@ -206,18 +188,18 @@ test("Windows binary names end in .exe and no other platform's do", () => {
 	}
 });
 
-test("the two binaries never share a filename on any platform", () => {
+test('the two binaries never share a filename on any platform', () => {
 	for (const platform of SUPPORTED_PLATFORMS) {
 		assert.notEqual(
-			platform.getBinary("core").outputName,
-			platform.getBinary("trace").outputName,
+			platform.getBinary('core').outputName,
+			platform.getBinary('trace').outputName,
 			`${platform.getName()}: a shared filename means one binary overwrites ` +
 				`the other in bin/ and the loss looks like "the trace-agent is missing"`
 		);
 	}
 });
 
-test("getBinary() returns the descriptor from getBinaries() and throws on an unknown kind", () => {
+test('getBinary() returns the descriptor from getBinaries() and throws on an unknown kind', () => {
 	for (const platform of SUPPORTED_PLATFORMS) {
 		const binaries = platform.getBinaries();
 		for (const kind of EXPECTED_KINDS) {
@@ -228,39 +210,33 @@ test("getBinary() returns the descriptor from getBinaries() and throws on an unk
 			);
 		}
 		assert.throws(
-			() => platform.getBinary("apm"),
+			() => platform.getBinary('apm'),
 			/No apm binary is defined/,
 			`${platform.getName()}: an unknown kind must throw, not return undefined`
 		);
 	}
 });
 
-test("nothing packaging keys off collides between the two descriptors", () => {
+test('nothing packaging keys off collides between the two descriptors', () => {
 	// A collision is silent: two descriptors sharing an accessorName collapse into
 	// one property in the generated index.js, and two sharing an outputName have
 	// one overwrite the other in bin/. Both look like "the trace-agent is missing"
 	// at runtime. scripts/create-platform-packages.js guards this too; assert it at
 	// the source as well.
-	const unique = [
-		"accessorName",
-		"outputName",
-		"processName",
-		"buildDir",
-		"buildTask",
-	];
+	const unique = ['accessorName', 'outputName', 'processName', 'buildDir', 'buildTask'];
 	for (const platform of SUPPORTED_PLATFORMS) {
 		for (const field of unique) {
 			const values = platform.getBinaries().map((b) => b[field]);
 			assert.equal(
 				new Set(values).size,
 				values.length,
-				`${platform.getName()}: descriptors share ${field} (${values.join(", ")})`
+				`${platform.getName()}: descriptors share ${field} (${values.join(', ')})`
 			);
 		}
 	}
 });
 
-test("getBinaries() hands out a fresh array each call", () => {
+test('getBinaries() hands out a fresh array each call', () => {
 	// Callers iterate, filter, and sort this list; a shared array would leak one
 	// consumer's mutation into the next platform-package build.
 	const platform = SUPPORTED_PLATFORMS[0];
@@ -269,7 +245,7 @@ test("getBinaries() hands out a fresh array each call", () => {
 	assert.equal(platform.getBinaries().length, 2);
 });
 
-test("Platform.current() describes both binaries for the host", () => {
+test('Platform.current() describes both binaries for the host', () => {
 	const platform = Platform.current();
 	assert.deepEqual(
 		platform.getBinaries().map((b) => b.kind),

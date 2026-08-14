@@ -1,24 +1,22 @@
 #!/usr/bin/env node
 
-const fs = require("fs");
-const path = require("path");
-const { argv } = require("process");
-const { SUPPORTED_PLATFORMS, Platform } = require("../dist/platform.js");
+const fs = require('fs');
+const path = require('path');
+const { argv } = require('process');
+const { SUPPORTED_PLATFORMS, Platform } = require('../dist/platform.js');
 
 // Platform sub-packages are named `<this package>-<platform>`. Deriving the prefix
 // from the manifest keeps packaging and runtime resolution in agreement and makes
 // re-scoping a one-line edit.
-const parentPackageJson = JSON.parse(
-	fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")
-);
+const parentPackageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
 const PACKAGE_NAME = parentPackageJson.name;
 if (!PACKAGE_NAME) {
-	throw new Error("package.json has no `name`; cannot derive package names.");
+	throw new Error('package.json has no `name`; cannot derive package names.');
 }
 const version = parentPackageJson.version;
 
 function getPackageDir(platform) {
-	return path.join(__dirname, "..", "npm", platform.getName());
+	return path.join(__dirname, '..', 'npm', platform.getName());
 }
 
 /**
@@ -30,7 +28,7 @@ function getDescriptors(platform) {
 	const descriptors = platform.getBinaries();
 	const seen = new Map();
 	for (const descriptor of descriptors) {
-		for (const field of ["accessorName", "outputName"]) {
+		for (const field of ['accessorName', 'outputName']) {
 			const key = `${field}:${descriptor[field]}`;
 			const owner = seen.get(key);
 			if (owner) {
@@ -46,13 +44,7 @@ function getDescriptors(platform) {
 }
 
 function copyPlatformBinaries(platform) {
-	const buildBinDir = path.join(
-		__dirname,
-		"..",
-		"build",
-		platform.getName(),
-		"bin"
-	);
+	const buildBinDir = path.join(__dirname, '..', 'build', platform.getName(), 'bin');
 	const resolved = getDescriptors(platform).map((descriptor) => ({
 		descriptor,
 		sourcePath: path.join(buildBinDir, descriptor.outputName),
@@ -64,13 +56,11 @@ function copyPlatformBinaries(platform) {
 	// an unexplained ENOENT at spawn time instead of here.
 	const missing = resolved.filter((r) => !fs.existsSync(r.sourcePath));
 	if (missing.length > 0) {
-		const detail = missing
-			.map((r) => `${r.descriptor.kind} (${r.sourcePath})`)
-			.join(", ");
+		const detail = missing.map((r) => `${r.descriptor.kind} (${r.sourcePath})`).join(', ');
 		throw new Error(`missing binaries: ${detail}`);
 	}
 
-	const binDir = path.join(getPackageDir(platform), "bin");
+	const binDir = path.join(getPackageDir(platform), 'bin');
 	fs.mkdirSync(binDir, { recursive: true });
 	for (const { descriptor, sourcePath } of resolved) {
 		const destPath = path.join(binDir, descriptor.outputName);
@@ -83,8 +73,8 @@ function copyPlatformBinaries(platform) {
 // npm filters optionalDependencies using Node's `process.platform` and
 // `process.arch` values, NOT our human-readable names. Map to those so the
 // right binary package actually installs on each host.
-const NPM_OS = { linux: "linux", macos: "darwin", windows: "win32" };
-const NPM_CPU = { x86_64: "x64", arm64: "arm64" };
+const NPM_OS = { linux: 'linux', macos: 'darwin', windows: 'win32' };
+const NPM_CPU = { x86_64: 'x64', arm64: 'arm64' };
 
 function npmValue(table, key, field) {
 	const mapped = table[key];
@@ -93,8 +83,8 @@ function npmValue(table, key, field) {
 }
 
 const NODE_FIELDS = [
-	["os", "platform", new Set(Object.values(NPM_OS))],
-	["cpu", "arch", new Set(Object.values(NPM_CPU))],
+	['os', 'platform', new Set(Object.values(NPM_OS))],
+	['cpu', 'arch', new Set(Object.values(NPM_CPU))],
 ];
 
 /**
@@ -112,7 +102,7 @@ function assertNodeOSAndCPU(packageJson) {
 				throw new Error(
 					`${packageJson.name}: ${field} "${value}" is not a Node ` +
 						`process.${nodeField} value (expected one of ` +
-						`${[...allowed].join(", ")}); npm would never install this package`
+						`${[...allowed].join(', ')}); npm would never install this package`
 				);
 			}
 		}
@@ -123,10 +113,10 @@ let platforms;
 let createDummyPackages = false;
 const lastArg = argv[argv.length - 1];
 switch (lastArg) {
-	case "--all":
+	case '--all':
 		platforms = SUPPORTED_PLATFORMS;
 		break;
-	case "--dummy":
+	case '--dummy':
 		platforms = SUPPORTED_PLATFORMS;
 		createDummyPackages = true;
 		break;
@@ -136,21 +126,21 @@ switch (lastArg) {
 
 const packageTemplate = {
 	version,
-	description: "",
-	main: "index.js",
+	description: '',
+	main: 'index.js',
 	// Inherited, never hardcoded: npm publish --provenance verifies this against
 	// the building repo per package, platform packages publish first, and the
 	// release preflight only reads the root manifest.
 	repository: parentPackageJson.repository,
-	keywords: ["datadog", "agent", "binary"],
-	author: "Harper",
-	license: "Apache-2.0",
-	files: ["bin/", "index.js", "README.md"],
+	keywords: ['datadog', 'agent', 'binary'],
+	author: 'Harper',
+	license: 'Apache-2.0',
+	files: ['bin/', 'index.js', 'README.md'],
 };
 
 /** Escape for a single-quoted literal in the generated CommonJS index.js. */
 function jsString(value) {
-	return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+	return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 }
 
 // One accessor per descriptor, so shipping another sub-agent is a change to
@@ -160,24 +150,19 @@ function jsString(value) {
 function renderIndexJs(platform) {
 	const descriptors = getDescriptors(platform);
 	const accessors = descriptors.map(
-		(d) =>
-			`  ${d.accessorName}() {\n` +
-			`    return path.join(__dirname, 'bin', ${jsString(d.outputName)});\n` +
-			`  }`
+		(d) => `  ${d.accessorName}() {\n` + `    return path.join(__dirname, 'bin', ${jsString(d.outputName)});\n` + `  }`
 	);
-	const binaryMap = descriptors.map(
-		(d) => `    ${d.kind}: ${jsString(d.outputName)}`
-	);
+	const binaryMap = descriptors.map((d) => `    ${d.kind}: ${jsString(d.outputName)}`);
 
 	return (
 		`const path = require('path');\n` +
 		`\n` +
 		`module.exports = {\n` +
-		`${accessors.join(",\n")},\n` +
+		`${accessors.join(',\n')},\n` +
 		`  // Filenames in bin/ keyed by kind, so consumers and tests can enumerate\n` +
 		`  // what shipped instead of guessing per-platform names.\n` +
 		`  binaries: {\n` +
-		`${binaryMap.join(",\n")}\n` +
+		`${binaryMap.join(',\n')}\n` +
 		`  }\n` +
 		`};\n`
 	);
@@ -190,35 +175,29 @@ function writePlatformPackageJson(platform) {
 		...packageTemplate,
 		name: `${PACKAGE_NAME}-${platform.getName()}`,
 		description: `Datadog Agent and trace-agent binaries for ${os} ${arch}`,
-		os: [npmValue(NPM_OS, os, "os")],
-		cpu: [npmValue(NPM_CPU, arch, "cpu")],
-		keywords: [...packageTemplate.keywords, "apm", "trace-agent", os, arch],
+		os: [npmValue(NPM_OS, os, 'os')],
+		cpu: [npmValue(NPM_CPU, arch, 'cpu')],
+		keywords: [...packageTemplate.keywords, 'apm', 'trace-agent', os, arch],
 	};
 
 	// CGO_ENABLED=1 links glibc, so on musl (Alpine) the binary dies with an
 	// unexplained ENOENT at spawn. Declaring libc makes npm skip the optional
 	// dependency there, and the consumer gets the "no packaged binary" path
 	// instead of a binary that cannot run.
-	if (packageJson.os[0] === "linux") {
-		packageJson.libc = ["glibc"];
+	if (packageJson.os[0] === 'linux') {
+		packageJson.libc = ['glibc'];
 	}
 
 	// The only place a platform package.json is written, so this covers every mode.
 	assertNodeOSAndCPU(packageJson);
 
-	fs.writeFileSync(
-		path.join(getPackageDir(platform), "package.json"),
-		JSON.stringify(packageJson, null, "\t") + "\n"
-	);
+	fs.writeFileSync(path.join(getPackageDir(platform), 'package.json'), JSON.stringify(packageJson, null, '\t') + '\n');
 
 	return packageJson;
 }
 
 function writePlatformIndexJs(platform) {
-	fs.writeFileSync(
-		path.join(getPackageDir(platform), "index.js"),
-		renderIndexJs(platform)
-	);
+	fs.writeFileSync(path.join(getPackageDir(platform), 'index.js'), renderIndexJs(platform));
 }
 
 function writePlatformReadme(platform) {
@@ -227,7 +206,7 @@ function writePlatformReadme(platform) {
 	const arch = platform.getArch();
 	const binaryList = getDescriptors(platform)
 		.map((d) => `- \`${d.outputName}\`, resolved by \`${d.accessorName}()\``)
-		.join("\n");
+		.join('\n');
 	const readme = `# ${name}
 
 Pre-built Datadog Agent binaries for **${os} ${arch}**:
@@ -256,13 +235,13 @@ for usage, configuration, and Harper integration details.
 Apache-2.0. The Datadog Agent binaries are distributed under the Apache-2.0
 license per the [Datadog Agent repository](https://github.com/DataDog/datadog-agent).
 `;
-	fs.writeFileSync(path.join(getPackageDir(platform), "README.md"), readme);
+	fs.writeFileSync(path.join(getPackageDir(platform), 'README.md'), readme);
 }
 
 // In --all mode (release), a platform whose binaries did not build is skipped with
 // a warning rather than aborting the whole release. Single-platform and --dummy
 // modes still fail hard.
-const tolerateMissing = lastArg === "--all";
+const tolerateMissing = lastArg === '--all';
 
 platforms.forEach((platform) => {
 	fs.mkdirSync(getPackageDir(platform), { recursive: true });
@@ -287,6 +266,6 @@ platforms.forEach((platform) => {
 		`Created package: ${packageJson.name} ` +
 			`(${getDescriptors(platform)
 				.map((d) => d.outputName)
-				.join(", ")})`
+				.join(', ')})`
 	);
 });

@@ -1,4 +1,4 @@
-"use strict";
+'use strict';
 
 /**
  * The published manifest must never name a module id Harper's loader claims.
@@ -16,10 +16,10 @@
  * booted Harper; this file is the hermetic guard that runs on every npm test.
  */
 
-const { test } = require("node:test");
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 // The claim-id list and its live derivation live in one support module because
 // test/integration/harper-import.test.ts scans the packed artifact against the
 // same ids; a private copy here or there goes stale when harper adds one.
@@ -28,9 +28,9 @@ const {
 	HARPER_LOADER_PATH,
 	claimedIds,
 	extractClaimedIds,
-} = require("../support/harper-claimed-ids.js");
+} = require('../support/harper-claimed-ids.js');
 
-const REPO_ROOT = path.join(__dirname, "..", "..");
+const REPO_ROOT = path.join(__dirname, '..', '..');
 
 /**
  * Every { key, name } pair a published manifest can use to name a dependency.
@@ -41,17 +41,12 @@ const REPO_ROOT = path.join(__dirname, "..", "..");
  */
 function dependencyNames(manifest) {
 	const names = [];
-	for (const key of [
-		"dependencies",
-		"devDependencies",
-		"peerDependencies",
-		"optionalDependencies",
-	]) {
+	for (const key of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
 		for (const name of Object.keys(manifest[key] ?? {})) {
 			names.push({ key, name });
 		}
 	}
-	for (const key of ["bundleDependencies", "bundledDependencies"]) {
+	for (const key of ['bundleDependencies', 'bundledDependencies']) {
 		if (Array.isArray(manifest[key])) {
 			for (const name of manifest[key]) names.push({ key, name });
 		}
@@ -63,18 +58,18 @@ function loaderClaimViolations(manifest, claimed) {
 	return dependencyNames(manifest).filter(({ name }) => claimed.has(name));
 }
 
-test("the claim list can still be derived from the installed harper", (t) => {
+test('the claim list can still be derived from the installed harper', (t) => {
 	if (!fs.existsSync(HARPER_LOADER_PATH)) {
-		t.skip("harper is not installed; the 5.2.1 baseline list stands in");
+		t.skip('harper is not installed; the 5.2.1 baseline list stands in');
 		return;
 	}
-	const live = extractClaimedIds(fs.readFileSync(HARPER_LOADER_PATH, "utf8"));
+	const live = extractClaimedIds(fs.readFileSync(HARPER_LOADER_PATH, 'utf8'));
 	assert.ok(
 		live !== null,
 		"HARPER_MODULE_IDS was not found in harper's dist/security/jsLoader.js, " +
-			"so the loader moved or renamed it. Re-derive the claim list from the " +
-			"new source and update extractClaimedIds(); until then this suite only " +
-			"knows the 5.2.1 baseline and misses upstream additions."
+			'so the loader moved or renamed it. Re-derive the claim list from the ' +
+			'new source and update extractClaimedIds(); until then this suite only ' +
+			'knows the 5.2.1 baseline and misses upstream additions.'
 	);
 	// A superset of the baseline, not merely a non-empty parse: an extraction
 	// that finds the constant but under-extracts (a spread or a computed member
@@ -86,66 +81,49 @@ test("the claim list can still be derived from the installed harper", (t) => {
 	assert.deepEqual(
 		missing,
 		[],
-		`extractClaimedIds() no longer sees [${missing.join(", ")}] although the ` +
-			`5.2.1 baseline ships ${missing.length === 1 ? "it" : "them"}. The ` +
+		`extractClaimedIds() no longer sees [${missing.join(', ')}] although the ` +
+			`5.2.1 baseline ships ${missing.length === 1 ? 'it' : 'them'}. The ` +
 			`regex is under-extracting against the installed harper's jsLoader.js ` +
 			`and would silently miss upstream additions too; update ` +
 			`extractClaimedIds() to parse the new source shape.`
 	);
 });
 
-test("no dependency key in the published manifest names a claimed module id", () => {
-	const manifest = JSON.parse(
-		fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")
-	);
+test('no dependency key in the published manifest names a claimed module id', () => {
+	const manifest = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
 	assert.deepEqual(
 		loaderClaimViolations(manifest, claimedIds()),
 		[],
 		"the published manifest names a module id Harper's loader claims. " +
 			"packageDependsOnHarper() will route this package through Harper's " +
-			"application loader and component code can no longer import it " +
-			"natively; devDependencies count because npm ships them in the " +
-			"tarball. Reach Harper tooling through a transitive dependency " +
-			"(as @harperfast/integration-testing already does) instead."
+			'application loader and component code can no longer import it ' +
+			'natively; devDependencies count because npm ships them in the ' +
+			'tarball. Reach Harper tooling through a transitive dependency ' +
+			'(as @harperfast/integration-testing already does) instead.'
 	);
 });
 
-test("NEGATIVE: a claimed id is flagged in every dependency key", () => {
+test('NEGATIVE: a claimed id is flagged in every dependency key', () => {
 	// The guard above passes today because there is no violation; this proves it
 	// passes for that reason and not because the scan is blind.
-	for (const key of [
-		"dependencies",
-		"devDependencies",
-		"peerDependencies",
-		"optionalDependencies",
-	]) {
+	for (const key of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
 		assert.deepEqual(
-			loaderClaimViolations(
-				{ name: "x", [key]: { harper: "^5.0.0" } },
-				claimedIds()
-			),
-			[{ key, name: "harper" }],
+			loaderClaimViolations({ name: 'x', [key]: { harper: '^5.0.0' } }, claimedIds()),
+			[{ key, name: 'harper' }],
 			`a harper entry in ${key} went undetected; the manifest guard is not guarding`
 		);
 	}
 	// Bundle arrays name packages without versions; same claim, different shape.
-	assert.deepEqual(
-		loaderClaimViolations(
-			{ name: "x", bundleDependencies: ["@harperfast/harper"] },
-			claimedIds()
-		),
-		[{ key: "bundleDependencies", name: "@harperfast/harper" }]
-	);
+	assert.deepEqual(loaderClaimViolations({ name: 'x', bundleDependencies: ['@harperfast/harper'] }, claimedIds()), [
+		{ key: 'bundleDependencies', name: '@harperfast/harper' },
+	]);
 });
 
-test("NEGATIVE: a scoped claimed id from the live harper list is flagged", () => {
+test('NEGATIVE: a scoped claimed id from the live harper list is flagged', () => {
 	// Exercises the derived set rather than the baseline: '@harperfast/harper'
 	// must come through claimedIds() whichever source supplied it.
 	assert.deepEqual(
-		loaderClaimViolations(
-			{ name: "x", peerDependencies: { "@harperfast/harper": "*" } },
-			claimedIds()
-		),
-		[{ key: "peerDependencies", name: "@harperfast/harper" }]
+		loaderClaimViolations({ name: 'x', peerDependencies: { '@harperfast/harper': '*' } }, claimedIds()),
+		[{ key: 'peerDependencies', name: '@harperfast/harper' }]
 	);
 });

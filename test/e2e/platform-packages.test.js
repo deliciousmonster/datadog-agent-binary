@@ -1,24 +1,24 @@
-"use strict";
+'use strict';
 
-const { test, before, after } = require("node:test");
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-const { execFileSync } = require("node:child_process");
+const { test, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 function findRepoRoot(start) {
 	let dir = start;
-	while (!fs.existsSync(path.join(dir, "package.json"))) {
+	while (!fs.existsSync(path.join(dir, 'package.json'))) {
 		const parent = path.dirname(dir);
-		if (parent === dir) throw new Error("Could not locate package root");
+		if (parent === dir) throw new Error('Could not locate package root');
 		dir = parent;
 	}
 	return dir;
 }
 
 const REPO_ROOT = findRepoRoot(__dirname);
-const mainPkg = require(path.join(REPO_ROOT, "package.json"));
+const mainPkg = require(path.join(REPO_ROOT, 'package.json'));
 // Derived, never hardcoded: a re-scope must not leave this test asserting the old one.
 const PACKAGE_NAME = mainPkg.name;
 
@@ -27,16 +27,16 @@ const PACKAGE_NAME = mainPkg.name;
 // literally rather than read back from Platform.getBinaries(), so a descriptor
 // change has to be restated here; the generator reading its own input proves
 // nothing about what actually ships.
-const CORE = { kind: "core", accessor: "getBinaryPath" };
-const TRACE = { kind: "trace", accessor: "getTraceAgentBinaryPath" };
+const CORE = { kind: 'core', accessor: 'getBinaryPath' };
+const TRACE = { kind: 'trace', accessor: 'getTraceAgentBinaryPath' };
 
 const UNIX_BINARIES = [
-	{ ...CORE, file: "datadog-agent" },
-	{ ...TRACE, file: "trace-agent" },
+	{ ...CORE, file: 'datadog-agent' },
+	{ ...TRACE, file: 'trace-agent' },
 ];
 const WINDOWS_BINARIES = [
-	{ ...CORE, file: "datadog-agent.exe" },
-	{ ...TRACE, file: "trace-agent.exe" },
+	{ ...CORE, file: 'datadog-agent.exe' },
+	{ ...TRACE, file: 'trace-agent.exe' },
 ];
 
 // What each generated platform package's os/cpu MUST be (Node's values), and
@@ -44,20 +44,20 @@ const WINDOWS_BINARIES = [
 const EXPECTED = {
 	// libc on the Linux entries: CGO_ENABLED=1 links glibc, so npm must skip
 	// these packages on musl instead of installing a binary that dies ENOENT.
-	"linux-x86_64": {
-		os: "linux",
-		cpu: "x64",
-		libc: ["glibc"],
+	'linux-x86_64': {
+		os: 'linux',
+		cpu: 'x64',
+		libc: ['glibc'],
 		binaries: UNIX_BINARIES,
 	},
-	"linux-arm64": {
-		os: "linux",
-		cpu: "arm64",
-		libc: ["glibc"],
+	'linux-arm64': {
+		os: 'linux',
+		cpu: 'arm64',
+		libc: ['glibc'],
 		binaries: UNIX_BINARIES,
 	},
-	"macos-arm64": { os: "darwin", cpu: "arm64", binaries: UNIX_BINARIES },
-	"windows-x86_64": { os: "win32", cpu: "x64", binaries: WINDOWS_BINARIES },
+	'macos-arm64': { os: 'darwin', cpu: 'arm64', binaries: UNIX_BINARIES },
+	'windows-x86_64': { os: 'win32', cpu: 'x64', binaries: WINDOWS_BINARIES },
 };
 
 let workDir;
@@ -68,31 +68,21 @@ before(() => {
 	// realpath: on macOS os.tmpdir() is /var/... which is a symlink to /private/var,
 	// and the generated index.js reports __dirname (already resolved). Without this
 	// the path assertions compare two spellings of the same directory.
-	workDir = fs.realpathSync(
-		fs.mkdtempSync(path.join(os.tmpdir(), "ddab-platform-pkgs-"))
-	);
-	fs.mkdirSync(path.join(workDir, "scripts"));
-	fs.mkdirSync(path.join(workDir, "dist"));
+	workDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ddab-platform-pkgs-')));
+	fs.mkdirSync(path.join(workDir, 'scripts'));
+	fs.mkdirSync(path.join(workDir, 'dist'));
 	fs.copyFileSync(
-		path.join(REPO_ROOT, "scripts", "create-platform-packages.js"),
-		path.join(workDir, "scripts", "create-platform-packages.js")
+		path.join(REPO_ROOT, 'scripts', 'create-platform-packages.js'),
+		path.join(workDir, 'scripts', 'create-platform-packages.js')
 	);
 	// The generator only requires dist/platform.js (type imports are erased).
-	fs.copyFileSync(
-		path.join(REPO_ROOT, "dist", "platform.js"),
-		path.join(workDir, "dist", "platform.js")
-	);
-	fs.copyFileSync(
-		path.join(REPO_ROOT, "package.json"),
-		path.join(workDir, "package.json")
-	);
+	fs.copyFileSync(path.join(REPO_ROOT, 'dist', 'platform.js'), path.join(workDir, 'dist', 'platform.js'));
+	fs.copyFileSync(path.join(REPO_ROOT, 'package.json'), path.join(workDir, 'package.json'));
 
-	execFileSync(
-		process.execPath,
-		[path.join(workDir, "scripts", "create-platform-packages.js"), "--dummy"],
-		{ stdio: "ignore" }
-	);
-	npmDir = path.join(workDir, "npm");
+	execFileSync(process.execPath, [path.join(workDir, 'scripts', 'create-platform-packages.js'), '--dummy'], {
+		stdio: 'ignore',
+	});
+	npmDir = path.join(workDir, 'npm');
 });
 
 after(() => {
@@ -102,38 +92,30 @@ after(() => {
 function readGenerated() {
 	const out = {};
 	for (const name of fs.readdirSync(npmDir)) {
-		const pj = path.join(npmDir, name, "package.json");
+		const pj = path.join(npmDir, name, 'package.json');
 		if (fs.existsSync(pj)) {
-			out[name] = JSON.parse(fs.readFileSync(pj, "utf8"));
+			out[name] = JSON.parse(fs.readFileSync(pj, 'utf8'));
 		}
 	}
 	return out;
 }
 
-test("generates exactly the expected set of platform packages", () => {
+test('generates exactly the expected set of platform packages', () => {
 	const generated = Object.keys(readGenerated()).sort();
 	assert.deepEqual(generated, Object.keys(EXPECTED).sort());
 });
 
-test("each platform package has npm-valid os/cpu (Node values, not human-readable)", () => {
+test('each platform package has npm-valid os/cpu (Node values, not human-readable)', () => {
 	const generated = readGenerated();
 	for (const [name, expected] of Object.entries(EXPECTED)) {
 		const pkg = generated[name];
 		assert.ok(pkg, `missing generated package: ${name}`);
-		assert.deepEqual(
-			pkg.os,
-			[expected.os],
-			`${name}: os must be ${expected.os} (npm matches process.platform)`
-		);
-		assert.deepEqual(
-			pkg.cpu,
-			[expected.cpu],
-			`${name}: cpu must be ${expected.cpu} (npm matches process.arch)`
-		);
+		assert.deepEqual(pkg.os, [expected.os], `${name}: os must be ${expected.os} (npm matches process.platform)`);
+		assert.deepEqual(pkg.cpu, [expected.cpu], `${name}: cpu must be ${expected.cpu} (npm matches process.arch)`);
 	}
 });
 
-test("generated package names exactly match the main package optionalDependencies", () => {
+test('generated package names exactly match the main package optionalDependencies', () => {
 	const generatedNames = Object.keys(readGenerated())
 		.map((n) => `${PACKAGE_NAME}-${n}`)
 		.sort();
@@ -141,21 +123,17 @@ test("generated package names exactly match the main package optionalDependencie
 	assert.deepEqual(generatedNames, declared);
 });
 
-test("all platform packages are pinned to the main package version", () => {
+test('all platform packages are pinned to the main package version', () => {
 	const generated = readGenerated();
 	for (const [name, pkg] of Object.entries(generated)) {
-		assert.equal(
-			pkg.version,
-			mainPkg.version,
-			`${name} version should equal main package version ${mainPkg.version}`
-		);
+		assert.equal(pkg.version, mainPkg.version, `${name} version should equal main package version ${mainPkg.version}`);
 	}
 	for (const [dep, range] of Object.entries(mainPkg.optionalDependencies)) {
 		assert.equal(range, mainPkg.version, `${dep} should be ${mainPkg.version}`);
 	}
 });
 
-test("linux packages declare libc glibc; everywhere else the field is absent", () => {
+test('linux packages declare libc glibc; everywhere else the field is absent', () => {
 	const generated = readGenerated();
 	for (const [name, expected] of Object.entries(EXPECTED)) {
 		const pkg = generated[name];
@@ -171,10 +149,7 @@ test("linux packages declare libc glibc; everywhere else the field is absent", (
 			// On non-Linux the field is meaningless, and npm skips an optional dep
 			// whose libc does not match the host, so a stray value here would make
 			// the package uninstallable everywhere.
-			assert.ok(
-				!("libc" in pkg),
-				`${name}: libc must be absent on non-Linux packages`
-			);
+			assert.ok(!('libc' in pkg), `${name}: libc must be absent on non-Linux packages`);
 		}
 	}
 });
@@ -185,7 +160,7 @@ test("os/cpu never leak this project's internal platform names", () => {
 	// ("darwin"/"x64"), so that package could never install anywhere and the
 	// optional dependency was skipped in silence, which looks identical to "the
 	// platform isn't supported".
-	const INTERNAL_NAMES = new Set(["macos", "windows", "x86_64"]);
+	const INTERNAL_NAMES = new Set(['macos', 'windows', 'x86_64']);
 	for (const [name, pkg] of Object.entries(readGenerated())) {
 		for (const value of [...pkg.os, ...pkg.cpu]) {
 			assert.ok(
@@ -199,21 +174,18 @@ test("os/cpu never leak this project's internal platform names", () => {
 
 /** Load a generated platform package's index.js the way a consumer would. */
 function loadIndex(platformName) {
-	const indexPath = path.join(npmDir, platformName, "index.js");
-	assert.ok(
-		fs.existsSync(indexPath),
-		`${platformName}: no index.js was generated`
-	);
+	const indexPath = path.join(npmDir, platformName, 'index.js');
+	assert.ok(fs.existsSync(indexPath), `${platformName}: no index.js was generated`);
 	return require(indexPath);
 }
 
-test("every platform package exports an accessor for every binary it ships", () => {
+test('every platform package exports an accessor for every binary it ships', () => {
 	for (const [name, expected] of Object.entries(EXPECTED)) {
 		const index = loadIndex(name);
 		for (const binary of expected.binaries) {
 			assert.equal(
 				typeof index[binary.accessor],
-				"function",
+				'function',
 				`${name}: index.js must export ${binary.accessor}(). BinaryManager resolves ` +
 					`the ${binary.kind} binary by calling exactly that name, and a package ` +
 					`missing it resolves nothing while still installing cleanly`
@@ -222,7 +194,7 @@ test("every platform package exports an accessor for every binary it ships", () 
 	}
 });
 
-test("each accessor resolves bin/<binary> inside its own package", () => {
+test('each accessor resolves bin/<binary> inside its own package', () => {
 	for (const [name, expected] of Object.entries(EXPECTED)) {
 		const index = loadIndex(name);
 		const packageDir = path.join(npmDir, name);
@@ -230,7 +202,7 @@ test("each accessor resolves bin/<binary> inside its own package", () => {
 			const resolved = index[binary.accessor]();
 			assert.equal(
 				resolved,
-				path.join(packageDir, "bin", binary.file),
+				path.join(packageDir, 'bin', binary.file),
 				`${name}: ${binary.accessor}() must point at bin/${binary.file}`
 			);
 			assert.ok(
@@ -242,7 +214,7 @@ test("each accessor resolves bin/<binary> inside its own package", () => {
 	}
 });
 
-test("the binaries map enumerates both kinds with their published filenames", () => {
+test('the binaries map enumerates both kinds with their published filenames', () => {
 	for (const [name, expected] of Object.entries(EXPECTED)) {
 		const index = loadIndex(name);
 		assert.deepEqual(
@@ -254,32 +226,29 @@ test("the binaries map enumerates both kinds with their published filenames", ()
 	}
 });
 
-test("index.js exports the accessors and the binaries map, and nothing else", () => {
+test('index.js exports the accessors and the binaries map, and nothing else', () => {
 	// A stray or duplicated accessor is the shape a copy-paste regression takes,
 	// and it is invisible: the extra export resolves a path that was never copied
 	// into bin/.
 	for (const [name, expected] of Object.entries(EXPECTED)) {
 		const exported = Object.keys(loadIndex(name)).sort();
-		const wanted = [
-			...expected.binaries.map((b) => b.accessor),
-			"binaries",
-		].sort();
+		const wanted = [...expected.binaries.map((b) => b.accessor), 'binaries'].sort();
 		assert.deepEqual(exported, wanted, `${name}: unexpected index.js exports`);
 	}
 });
 
-test("--dummy generates the package layout with no bin/ at all", () => {
+test('--dummy generates the package layout with no bin/ at all', () => {
 	// --dummy is the only mode CI can run without a Go toolchain, so every
 	// assertion above already exercises it; what is specific to it is that the
 	// accessors exist while the binaries they point at do not.
 	for (const name of Object.keys(EXPECTED)) {
-		assert.ok(!fs.existsSync(path.join(npmDir, name, "bin")));
+		assert.ok(!fs.existsSync(path.join(npmDir, name, 'bin')));
 	}
 });
 
-test("every platform package publishes bin/ and index.js", () => {
+test('every platform package publishes bin/ and index.js', () => {
 	for (const [name, pkg] of Object.entries(readGenerated())) {
-		for (const entry of ["bin/", "index.js"]) {
+		for (const entry of ['bin/', 'index.js']) {
 			assert.ok(
 				pkg.files.includes(entry),
 				`${name}: "files" must include ${entry}, or npm publishes a package whose ` +

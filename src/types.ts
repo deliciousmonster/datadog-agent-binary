@@ -1,7 +1,7 @@
-import type { Platform } from "./platform.js";
+import type { Platform } from './platform.js';
 
-export type Architecture = "x86_64" | "arm64";
-export type OS = "linux" | "windows" | "macos";
+export type Architecture = 'x86_64' | 'arm64';
+export type OS = 'linux' | 'windows' | 'macos';
 
 export interface BuildConfig {
 	platform: Platform;
@@ -28,7 +28,7 @@ export interface DownloadConfig {
  * the trace-agent into the core agent: `tasks/agent.py` `build()` takes no `bundle`
  * parameter, and `tasks/build_tags.py` lists `trace-agent` as its own target.
  */
-export type AgentBinaryKind = "core" | "trace";
+export type AgentBinaryKind = 'core' | 'trace';
 
 /**
  * Everything needed to build, ship, and resolve one agent binary.

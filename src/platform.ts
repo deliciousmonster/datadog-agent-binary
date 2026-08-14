@@ -1,9 +1,4 @@
-import type {
-	AgentBinaryDescriptor,
-	AgentBinaryKind,
-	Architecture,
-	OS,
-} from "./types.js";
+import type { AgentBinaryDescriptor, AgentBinaryKind, Architecture, OS } from './types.js';
 
 export abstract class Platform {
 	protected readonly arch: Architecture;
@@ -14,10 +9,10 @@ export abstract class Platform {
 
 	private static processArchToArchitecture(): Architecture {
 		switch (process.arch) {
-			case "x64":
-				return "x86_64";
-			case "arm64":
-				return "arm64";
+			case 'x64':
+				return 'x86_64';
+			case 'arm64':
+				return 'arm64';
 			default:
 				throw new Error(`Unsupported architecture: ${process.arch}`);
 		}
@@ -26,11 +21,11 @@ export abstract class Platform {
 	static current(): Platform {
 		const arch = this.processArchToArchitecture();
 		switch (process.platform) {
-			case "linux":
+			case 'linux':
 				return new Linux(arch);
-			case "darwin":
+			case 'darwin':
 				return new MacOS(arch);
-			case "win32":
+			case 'win32':
 				return new Windows(arch);
 			default:
 				throw new Error(`Unsupported platform: ${process.platform}`);
@@ -43,8 +38,8 @@ export abstract class Platform {
 
 	getGoArch(): string {
 		switch (this.arch) {
-			case "x86_64":
-				return "amd64";
+			case 'x86_64':
+				return 'amd64';
 			default:
 				return this.arch;
 		}
@@ -58,35 +53,35 @@ export abstract class Platform {
 
 	/** Executable extension for this platform (`.exe` on Windows). Mirrors upstream `bin_name()`. */
 	protected getExecutableExtension(): string {
-		return "";
+		return '';
 	}
 
 	getBinaries(): AgentBinaryDescriptor[] {
 		const ext = this.getExecutableExtension();
 		return [
 			{
-				kind: "core",
-				buildTask: "agent.build",
-				buildDir: "agent",
+				kind: 'core',
+				buildTask: 'agent.build',
+				buildDir: 'agent',
 				buildName: `agent${ext}`,
 				outputName: `datadog-agent${ext}`,
 				// See AgentBinaryDescriptor.buildArgs for why the core agent needs these.
-				buildArgs: "--build-exclude=systemd,python",
-				buildArgsEnvVar: "DD_AGENT_BUILD_ARGS",
-				accessorName: "getBinaryPath",
-				processName: "datadog-agent",
+				buildArgs: '--build-exclude=systemd,python',
+				buildArgsEnvVar: 'DD_AGENT_BUILD_ARGS',
+				accessorName: 'getBinaryPath',
+				processName: 'datadog-agent',
 			},
 			{
-				kind: "trace",
-				buildTask: "trace-agent.build",
-				buildDir: "trace-agent",
+				kind: 'trace',
+				buildTask: 'trace-agent.build',
+				buildDir: 'trace-agent',
 				buildName: `trace-agent${ext}`,
 				outputName: `trace-agent${ext}`,
 				// Deliberately empty; the core agent's excludes do not apply here.
-				buildArgs: "",
-				buildArgsEnvVar: "DD_TRACE_AGENT_BUILD_ARGS",
-				accessorName: "getTraceAgentBinaryPath",
-				processName: "datadog-trace-agent",
+				buildArgs: '',
+				buildArgsEnvVar: 'DD_TRACE_AGENT_BUILD_ARGS',
+				accessorName: 'getTraceAgentBinaryPath',
+				processName: 'datadog-trace-agent',
 			},
 		];
 	}
@@ -94,9 +89,7 @@ export abstract class Platform {
 	getBinary(kind: AgentBinaryKind): AgentBinaryDescriptor {
 		const found = this.getBinaries().find((b) => b.kind === kind);
 		if (!found) {
-			throw new Error(
-				`No ${kind} binary is defined for platform ${this.getName()}`
-			);
+			throw new Error(`No ${kind} binary is defined for platform ${this.getName()}`);
 		}
 		return found;
 	}
@@ -104,23 +97,23 @@ export abstract class Platform {
 
 class Linux extends Platform {
 	getOS(): OS {
-		return "linux";
+		return 'linux';
 	}
 }
 
 class MacOS extends Platform {
 	getOS(): OS {
-		return "macos";
+		return 'macos';
 	}
 }
 
 class Windows extends Platform {
 	getOS(): OS {
-		return "windows";
+		return 'windows';
 	}
 
 	protected getExecutableExtension(): string {
-		return ".exe";
+		return '.exe';
 	}
 }
 
@@ -140,10 +133,10 @@ class Windows extends Platform {
  * change as the entry here.
  */
 export const SUPPORTED_PLATFORMS: Platform[] = [
-	new Linux("x86_64"),
-	new Linux("arm64"),
-	new MacOS("arm64"),
-	new Windows("x86_64"),
+	new Linux('x86_64'),
+	new Linux('arm64'),
+	new MacOS('arm64'),
+	new Windows('x86_64'),
 ];
 
 export function getAllSupportedPlatforms(): string[] {

@@ -11,18 +11,15 @@
  * resolve this repo's test/support modules, so the JSONL writer and the error
  * rendering stay inline.
  */
-import { appendFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const PROBE_DIR = process.env.DD_IMPORT_PROBE_DIR;
 /** The published package name; every probe below imports this specifier. */
 const PACKAGE_NAME = process.env.DD_IMPORT_PACKAGE_NAME;
 
 function record(entry) {
-	appendFileSync(
-		join(PROBE_DIR, "probe-results.jsonl"),
-		JSON.stringify(entry) + "\n"
-	);
+	appendFileSync(join(PROBE_DIR, 'probe-results.jsonl'), JSON.stringify(entry) + '\n');
 }
 
 async function probe(name, run) {
@@ -44,28 +41,26 @@ if (PROBE_DIR && PACKAGE_NAME) {
 		// Only Harper's application loader resolves 'harper' to its synthetic
 		// module; under plain Node this import fails. Every probe below is
 		// meaningless unless this row shows the loader mediating our imports.
-		await probe("harper-module", async () => {
-			const harper = await import("harper");
+		await probe('harper-module', async () => {
+			const harper = await import('harper');
 			return {
-				hasResource: typeof harper.Resource === "function",
-				hasTables: "tables" in harper,
+				hasResource: typeof harper.Resource === 'function',
+				hasTables: 'tables' in harper,
 			};
 		});
 		// 'harper/*' subpaths are reserved and must be refused; the refusal is
 		// the second enforcement signal.
-		await probe("harper-subpath", async () => {
-			await import("harper/loader-probe");
+		await probe('harper-subpath', async () => {
+			await import('harper/loader-probe');
 			return {};
 		});
-		await probe("native-import", async () => {
+		await probe('native-import', async () => {
 			const mod = await import(PACKAGE_NAME);
 			return {
 				exportKeys: Object.keys(mod).length,
-				hasDatadogAgentBuilder: typeof mod.DatadogAgentBuilder === "function",
-				hasBinaryManager: typeof mod.BinaryManager === "function",
-				builderHasBuildForPlatform:
-					typeof mod.DatadogAgentBuilder?.prototype?.buildForPlatform ===
-					"function",
+				hasDatadogAgentBuilder: typeof mod.DatadogAgentBuilder === 'function',
+				hasBinaryManager: typeof mod.BinaryManager === 'function',
+				builderHasBuildForPlatform: typeof mod.DatadogAgentBuilder?.prototype?.buildForPlatform === 'function',
 			};
 		});
 		// createRequire reaches Node's real CJS cache. A natively loaded package
@@ -73,14 +68,14 @@ if (PROBE_DIR && PACKAGE_NAME) {
 		// loader is a separate compartment evaluation, so the class identities
 		// split. Verified in both directions against harper 5.2.1 by flipping
 		// `harper` in the staged manifest's devDependencies.
-		await probe("native-identity", async () => {
+		await probe('native-identity', async () => {
 			const mod = await import(PACKAGE_NAME);
-			const { createRequire } = await import("node:module");
+			const { createRequire } = await import('node:module');
 			const viaRequire = createRequire(import.meta.url)(PACKAGE_NAME);
 			return {
 				sameClass: viaRequire.DatadogAgentBuilder === mod.DatadogAgentBuilder,
 			};
 		});
-		record({ probe: "done", threw: false });
+		record({ probe: 'done', threw: false });
 	})();
 }
