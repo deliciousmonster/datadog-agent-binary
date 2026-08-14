@@ -256,3 +256,23 @@ jobs:
           [ "$code" = "200" ] || { echo "::error::receiver rejected a valid v0.4 payload (HTTP $code)."; exit 1; }
 
           echo "OK: the trace-agent bound 8126, advertised /v0.4/traces, and accepted a span."
+
+      # harper is not a devDependency: `npm test` must stay hermetic, and the
+      # unit tests never touch a real Harper. The integration suite boots one,
+      # so it is installed here; --no-save keeps package.json out of the diff.
+      - name: Install harper for the integration suite
+        if: runner.os == 'Linux'
+        run: npm i --no-save harper@^5.2.1
+
+      # test.yml runs this suite against a checkout with no binaries, so its
+      # Datadog-binary tests skip themselves. This is the one place the
+      # binaries were just built, so those tests finally run against real
+      # output instead of a stub. After the receiver check on purpose: the
+      # direct assertions above localize a failure better than a suite log.
+      #
+      # Linux only, same reasoning as test.yml: the suite skips win32, and
+      # macOS needs sudo loopback aliases before the harness can hand out
+      # addresses.
+      - name: Run the integration suite against the built binaries
+        if: runner.os == 'Linux'
+        run: npm run test:integration
