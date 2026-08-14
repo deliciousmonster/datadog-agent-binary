@@ -18,8 +18,19 @@ export class BinaryManager {
 	 * existing consumer is unchanged.
 	 */
 	async ensureBinary(kind: AgentBinaryKind = 'core', version?: string): Promise<string> {
+		// A caller written against the old one-arg signature passes a version string here,
+		// which would otherwise surface as an opaque "No 7.75.5 binary is defined".
+		if (kind !== 'core' && kind !== 'trace') {
+			throw new Error(
+				`ensureBinary() received "${String(kind)}" as its first argument. That ` +
+					`parameter is now the binary kind ("core" | "trace") and the version moved ` +
+					`to the second argument: call ensureBinary("core", version).`
+			);
+		}
+
 		const platform = Platform.current();
-		const descriptor = this.getDescriptor(platform, kind);
+		const descriptor = platform.getBinary(kind);
+		const packageName = platformPackageName(platform.getName());
 		logger.info(
 			`Resolving Datadog ${kind} agent binary (${descriptor.outputName}) for platform ` +
 				`${platform.getName()} ` +
@@ -28,7 +39,7 @@ export class BinaryManager {
 
 		// The optional platform package (e.g. <package name>-linux-x86_64) is the path
 		// taken when this package is installed from npm.
-		const packagedBinary = await this.resolveFromPlatformPackage(platform, descriptor);
+		const packagedBinary = await this.resolveFromPlatformPackage(packageName, descriptor);
 		if (packagedBinary) {
 			logger.info(`Using packaged Datadog ${kind} agent binary: ${packagedBinary}`);
 			return packagedBinary;
@@ -37,8 +48,7 @@ export class BinaryManager {
 		logger.warn(
 			`No packaged ${kind} binary resolved for ${platform.getName()}; falling back to ` +
 				`the build-from-source lookup under ${this.buildDir}. In a Harper runtime this ` +
-				`almost always means the optional platform package ` +
-				`${platformPackageName(platform.getName())} was not installed.`
+				`almost always means the optional platform package ${packageName} was not installed.`
 		);
 
 		// Resolve from the pin, never upstream "latest". "latest" made the fallback look
@@ -57,8 +67,7 @@ export class BinaryManager {
 
 		throw new Error(
 			`Datadog ${kind} agent binary (${descriptor.outputName}) not found for ` +
-				`${platform.getName()}. Checked the optional platform package ` +
-				`${platformPackageName(platform.getName())} (via its ` +
+				`${platform.getName()}. Checked the optional platform package ${packageName} (via its ` +
 				`${descriptor.accessorName}() accessor) and these local build paths: ` +
 				`${candidates.join(', ')}. None resolved a runnable binary.`
 		);
@@ -72,24 +81,10 @@ export class BinaryManager {
 		return this.ensureBinary('trace', version);
 	}
 
-	private getDescriptor(platform: Platform, kind: AgentBinaryKind): AgentBinaryDescriptor {
-		// A caller written against the old one-arg signature passes a version string here,
-		// which would otherwise surface as an opaque "No 7.75.5 binary is defined".
-		if (kind !== 'core' && kind !== 'trace') {
-			throw new Error(
-				`ensureBinary() received "${String(kind)}" as its first argument. That ` +
-					`parameter is now the binary kind ("core" | "trace") and the version moved ` +
-					`to the second argument: call ensureBinary("core", version).`
-			);
-		}
-		return platform.getBinary(kind);
-	}
-
 	private async resolveFromPlatformPackage(
-		platform: Platform,
+		packageName: string,
 		descriptor: AgentBinaryDescriptor
 	): Promise<string | null> {
-		const packageName = platformPackageName(platform.getName());
 		logger.debug(
 			`Attempting to resolve the ${descriptor.kind} binary from platform package ` +
 				`${packageName} via ${descriptor.accessorName}()`
