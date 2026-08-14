@@ -173,17 +173,6 @@ test("Windows binary names end in .exe and no other platform's do", () => {
 	}
 });
 
-test('the two binaries never share a filename on any platform', () => {
-	for (const platform of SUPPORTED_PLATFORMS) {
-		assert.notEqual(
-			platform.getBinary('core').outputName,
-			platform.getBinary('trace').outputName,
-			`${platform.getName()}: a shared filename means one binary overwrites ` +
-				`the other in bin/ and the loss looks like "the trace-agent is missing"`
-		);
-	}
-});
-
 test('getBinary() returns the descriptor from getBinaries() and throws on an unknown kind', () => {
 	for (const platform of SUPPORTED_PLATFORMS) {
 		const binaries = platform.getBinaries();
@@ -207,7 +196,8 @@ test('nothing packaging keys off collides between the two descriptors', () => {
 	// one property in the generated index.js, and two sharing an outputName have
 	// one overwrite the other in bin/. Both look like "the trace-agent is missing"
 	// at runtime. scripts/create-platform-packages.js guards this too; assert it at
-	// the source as well.
+	// the source as well. outputName is why this covers the filename case: two
+	// binaries sharing a filename means one overwrites the other in bin/.
 	const unique = ['accessorName', 'outputName', 'processName', 'buildDir', 'buildTask'];
 	for (const platform of SUPPORTED_PLATFORMS) {
 		for (const field of unique) {

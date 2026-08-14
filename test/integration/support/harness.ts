@@ -76,7 +76,7 @@ export function makeTempDir(prefix: string): string {
 }
 
 /** Rows of a probe-results file holding one JSON record per line. */
-export function readJsonlRows<T>(resultsFile: string): T[] {
+function readJsonlRows<T>(resultsFile: string): T[] {
 	if (!existsSync(resultsFile)) return [];
 	return readFileSync(resultsFile, 'utf8')
 		.split('\n')

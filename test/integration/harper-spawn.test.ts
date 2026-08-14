@@ -298,10 +298,6 @@ function waitForProbeResults(resultsFile: string, { settleMs = 2000 } = {}): Pro
 	});
 }
 
-function rowsFor(rows: ProbeRow[], probe: string): ProbeRow[] {
-	return rows.filter((r) => r.probe === probe);
-}
-
 function supervisorStatuses(rows: ProbeRow[]): Array<{ threadId: number; status: SupervisorStatus }> {
 	return rows.filter((r) => r.probe === 'status' && r.status).map((r) => ({ threadId: r.threadId, status: r.status! }));
 }
@@ -403,42 +399,82 @@ async function teardown(
 }
 
 /**
- * Harper spawns `npm` and `node` itself (component dependency installation), so
- * the allowlist has to keep them. Replacing the list wholesale with only the
- * command under test breaks Harper's own startup, not just the component.
+ * node:test hands a suite callback a bare SuiteContext; setupHarperWithFixture()
+ * populates .harper on that same object in before(). The cast records that
+ * promotion; annotating the suite parameter itself is a TS2345 under strict
+ * function-type contravariance.
  */
-function allowlist(...commands: string[]): string[] {
-	return ['npm', 'node', ...commands];
+function harperContext(suiteContext: unknown): ContextWithHarper {
+	return suiteContext as ContextWithHarper;
+}
+
+/**
+ * Assemble the application, boot Harper against it, and wait for every thread's
+ * probe output. `plan` chooses, per workspace, which executables the platform
+ * package accessors hand out and which extra commands the allowlist carries;
+ * the stub is always allowlisted, because the fixture's no-name probe spawns it
+ * and that throw has to be the missing name rather than the allowlist.
+ */
+async function startSupervisorRun(
+	ctx: ContextWithHarper,
+	plan: (workspace: Workspace) => { binaries: { core: string; trace: string }; alsoAllowed?: string[] }
+): Promise<{ workspace: Workspace; rows: ProbeRow[] }> {
+	const workspace = createWorkspace();
+	const { binaries, alsoAllowed = [] } = plan(workspace);
+	await setupHarperWithFixture(ctx, assembleFixtureApp(workspace, binaries), {
+		harperBinPath: harperBinPath!,
+		config: {
+			threads: { count: REQUESTED_THREAD_COUNT },
+			applications: {
+				// Harper spawns `npm` and `node` itself (component dependency
+				// installation), so the allowlist has to keep them. Replacing the list
+				// wholesale with only the command under test breaks Harper's own
+				// startup, not just the component.
+				allowedSpawnCommands: ['npm', 'node', workspace.longLivedCommand, ...alsoAllowed],
+			},
+		},
+		env: supervisorEnv(workspace),
+	});
+	return { workspace, rows: await waitForProbeResults(workspace.resultsFile) };
+}
+
+/**
+ * Every reporting thread launched both agents, in the documented order, from
+ * the path `binaryPathFor` names. Shared by the stub suite and the real-binary
+ * suite: the same claim, against different executables.
+ */
+function assertAgentsLaunched(rows: ProbeRow[], binaryPathFor: (agent: AgentRow) => string): void {
+	for (const { threadId, status } of supervisorStatuses(rows)) {
+		// Order is part of the contract: the trace-agent owns the socket dd-trace
+		// is already dialing, so it goes first.
+		assert.deepEqual(
+			status.agents.map((agent) => agent.name),
+			AGENT_NAMES,
+			`thread ${threadId}: the supervisor must request exactly these names, ` + `in this order`
+		);
+		for (const agent of status.agents) {
+			assert.equal(agent.error, undefined, `thread ${threadId}: ${agent.name} failed: ${agent.error}`);
+			assert.equal(agent.started, true, `thread ${threadId}: ${agent.name} did not start`);
+			assert.ok(typeof agent.pid === 'number' && agent.pid > 0, `thread ${threadId}: ${agent.name} returned no pid`);
+			assert.equal(
+				agent.binaryPath,
+				binaryPathFor(agent),
+				`thread ${threadId}: ${agent.name} must be spawned from the path the ` +
+					`platform package accessor resolved through BinaryManager`
+			);
+		}
+	}
 }
 
 suite('the shipped example supervisor under Harper v5 spawn enforcement', { skip: SKIP_REASON }, (suiteContext) => {
-	// node:test hands the callback a bare SuiteContext; setupHarperWithFixture()
-	// populates .harper on that same object in before(). The cast records that
-	// promotion; annotating the parameter itself is a TS2345 under strict
-	// function-type contravariance.
-	const ctx = suiteContext as ContextWithHarper;
+	const ctx = harperContext(suiteContext);
 	let workspace: Workspace;
-	let env: Record<string, string>;
 	let rows: ProbeRow[];
 
 	before(async () => {
-		workspace = createWorkspace();
-		env = supervisorEnv(workspace);
-		const appDir = assembleFixtureApp(workspace, {
-			core: workspace.longLivedCommand,
-			trace: workspace.longLivedCommand,
-		});
-		await setupHarperWithFixture(ctx, appDir, {
-			harperBinPath: harperBinPath!,
-			config: {
-				threads: { count: REQUESTED_THREAD_COUNT },
-				applications: {
-					allowedSpawnCommands: allowlist(workspace.longLivedCommand),
-				},
-			},
-			env,
-		});
-		rows = await waitForProbeResults(workspace.resultsFile);
+		({ workspace, rows } = await startSupervisorRun(ctx, (ws) => ({
+			binaries: { core: ws.longLivedCommand, trace: ws.longLivedCommand },
+		})));
 	});
 
 	after(() => teardown(ctx, workspace, rows));
@@ -459,7 +495,7 @@ suite('the shipped example supervisor under Harper v5 spawn enforcement', { skip
 	});
 
 	test('NEGATIVE: spawn without a `name` option throws', () => {
-		const observed = rowsFor(rows, 'no-name');
+		const observed = rows.filter((row) => row.probe === 'no-name');
 		assert.ok(observed.length > 0, 'the no-name probe never ran');
 		for (const row of observed) {
 			assert.equal(
@@ -503,25 +539,8 @@ suite('the shipped example supervisor under Harper v5 spawn enforcement', { skip
 	test('POSITIVE: both documented agent names launch, trace-agent first', () => {
 		for (const { threadId, status } of supervisorStatuses(rows)) {
 			assert.equal(status.error, undefined, `thread ${threadId}: supervisor startup failed: ${status.error}`);
-			// Order is part of the contract: the trace-agent owns the socket
-			// dd-trace is already dialing, so it goes first.
-			assert.deepEqual(
-				status.agents.map((agent) => agent.name),
-				AGENT_NAMES,
-				`thread ${threadId}: the supervisor must request exactly these names, ` + `in this order`
-			);
-			for (const agent of status.agents) {
-				assert.equal(agent.error, undefined, `thread ${threadId}: ${agent.name} failed: ${agent.error}`);
-				assert.equal(agent.started, true, `thread ${threadId}: ${agent.name} did not start`);
-				assert.ok(typeof agent.pid === 'number' && agent.pid > 0, `thread ${threadId}: ${agent.name} returned no pid`);
-				assert.equal(
-					agent.binaryPath,
-					workspace.longLivedCommand,
-					`thread ${threadId}: ${agent.name} must be spawned from the path the ` +
-						`platform package accessor resolved through BinaryManager`
-				);
-			}
 		}
+		assertAgentsLaunched(rows, () => workspace.longLivedCommand);
 	});
 
 	test('SINGLETON: N worker threads produce one process and one PID file per name', (t) => {
@@ -612,6 +631,9 @@ suite('the shipped example supervisor under Harper v5 spawn enforcement', { skip
 	});
 
 	test("the runtime tree is rendered from the example's templates", () => {
+		// Recomputed rather than captured: supervisorEnv() is a pure function of the
+		// workspace, so this is the very environment the Harper process was given.
+		const env = supervisorEnv(workspace);
 		const [{ status }] = supervisorStatuses(rows);
 		assert.equal(status.runtimeDir, env.DD_HARPER_RUNTIME_DIR);
 		assert.equal(status.harperLogPath, env.DD_HARPER_LOG_PATH);
@@ -659,32 +681,18 @@ suite(
 	'the example surfaces an allowlist rejection without failing the component',
 	{ skip: SKIP_REASON },
 	(suiteContext) => {
-		// Same SuiteContext promotion as the suite above.
-		const ctx = suiteContext as ContextWithHarper;
+		const ctx = harperContext(suiteContext);
 		let workspace: Workspace;
 		let rows: ProbeRow[];
 
 		before(async () => {
-			workspace = createWorkspace();
 			// The deployment bug this package shipped was an app that allowlisted the
 			// one path it knew about. Resolve the trace-agent to a binary that is
 			// missing from the allowlist and prove the example reports it per-agent
 			// instead of taking the component down.
-			const appDir = assembleFixtureApp(workspace, {
-				core: workspace.longLivedCommand,
-				trace: workspace.deniedCommand,
-			});
-			await setupHarperWithFixture(ctx, appDir, {
-				harperBinPath: harperBinPath!,
-				config: {
-					threads: { count: REQUESTED_THREAD_COUNT },
-					applications: {
-						allowedSpawnCommands: allowlist(workspace.longLivedCommand),
-					},
-				},
-				env: supervisorEnv(workspace),
-			});
-			rows = await waitForProbeResults(workspace.resultsFile);
+			({ workspace, rows } = await startSupervisorRun(ctx, (ws) => ({
+				binaries: { core: ws.longLivedCommand, trace: ws.deniedCommand },
+			})));
 		});
 
 		after(() => teardown(ctx, workspace, rows));
@@ -773,28 +781,16 @@ suite(
 	'the example supervisor launching the real Datadog agent binaries',
 	{ skip: BINARY_SKIP_REASON },
 	(suiteContext) => {
-		// Same SuiteContext promotion as the suites above.
-		const ctx = suiteContext as ContextWithHarper;
+		const ctx = harperContext(suiteContext);
 		const binaries = agentBinaries as { core: string; trace: string };
 		let workspace: Workspace;
 		let rows: ProbeRow[];
 
 		before(async () => {
-			workspace = createWorkspace();
-			const appDir = assembleFixtureApp(workspace, binaries);
-			await setupHarperWithFixture(ctx, appDir, {
-				harperBinPath: harperBinPath!,
-				config: {
-					threads: { count: REQUESTED_THREAD_COUNT },
-					applications: {
-						// The stub stays allowlisted for the fixture's no-name probe, whose
-						// throw has to be the missing name and never the allowlist.
-						allowedSpawnCommands: allowlist(workspace.longLivedCommand, binaries.core, binaries.trace),
-					},
-				},
-				env: supervisorEnv(workspace),
-			});
-			rows = await waitForProbeResults(workspace.resultsFile);
+			({ workspace, rows } = await startSupervisorRun(ctx, () => ({
+				binaries,
+				alsoAllowed: [binaries.core, binaries.trace],
+			})));
 		});
 
 		after(() => teardown(ctx, workspace, rows));
@@ -814,35 +810,15 @@ suite(
 		test('every thread detects interception and launches both real agents', () => {
 			const statuses = supervisorStatuses(rows);
 			assert.ok(statuses.length > 0, 'the component never reported a status');
-			const byKind: Record<string, string> = {
-				core: binaries.core,
-				trace: binaries.trace,
-			};
 			for (const { threadId, status } of statuses) {
 				assert.equal(
 					status.interception.intercepted,
 					true,
 					`thread ${threadId}: interception not detected: ${status.interception.detail}`
 				);
-				assert.deepEqual(
-					status.agents.map((agent) => agent.name),
-					AGENT_NAMES,
-					`thread ${threadId}: both agents must be requested, trace-agent first`
-				);
-				for (const agent of status.agents) {
-					assert.equal(agent.error, undefined, `thread ${threadId}: Harper refused ${agent.name}: ${agent.error}`);
-					assert.equal(agent.started, true, `thread ${threadId}: ${agent.name} did not start`);
-					assert.ok(
-						typeof agent.pid === 'number' && agent.pid > 0,
-						`thread ${threadId}: ${agent.name} returned no pid`
-					);
-					assert.equal(
-						agent.binaryPath,
-						byKind[agent.kind],
-						`thread ${threadId}: ${agent.name} must run the binary BinaryManager resolved`
-					);
-				}
 			}
+			const byKind: Record<string, string> = binaries;
+			assertAgentsLaunched(rows, (agent) => byKind[agent.kind]);
 		});
 
 		test('some thread holds a real ChildProcess for each agent', () => {
