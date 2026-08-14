@@ -27,10 +27,12 @@ import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	renameSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { threadId } from "node:worker_threads";
 // Bare specifier, so Harper loads this natively. Fine: nothing in it spawns. The spawn stays
 // in this file, which Harper does instrument.
 import { BinaryManager } from "@deliciousmonster/datadog-agent-binary";
@@ -201,6 +203,19 @@ function yamlString(value) {
 }
 
 /**
+ * Every worker thread rewrites the same config files at start, and a running agent rereads
+ * them. A thread killed mid-write (harper dev restarts them on every save) would otherwise
+ * leave a torn YAML for the agent to choke on. rename() within one directory is atomic, so
+ * the agent sees the old file or the new one, never half of each. The temp name carries pid
+ * and threadId because sibling threads write these files concurrently.
+ */
+function writeFileAtomic(target, contents) {
+	const temp = `${target}.${process.pid}.${threadId}.tmp`;
+	writeFileSync(temp, contents, "utf-8");
+	renameSync(temp, target);
+}
+
+/**
  * The datadog.yaml both binaries read. Rewritten on every start, so it is a projection of
  * this file rather than something to hand-edit. DD_API_KEY and DD_SITE are inherited from the
  * spawning environment instead, so no secret lands in the runtime tree.
@@ -331,10 +346,8 @@ function launchOne(descriptor, binaryPath, paths, version) {
 			name: descriptor.name,
 			// See configVersion(): a number, never a string.
 			version,
-			// Piped, not inherited. Agent output has to reach Harper's log file, which is
-			// what the conf.d source tails, and `!child.stdout` stays a sound test for the
-			// ExistingProcessWrapper below: under "inherit" a real ChildProcess also has a
-			// null stdout, so every thread would look like a loser of the race.
+			// Piped, not inherited: agent output has to reach Harper's log file, which is
+			// what the conf.d source tails.
 			stdio: ["ignore", "pipe", "pipe"],
 			env: process.env,
 		});
@@ -365,8 +378,10 @@ function launchOne(descriptor, binaryPath, paths, version) {
 	});
 
 	// Every loser of the PID-file race gets an ExistingProcessWrapper: an EventEmitter with
-	// pid, kill(), unref() and an 'exit' event, and no stdio at all.
-	state.adopted = !child.stdout;
+	// pid, kill(), unref() and an 'exit' event. Detected by the absence of `spawnargs`,
+	// which every real ChildProcess carries and the wrapper does not; stdout is not a safe
+	// tell, because a winner spawned with its stdio ignored also has a null stdout.
+	state.adopted = !Array.isArray(child.spawnargs);
 	if (state.adopted) {
 		log.info(
 			`Datadog supervisor: the ${descriptor.title} is already running on this node ` +
@@ -433,18 +448,14 @@ function prepareRuntime(componentDir) {
 
 	// The trace-agent is fatal without a config file that EXISTS; the contents may be empty.
 	const datadogYaml = renderDatadogYaml(paths);
-	writeFileSync(paths.configFile, datadogYaml, "utf-8");
+	writeFileAtomic(paths.configFile, datadogYaml);
 
 	const service = process.env.DD_SERVICE || "harper";
 	const logPath = resolveHarperLogPath();
 	let logsYaml = "";
 	if (logPath) {
 		logsYaml = renderLogsConfig(componentDir, logPath, service);
-		writeFileSync(
-			join(paths.confd, "harperdb.d", "conf.yaml"),
-			logsYaml,
-			"utf-8"
-		);
+		writeFileAtomic(join(paths.confd, "harperdb.d", "conf.yaml"), logsYaml);
 		if (!existsSync(logPath)) {
 			log.warn(
 				`Datadog supervisor: Harper's log file ${logPath} does not exist yet. The agent ` +
@@ -484,6 +495,12 @@ export function startDatadogAgents(componentDir) {
 			agents: [],
 		};
 
+		// Without Harper's spawn in this module there is no PID lock, so launching would
+		// start one agent pair per worker thread; all but one trace-agent then dies on
+		// EADDRINUSE. assertSpawnInterception() has already logged the causes and the fix,
+		// and /DatadogStatus/ reports the empty agents list.
+		if (!status.interception.intercepted) return status;
+
 		if (!process.env.DD_API_KEY) {
 			// The receiver validates nothing at accept time: spans are taken off the socket,
 			// batched, and dropped when the intake rejects them. dd-trace sees a successful
@@ -518,7 +535,16 @@ export function startDatadogAgents(componentDir) {
 					})
 				)
 			);
-			const version = configVersion(runtime.fingerprint, ...binaries);
+			// The credentials ride in the inherited environment, never in the config files,
+			// so they are invisible to the fingerprint unless folded in here; without them a
+			// rotated DD_API_KEY leaves the running agents posting the old key forever.
+			const version = configVersion(
+				runtime.fingerprint,
+				process.env.DD_API_KEY ?? "",
+				process.env.DD_SITE ?? "",
+				process.env.DD_ENV ?? "",
+				...binaries
+			);
 			status.version = version;
 
 			// In order, trace-agent first: it owns the socket dd-trace is already trying to
