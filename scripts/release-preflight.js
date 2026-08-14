@@ -61,12 +61,15 @@ function sleep(ms) {
 	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+/** npm puts the useful part on stderr; truncated so a page of registry HTML cannot bury the reason. */
+function npmError(error) {
+	return String(error.stderr || error.message)
+		.trim()
+		.slice(0, 200);
+}
+
 function npmExec(args, opts = {}) {
-	return execFileSync('npm', args, {
-		encoding: 'utf8',
-		stdio: 'pipe',
-		...opts,
-	});
+	return execFileSync('npm', args, { encoding: 'utf8', stdio: 'pipe', ...opts });
 }
 
 /** true / false / throws after retries when the registry cannot answer. */
@@ -77,13 +80,7 @@ export function isPublished(name, exec = npmExec) {
 			return true;
 		} catch (error) {
 			if (classifyNpmFailure(error.stderr) === 'not-published') return false;
-			if (attempt >= 3) {
-				throw new Error(
-					`registry unreachable while checking ${name}: ${String(error.stderr || error.message)
-						.trim()
-						.slice(0, 200)}`
-				);
-			}
+			if (attempt >= 3) throw new Error(`registry unreachable while checking ${name}: ${npmError(error)}`);
 			sleep(attempt * 2000);
 		}
 	}
@@ -93,9 +90,7 @@ export function isPublished(name, exec = npmExec) {
 function verifyToken(token, exec = npmExec) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'preflight-npmrc-'));
 	const rc = path.join(dir, 'npmrc');
-	fs.writeFileSync(rc, `//registry.npmjs.org/:_authToken=${token}\n`, {
-		mode: 0o600,
-	});
+	fs.writeFileSync(rc, `//registry.npmjs.org/:_authToken=${token}\n`, { mode: 0o600 });
 	try {
 		for (let attempt = 1; ; attempt++) {
 			try {
@@ -110,12 +105,7 @@ function verifyToken(token, exec = npmExec) {
 					};
 				}
 				if (attempt >= 3) {
-					return {
-						ok: false,
-						reason: `registry unreachable while verifying NPM_TOKEN: ${String(error.stderr || error.message)
-							.trim()
-							.slice(0, 200)}`,
-					};
+					return { ok: false, reason: `registry unreachable while verifying NPM_TOKEN: ${npmError(error)}` };
 				}
 				sleep(attempt * 2000);
 			}
@@ -126,9 +116,7 @@ function verifyToken(token, exec = npmExec) {
 }
 
 export function checkRepositoryMatch(pkg, githubRepository) {
-	if (!githubRepository) {
-		return { ok: true, note: 'GITHUB_REPOSITORY unset; skipping (local run).' };
-	}
+	if (!githubRepository) return { ok: true, note: 'GITHUB_REPOSITORY unset; skipping (local run).' };
 	const slug = normalizeRepoSlug(pkg.repository);
 	const expected = githubRepository.toLowerCase();
 	if (slug === expected) return { ok: true };
@@ -145,10 +133,7 @@ export function checkAuthPath(pkg, token, exec = npmExec) {
 	if (token) {
 		const verdict = verifyToken(token, exec);
 		if (!verdict.ok) return { ok: false, reason: verdict.reason };
-		return {
-			ok: true,
-			note: `NPM_TOKEN is live (npm whoami: ${verdict.user}).`,
-		};
+		return { ok: true, note: `NPM_TOKEN is live (npm whoami: ${verdict.user}).` };
 	}
 	const virgin = packageNames(pkg).filter((name) => !isPublished(name, exec));
 	if (virgin.length > 0) {
@@ -174,12 +159,11 @@ function main() {
 		checkAuthPath(pkg, (process.env.NPM_TOKEN || '').trim()),
 	];
 	let failed = false;
-	for (const result of results) {
-		if (result.ok) {
-			if (result.note) console.log(result.note);
-		} else {
+	for (const { ok, note, reason } of results) {
+		if (note) console.log(note);
+		if (!ok) {
 			failed = true;
-			console.error(`::error::${result.reason}`);
+			console.error(`::error::${reason}`);
 		}
 	}
 	if (failed) process.exit(1);
