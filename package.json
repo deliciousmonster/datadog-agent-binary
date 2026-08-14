@@ -1,8 +1,15 @@
 {
 	"name": "@deliciousmonster/datadog-agent-binary",
 	"version": "7.75.5",
-	"description": "TypeScript package to download and build Datadog Agent from source for multiple platforms",
+	"description": "Distributes the pre-compiled Datadog Agent as an npm package, so the agent is installed and versioned as a normal Node dependency instead of through a system package manager or a container sidecar. Intended for running the agent alongside a Node application, including inside Harper v5.",
 	"main": "dist/index.js",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
 	"bin": {
 		"datadog-agent-build": "dist/cli.js",
 		"datadog-agent": "bin/datadog-agent",
