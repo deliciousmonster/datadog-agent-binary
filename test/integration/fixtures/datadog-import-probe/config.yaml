@@ -1,0 +1,5 @@
+# A config.yaml replaces Harper's default component config entirely (no
+# merge); the probe needs only its one module, loaded at startup in every
+# thread.
+jsResource:
+  files: resources.js

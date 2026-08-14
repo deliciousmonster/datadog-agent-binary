@@ -27,8 +27,8 @@ import { suite, test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+	cpSync,
 	existsSync,
-	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	realpathSync,
@@ -101,82 +101,18 @@ type ProbeRow = {
 };
 
 /**
- * Runs at component load inside Harper and records to JSONL, following the
- * datadog-spawn-probe fixture. Written from a string here instead of a checked
- * in fixture because the application directory only exists after the tarball
- * install stages it.
+ * The committed probe component staged into the application, following the
+ * datadog-example-app fixture. Parameterized only through env vars
+ * (DD_IMPORT_PROBE_DIR, DD_IMPORT_PACKAGE_NAME), so the program is linted and
+ * formatted as code; its previous life as a template-literal string was
+ * invisible to the toolchain and a syntax error in it would have surfaced
+ * only as an empty probe-results.jsonl at integration time.
  */
-const PROBE_SOURCE = `/**
- * Written by harper-import.test.ts at staging time; see that file.
- */
-import { appendFileSync } from "node:fs";
-import { join } from "node:path";
-
-const PROBE_DIR = process.env.DD_IMPORT_PROBE_DIR;
-
-function record(entry) {
-	appendFileSync(join(PROBE_DIR, "probe-results.jsonl"), JSON.stringify(entry) + "\\n");
-}
-
-async function probe(name, run) {
-	try {
-		record({ probe: name, threw: false, ...(await run()) });
-	} catch (error) {
-		record({ probe: name, threw: true, error: String(error?.message ?? error) });
-	}
-}
-
-if (PROBE_DIR) {
-	// An async IIFE instead of top-level await: the loader's TLA support is not
-	// what is under test, and the suite polls the results file for "done".
-	(async () => {
-		// Only Harper's application loader resolves 'harper' to its synthetic
-		// module; under plain Node this import fails. Every probe below is
-		// meaningless unless this row shows the loader mediating our imports.
-		await probe("harper-module", async () => {
-			const harper = await import("harper");
-			return {
-				hasResource: typeof harper.Resource === "function",
-				hasTables: "tables" in harper,
-			};
-		});
-		// 'harper/*' subpaths are reserved and must be refused; the refusal is
-		// the second enforcement signal.
-		await probe("harper-subpath", async () => {
-			await import("harper/loader-probe");
-			return {};
-		});
-		await probe("native-import", async () => {
-			const mod = await import(${JSON.stringify(PACKAGE_NAME)});
-			return {
-				exportKeys: Object.keys(mod).length,
-				hasDatadogAgentBuilder: typeof mod.DatadogAgentBuilder === "function",
-				hasBinaryManager: typeof mod.BinaryManager === "function",
-				builderHasBuildForPlatform:
-					typeof mod.DatadogAgentBuilder?.prototype?.buildForPlatform === "function",
-			};
-		});
-		// createRequire reaches Node's real CJS cache. A natively loaded package
-		// shares one evaluation with it; a package claimed by the application
-		// loader is a separate compartment evaluation, so the class identities
-		// split. Verified in both directions against harper 5.2.1 by flipping
-		// \`harper\` in the staged manifest's devDependencies.
-		await probe("native-identity", async () => {
-			const mod = await import(${JSON.stringify(PACKAGE_NAME)});
-			const { createRequire } = await import("node:module");
-			const viaRequire = createRequire(import.meta.url)(${JSON.stringify(PACKAGE_NAME)});
-			return {
-				sameClass: viaRequire.DatadogAgentBuilder === mod.DatadogAgentBuilder,
-			};
-		});
-		record({ probe: "done", threw: false });
-	})();
-}
-`;
-
-// config.yaml replaces Harper's default component config entirely (no merge);
-// the probe needs only its one module, loaded at startup in every thread.
-const FIXTURE_CONFIG = "jsResource:\n  files: resources.js\n";
+const PROBE_FIXTURE_PATH = join(
+	import.meta.dirname,
+	"fixtures",
+	"datadog-import-probe"
+);
 
 type ImportFixture = { workDir: string; appDir: string };
 
@@ -212,8 +148,10 @@ function buildImportFixture(): ImportFixture | { error: string } {
 		) as Array<{ filename: string }>;
 		const tarball = join(workDir, packed[0].filename);
 
+		// The committed fixture carries the component entry and config; only the
+		// application manifest is written here, because it names the package.
 		const appDir = join(workDir, "app");
-		mkdirSync(appDir);
+		cpSync(PROBE_FIXTURE_PATH, appDir, { recursive: true });
 		writeFileSync(
 			join(appDir, "package.json"),
 			JSON.stringify(
@@ -233,8 +171,6 @@ function buildImportFixture(): ImportFixture | { error: string } {
 				"\t"
 			) + "\n"
 		);
-		writeFileSync(join(appDir, "config.yaml"), FIXTURE_CONFIG);
-		writeFileSync(join(appDir, "resources.js"), PROBE_SOURCE);
 
 		// --offline: the tarball is a file: spec and its runtime dependencies are
 		// this repo's own, so `npm ci` already put them in the npm cache; a cache
@@ -309,7 +245,10 @@ suite(
 		before(async () => {
 			await setupHarperWithFixture(ctx, fixture.appDir, {
 				harperBinPath: harperBinPath!,
-				env: { DD_IMPORT_PROBE_DIR: fixture.workDir },
+				env: {
+					DD_IMPORT_PROBE_DIR: fixture.workDir,
+					DD_IMPORT_PACKAGE_NAME: PACKAGE_NAME,
+				},
 			});
 			rows = await waitForProbeResults(
 				join(fixture.workDir, "probe-results.jsonl")
