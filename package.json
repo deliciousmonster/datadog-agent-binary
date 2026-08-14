@@ -26,8 +26,9 @@
 		"all-platform-packages": "npm run build && node scripts/create-platform-packages.js --all",
 		"platform-package": "npm run build && npm run build-agent && node scripts/create-platform-packages.js",
 		"update-optional-deps": "npm run build && node scripts/update-optional-deps.js",
-		"lint": "prettier --write .",
-		"lint:check": "prettier --check .",
+		"format": "prettier --write .",
+		"format:check": "prettier --check .",
+		"lint": "oxlint",
 		"prepare": "husky",
 		"version": "npm run build && npm run update-optional-deps",
 		"prepublishOnly": "npm run build",
@@ -54,6 +55,7 @@
 		"@types/tar": "^6.1.10",
 		"husky": "^9.1.7",
 		"lint-staged": "^16.1.2",
+		"oxlint": "1.78.0",
 		"prettier": "^3.6.1",
 		"tsx": "^4.7.0",
 		"typescript": "^5.3.0"
@@ -78,8 +80,8 @@
 	},
 	"homepage": "https://github.com/HarperFast/datadog-agent-binary#readme",
 	"optionalDependencies": {
-		"@deliciousmonster/datadog-agent-binary-linux-x86_64": "7.75.5",
 		"@deliciousmonster/datadog-agent-binary-linux-arm64": "7.75.5",
+		"@deliciousmonster/datadog-agent-binary-linux-x86_64": "7.75.5",
 		"@deliciousmonster/datadog-agent-binary-macos-arm64": "7.75.5",
 		"@deliciousmonster/datadog-agent-binary-windows-x86_64": "7.75.5"
 	},
