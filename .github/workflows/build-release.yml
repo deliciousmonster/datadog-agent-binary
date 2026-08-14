@@ -63,8 +63,36 @@ jobs:
       - name: Run npm test
         run: npm test
 
+  # The same preflight prerelease.yml runs before cutting a tag, repeated here
+  # because a hand-pushed tag or a dispatch on a tag ref skips that workflow
+  # entirely. Catches a dead publish path (bad npm auth, provenance repository
+  # mismatch) in seconds instead of after every platform's Go build. Always runs
+  # and no-ops on non-tag refs: an `if:` would skip the job, and a skipped job
+  # in `needs` skips everything downstream of it.
+  preflight:
+    name: release preflight
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Check the publish path before building
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF}" in
+            refs/tags/*) node scripts/release-preflight.js ;;
+            *) echo "Not a tag ref: publish will not run, nothing to check." ;;
+          esac
+
   build:
-    needs: test
+    needs: [test, preflight]
     # Cap each leg so a runner that never gets scheduled (e.g. a retired runner
     # image) can't stall the build, and therefore the publish, for the default 6h.
     # A real agent build finishes well within this.

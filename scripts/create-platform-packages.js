@@ -138,10 +138,10 @@ const packageTemplate = {
 	version,
 	description: "",
 	main: "index.js",
-	repository: {
-		type: "git",
-		url: "https://github.com/HarperFast/datadog-agent-binary.git",
-	},
+	// Inherited, never hardcoded: npm publish --provenance verifies this against
+	// the building repo per package, platform packages publish first, and the
+	// release preflight only reads the root manifest.
+	repository: parentPackageJson.repository,
 	keywords: ["datadog", "agent", "binary"],
 	author: "Harper",
 	license: "Apache-2.0",
