@@ -1,8 +1,15 @@
 {
 	"name": "@deliciousmonster/datadog-agent-binary",
 	"version": "7.75.5",
-	"description": "TypeScript package to download and build Datadog Agent from source for multiple platforms",
+	"description": "Distributes the pre-compiled Datadog Agent as an npm package, so the agent is installed and versioned as a normal Node dependency instead of through a system package manager or a container sidecar. Intended for running the agent alongside a Node application, including inside Harper v5.",
 	"main": "dist/index.js",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
 	"bin": {
 		"datadog-agent-build": "dist/cli.js",
 		"datadog-agent": "bin/datadog-agent",
@@ -35,20 +42,15 @@
 		"cross-platform"
 	],
 	"author": "",
-	"license": "MIT",
+	"license": "Apache-2.0",
 	"dependencies": {
-		"chalk": "^5.3.0",
 		"commander": "^11.1.0",
-		"node-fetch": "^3.3.2",
-		"tar": "^6.2.0",
-		"yauzl": "^2.10.0"
+		"tar": "^6.2.0"
 	},
 	"devDependencies": {
 		"@harperfast/integration-testing": "^0.7.1",
 		"@types/node": "^20.10.0",
 		"@types/tar": "^6.1.10",
-		"@types/yauzl": "^2.10.3",
-		"harper": "^5.2.1",
 		"husky": "^9.1.7",
 		"lint-staged": "^16.1.2",
 		"prettier": "^3.6.1",
@@ -59,13 +61,12 @@
 		"dist/",
 		"bin/",
 		"conf.d/",
-		"example/",
 		".datadog-agent-version",
 		"README.md",
 		"CHANGELOG.md"
 	],
 	"engines": {
-		"node": ">=18.0.0"
+		"node": "^22.18.0 || >=24.0.0"
 	},
 	"repository": {
 		"type": "git",

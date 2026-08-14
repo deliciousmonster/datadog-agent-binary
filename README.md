@@ -183,7 +183,7 @@ import { startDatadogAgents } from "./dd-supervisor.js";
 import { spawn } from "node:child_process"; // ESM import, NOT require()
 ```
 
-[`example/`](example/) is a working implementation, including a startup self-check that proves interception is live and fails loudly otherwise. Copy that pattern rather than shelling out to the launchers. Two consequences it handles:
+[`example/`](https://github.com/HarperFast/datadog-agent-binary/tree/main/example) in the repository (not shipped in the npm package) is a working implementation, including a startup self-check that proves interception is live and fails loudly otherwise. Copy that pattern rather than shelling out to the launchers. Two consequences it handles:
 
 - **The loser of the race does not get a `ChildProcess`.** It gets a handle with `pid`, `kill()`, `unref()`, and an `'exit'` event, and nothing else, so `child.stdout.on(...)` without a guard throws a `TypeError` on every thread but the winner. That handle also runs an un-unref'd 1 Hz liveness interval, so a joining thread never goes idle until it calls `child.unref()`.
 - **`version` forces a replacement, and it must be a number.** If it differs from the value in the PID file, Harper kills the running process and spawns a new one. Harper parses the recorded value with `parseInt`, so a *string* version never compares equal to itself and every thread would SIGTERM and respawn forever.
