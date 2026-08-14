@@ -3,6 +3,7 @@ name: Cut Prerelease
 # Creates and pushes the next `-next.N` tag, which triggers build-release.yml.
 #
 # Runs automatically on every push to main, and manually via workflow_dispatch.
+# Either way, no tag is cut until the commit's Test workflow run has succeeded.
 #
 # This exists so nobody hand-types a release tag. The tag is the only input to the
 # publish pipeline: it sets the npm version, and whether it parses as a semver
@@ -55,6 +56,8 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[skip release]')"
     permissions:
       contents: write
+      # The Test gate below reads workflow runs with the default GITHUB_TOKEN.
+      actions: read
     steps:
       # Without this the run dies inside actions/checkout with "Input required and not
       # supplied: token", which reads like a broken workflow rather than a missing secret.
@@ -168,6 +171,44 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: node scripts/release-preflight.js
+
+      # A tag must never be cut for a commit whose Test workflow failed. This
+      # polls rather than moving to a workflow_run trigger: workflow_run cannot
+      # carry this workflow's paths-ignore filter or its dispatch inputs, so
+      # the push trigger, the `[skip release]` hatch, and manual runs all stay
+      # exactly as they are.
+      #
+      # Test starts from the same push that starts this run, so it is usually
+      # still going; the concurrency queue above means waiting here holds no
+      # one up but a later release. Fail-closed when no Test run exists at
+      # all: a commit that never ran Test is precisely what must not ship, and
+      # test.yml has workflow_dispatch to arm an old commit by hand.
+      - name: Require a green Test run for this commit
+        if: steps.mode.outputs.push == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # 60 * 30s = 30 minutes. The Test matrix plus the integration job
+          # finish well inside that; past it something is wedged and a human
+          # should look before a release does.
+          for i in $(seq 1 60); do
+            RUN=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/test.yml/runs?head_sha=${GITHUB_SHA}&per_page=1" \
+              --jq '.workflow_runs[0] | if . == null then "absent absent" else "\(.status) \(.conclusion)" end')
+            read -r STATUS CONCLUSION <<<"$RUN"
+            if [ "$STATUS" = "completed" ]; then
+              if [ "$CONCLUSION" = "success" ]; then
+                echo "Test succeeded for ${GITHUB_SHA}."
+                exit 0
+              fi
+              echo "::error::Test concluded '${CONCLUSION}' for ${GITHUB_SHA}; refusing to cut a tag. Fix the commit or re-run Test until it is green."
+              exit 1
+            fi
+            echo "Test is ${STATUS} for ${GITHUB_SHA}; waiting... ($i/60)"
+            sleep 30
+          done
+          echo "::error::Test never completed for ${GITHUB_SHA} within 30 minutes; refusing to cut a tag."
+          exit 1
 
       - name: Summary
         run: |
