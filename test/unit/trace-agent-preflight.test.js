@@ -82,33 +82,47 @@ test("an explicitly named config file that exists passes", () => {
 	});
 });
 
-test("every spelling of the config flag is recognised, including the = form", () => {
+test("every spelling of the config flag makes its missing file fatal, including the = form", () => {
+	// Asserted through the throw, not through doesNotThrow against a file that
+	// exists: a spelling that stops being recognised degrades the stated path to
+	// an inferred guess, and an inferred guess only warns, so the doesNotThrow
+	// form stayed green with the recognition deleted.
 	withTempDir((dir) => {
-		const configPath = path.join(dir, "datadog.yaml");
-		fs.writeFileSync(configPath, "");
+		const absent = path.join(dir, "absent.yaml");
 		for (const argv of [
-			["-c", configPath],
-			["--config", configPath],
-			["-config", configPath],
-			["--cfgpath", configPath],
-			["-cfgpath", configPath],
-			[`-c=${configPath}`],
-			[`--config=${configPath}`],
+			["-c", absent],
+			["--config", absent],
+			["-config", absent],
+			["--cfgpath", absent],
+			["-cfgpath", absent],
+			[`-c=${absent}`],
+			[`--config=${absent}`],
 		]) {
-			assert.doesNotThrow(
+			assert.throws(
 				() => preflightTraceAgentConfig(argv),
-				`${argv[0]} should have been recognised as the config flag`
+				(error) =>
+					error instanceof LaunchPreflightError &&
+					// The error must name the stated path, proving the flag's VALUE was
+					// parsed rather than the flag merely detected.
+					error.message.includes(absent),
+				`${argv[0]} was not treated as an explicitly stated config path`
 			);
 		}
 	});
 });
 
-test("a config flag pointing at a directory resolves to <dir>/datadog.yaml", () => {
+test("a config flag pointing at a directory is checked at <dir>/datadog.yaml", () => {
 	withTempDir((dir) => {
-		// The file is inside the directory, so this only passes if the directory
-		// value was expanded rather than stat'd as a file.
-		fs.writeFileSync(path.join(dir, "datadog.yaml"), "");
-		assert.doesNotThrow(() => preflightTraceAgentConfig(["-c", dir, "run"]));
+		// The directory exists and its datadog.yaml does not. A preflight that
+		// stats the directory value as the config file sees it exist and passes,
+		// so only the resolved <dir>/datadog.yaml can make this throw.
+		assert.throws(
+			() => preflightTraceAgentConfig(["-c", dir, "run"]),
+			(error) =>
+				error instanceof LaunchPreflightError &&
+				error.message.includes(path.join(dir, "datadog.yaml")),
+			"the directory value must be resolved to <dir>/datadog.yaml"
+		);
 	});
 });
 
