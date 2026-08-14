@@ -2,8 +2,9 @@
 	"extends": "./tsconfig.json",
 	"compilerOptions": {
 		"noEmit": true,
-		// tsx runs the integration tests and resolves the .ts extension in
-		// './support/harness.ts' directly; noEmit is what makes tsc accept it.
+		// Node runs the integration tests and strips types itself (unflagged since
+		// 22.18.0, which is why `engines` floors there), so './support/harness.ts' is
+		// imported with its real .ts extension; noEmit is what makes tsc accept it.
 		"allowImportingTsExtensions": true,
 		"declaration": false,
 		"declarationMap": false,
