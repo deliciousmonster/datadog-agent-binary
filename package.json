@@ -54,7 +54,6 @@
 		"dist/",
 		"bin/",
 		"conf.d/",
-		"example/",
 		".datadog-agent-version",
 		"README.md",
 		"CHANGELOG.md"
