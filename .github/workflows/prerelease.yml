@@ -62,18 +62,29 @@ jobs:
       # The Test gate below reads workflow runs with the default GITHUB_TOKEN.
       actions: read
     steps:
-      # Without this the run dies inside actions/checkout with "Input required and not
-      # supplied: token", which reads like a broken workflow rather than a missing secret.
-      - name: Require REPO_TOKEN
+      # Two states look identical from CI and must not: "releases are not turned
+      # on yet" (green, nothing was promised) and "releases are on and broken"
+      # (red, something silently stopped shipping). A secret alone cannot tell
+      # them apart, so the RELEASE_ENABLED repo variable records the intent.
+      # Arming a release is then deliberately two actions - set the variable and
+      # add the tokens - and doing only one of them fails loudly.
+      - name: Determine release mode
+        id: arm
         env:
           REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
         run: |
           set -euo pipefail
+          if [ "${{ vars.RELEASE_ENABLED }}" != 'true' ]; then
+            echo "armed=false" >> "$GITHUB_OUTPUT"
+            echo "RELEASE_ENABLED is not 'true'. Computing the next version for the record; no tag, no publish."
+            exit 0
+          fi
           if [ -z "${REPO_TOKEN}" ]; then
-            echo "::error::REPO_TOKEN is not set. A tag pushed with the default GITHUB_TOKEN does not start another workflow, so build-release.yml would never run and this job would report success while shipping nothing. Add a PAT with contents:write as REPO_TOKEN."
+            echo "::error::RELEASE_ENABLED is 'true' but REPO_TOKEN is not set. A tag pushed with the default GITHUB_TOKEN does not start another workflow, so build-release.yml would never run and this job would report success while shipping nothing. Add a PAT with contents:write as REPO_TOKEN, or unset RELEASE_ENABLED to go back to reporting-only runs."
             exit 1
           fi
-          echo "REPO_TOKEN is present."
+          echo "armed=true" >> "$GITHUB_OUTPUT"
+          echo "Releases are enabled and REPO_TOKEN is present."
 
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -82,7 +93,9 @@ jobs:
           # A tag pushed with the default GITHUB_TOKEN does NOT start another workflow,
           # so build-release.yml would never see it and this job would report success
           # while shipping nothing. A PAT is the only thing that makes the chain fire.
-          token: ${{ secrets.REPO_TOKEN }}
+          # The fallback is what lets an unarmed run still read tags and report the
+          # version it would have cut; checkout rejects an empty token outright.
+          token: ${{ secrets.REPO_TOKEN || github.token }}
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -151,7 +164,10 @@ jobs:
         id: mode
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "${{ steps.arm.outputs.armed }}" != 'true' ]; then
+            echo "push=false" >> "$GITHUB_OUTPUT"
+            echo "Releases are not enabled; nothing will be created."
+          elif [ "${{ github.event_name }}" = "push" ]; then
             echo "push=true" >> "$GITHUB_OUTPUT"
             echo "Automatic run: pushing the tag."
           elif [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
@@ -225,11 +241,29 @@ jobs:
             echo "| Trigger | \`${{ github.event_name }}\` |"
             echo "| Pushed | \`${{ steps.mode.outputs.push }}\` |"
             echo ""
-            echo "Consumers install it with:"
-            echo ""
-            echo '```bash'
-            echo "npm install $(node -p "require('./package.json').name")@next"
-            echo '```'
+            if [ "${{ steps.arm.outputs.armed }}" != 'true' ]; then
+              echo "**Releases are not enabled, so nothing was tagged or published.**"
+              echo ""
+              echo "This run is green on purpose: it computed the version it would"
+              echo "have cut and stopped. Nothing is on npm under this scope yet."
+              echo ""
+              echo "To start releasing, do both, in this order:"
+              echo ""
+              echo "1. Add the secrets: \`REPO_TOKEN\` (a PAT with contents:write, so the"
+              echo "   pushed tag starts build-release.yml) and \`NPM_TOKEN\` (needed for the"
+              echo "   first publish of each package name; Trusted Publishing cannot"
+              echo "   bootstrap a name that has never been published)."
+              echo "2. Set the repository variable \`RELEASE_ENABLED\` to \`true\`."
+              echo ""
+              echo "Setting the variable without the secrets fails this job loudly, which"
+              echo "is the point: once releases are promised, silence is a defect."
+            else
+              echo "Consumers install it with:"
+              echo ""
+              echo '```bash'
+              echo "npm install $(node -p "require('./package.json').name")@next"
+              echo '```'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create and push the tag
@@ -243,8 +277,16 @@ jobs:
           git push origin "$TAG"
           echo "Pushed $TAG. build-release.yml will now build and publish it."
 
-      - name: Dry run notice
+      # Two different reasons to have created nothing, and telling someone to
+      # re-run with dry_run=false is wrong advice for the unarmed one.
+      - name: Explain why nothing was created
         if: steps.mode.outputs.push != 'true'
         run: |
-          echo "Dry run: nothing was created."
-          echo "Re-run with dry_run=false to push ${{ steps.next.outputs.tag }}."
+          if [ "${{ steps.arm.outputs.armed }}" != 'true' ]; then
+            echo "Releases are not enabled (RELEASE_ENABLED is not 'true'), so no tag was cut and nothing was published."
+            echo "Next version, once releases are turned on: ${{ steps.next.outputs.tag }}"
+            echo "See the job summary for the two steps that arm a release."
+          else
+            echo "Dry run: nothing was created."
+            echo "Re-run with dry_run=false to push ${{ steps.next.outputs.tag }}."
+          fi
