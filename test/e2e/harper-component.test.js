@@ -55,9 +55,9 @@ let traceConfigPath;
 
 /**
  * Symlink every top-level entry of the repo's node_modules into the sandbox so
- * dist/ can load chalk and node-fetch, then shadow the package scope with a real
- * directory holding only our stub. Symlinking the scope instead would let a real
- * installed platform package win, and the stub would never be exercised.
+ * dist/ can resolve whatever it imports, then shadow the package scope with a
+ * real directory holding only our stub. Symlinking the scope instead would let
+ * a real installed platform package win, and the stub would never be exercised.
  */
 function linkRuntimeDependencies(sourceModules, targetModules) {
 	fs.mkdirSync(targetModules, { recursive: true });

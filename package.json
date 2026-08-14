@@ -20,6 +20,7 @@
 		"dev": "tsc --watch",
 		"start": "node dist/cli.js",
 		"typecheck": "tsc --noEmit",
+		"typecheck:test": "tsc -p tsconfig.test.json --noEmit",
 		"clean": "rm -rf dist/ build/ release/ source/ go/ npm/",
 		"build-agent": "npm run build && node dist/cli.js build",
 		"all-platform-packages": "npm run build && node scripts/create-platform-packages.js --all",
