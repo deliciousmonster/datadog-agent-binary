@@ -2,15 +2,17 @@
 	"extends": "./tsconfig.json",
 	"compilerOptions": {
 		"noEmit": true,
+		// tsx runs the integration tests and resolves the .ts extension in
+		// './support/harness.ts' directly; noEmit is what makes tsc accept it.
 		"allowImportingTsExtensions": true,
 		"declaration": false,
 		"declarationMap": false,
 		"sourceMap": false,
-		"rootDir": ".",
-		"module": "esnext",
-		"moduleResolution": "bundler",
-		"target": "ES2022",
-		"lib": ["ES2022"]
+		"rootDir": "."
+		// module/moduleResolution inherit NodeNext from the base config. This file
+		// used to override them to esnext/bundler; with "type": "module" in
+		// package.json the tests typecheck under the same rules the package builds
+		// with, so the override had stopped earning its divergence.
 	},
 	"include": ["test/**/*.ts"],
 	"exclude": ["node_modules", "dist"]
