@@ -227,7 +227,7 @@ const result = await new DatadogAgentBuilder().buildForCurrentPlatform({
 });
 ```
 
-Options are `version?`, `outputDir?`, and `buildArgs?`. `BuildResult` carries `outputPaths` (every binary, keyed by kind) alongside `outputPath`, which still points at the core agent.
+Options are `version?` and `outputDir?`. `BuildResult` carries `outputPaths`, every binary keyed by kind.
 
 One run produces both binaries. The builder iterates the platform's binary descriptors and runs one upstream task each:
 

@@ -187,7 +187,7 @@ jobs:
         shell: bash
         run: cat .datadog-agent-version
 
-      # One build step produces BOTH binaries: src/builders/base.ts iterates
+      # One build step produces BOTH binaries: src/builder.ts iterates
       # platform.getBinaries() and runs `dda inv <buildTask>` per descriptor. Each
       # descriptor names its own override env var, so core and trace-agent flags
       # cannot be aimed at the wrong target.

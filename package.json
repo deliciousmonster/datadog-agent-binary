@@ -17,7 +17,7 @@
 		"datadog-trace-agent": "bin/trace-agent"
 	},
 	"scripts": {
-		"build": "tsc",
+		"build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsc",
 		"dev": "tsc --watch",
 		"start": "node dist/cli.js",
 		"typecheck": "tsc --noEmit",

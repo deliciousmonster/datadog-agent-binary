@@ -5,6 +5,27 @@ Datadog Agent version they ship.
 
 ## Unreleased
 
+### Removed: `--build-args`, `BuildOptions.buildArgs`, `BuildConfig.buildArgs` (breaking)
+
+The flag was parsed and stored, and nothing ever read it: build args resolve per
+binary from the descriptor or its `DD_AGENT_BUILD_ARGS` / `DD_TRACE_AGENT_BUILD_ARGS`
+override. Removed rather than wired up, because one global arg set applied to both
+binaries is the failure the per-binary descriptors exist to prevent. Passing
+`--build-args` now exits non-zero instead of being ignored, and a TypeScript consumer
+passing `buildArgs` to `buildForCurrentPlatform()` gets a compile error rather than a
+silently dropped property. Use the env vars.
+
+### Removed: `DatadogAgentBuilder.getLatestVersion()` (breaking)
+
+A passthrough with no caller. `DatadogAgentDownloader.getLatestVersion()` is public and
+is what the CLI already used.
+
+### Changed: unknown positional arguments are now an error (breaking)
+
+The commander upgrade turns excess arguments into a non-zero exit on every subcommand.
+`datadog-agent-build install 7.79.2` used to ignore the argument and install the current
+platform; it now fails and tells you so. `install` takes `-v <version>`.
+
 ### Changed: the package is ESM-only (breaking)
 
 `package.json` now declares `"type": "module"` and `dist/` is compiled as ES modules.

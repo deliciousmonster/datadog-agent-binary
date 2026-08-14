@@ -4,7 +4,7 @@ name: Verify Agent Build
 # anything.
 #
 # build-release.yml only triggers on `push: tags: v*` and workflow_dispatch, so
-# the build path (the descriptor loop in src/builders/base.ts buildCommon(),
+# the build path (the descriptor loop in src/builder.ts buildCommon(),
 # copyBinariesToOutput(), the trace-agent invoke task, the version pin in
 # src/downloader.ts) was never run until someone cut a release tag. A change that
 # broke it stayed invisible through review, merge, and every green `test` run.
