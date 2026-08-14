@@ -1,5 +1,5 @@
-import { execSync, spawn } from "child_process";
-import * as path from "path";
+import { execSync, spawn } from "node:child_process";
+import * as path from "node:path";
 import {
 	AgentBinaryDescriptor,
 	AgentBinaryKind,
@@ -237,7 +237,7 @@ export abstract class BaseBuilder {
 	}
 
 	protected async ensureOutputDirectory(): Promise<void> {
-		const { mkdir } = await import("fs/promises");
+		const { mkdir } = await import("node:fs/promises");
 		await mkdir(this.config.outputDir, { recursive: true });
 	}
 
@@ -267,7 +267,7 @@ export abstract class BaseBuilder {
 	protected async copyBinariesToOutput(): Promise<
 		Partial<Record<AgentBinaryKind, string>>
 	> {
-		const { chmod, copyFile, mkdir, stat } = await import("fs/promises");
+		const { chmod, copyFile, mkdir, stat } = await import("node:fs/promises");
 		const { platform, outputDir } = this.config;
 
 		logger.debug(`Ensuring platform bin directory exists: ${outputDir}`);

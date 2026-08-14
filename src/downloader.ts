@@ -1,5 +1,5 @@
-import * as fs from "fs/promises";
-import * as path from "path";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import * as tar from "tar";
 import { DownloadConfig } from "./types.js";
 import { logger } from "./logger.js";
@@ -175,7 +175,7 @@ export class DatadogAgentDownloader {
 
 		logger.info("Cloning Datadog Agent repository...");
 
-		const { execSync } = await import("child_process");
+		const { execSync } = await import("node:child_process");
 
 		// Tracked outside the try/catch: a clone that succeeds but lands on the wrong ref
 		// must be fatal, not a reason to retry via tarball. Asserting inside the try would
@@ -281,7 +281,7 @@ export class DatadogAgentDownloader {
 		const missing: string[] = [];
 
 		logger.debug(`checkBuildDependencies PATH: ${process.env.PATH}`);
-		const { execSync } = await import("child_process");
+		const { execSync } = await import("node:child_process");
 		for (const tool of platformRequirements) {
 			try {
 				execSync(`which ${tool}`, { stdio: "ignore" });

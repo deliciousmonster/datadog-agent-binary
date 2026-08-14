@@ -1,7 +1,7 @@
-import { spawn } from "child_process";
-import * as fs from "fs";
-import * as net from "net";
-import * as path from "path";
+import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as net from "node:net";
+import * as path from "node:path";
 import { BinaryManager } from "./binary-manager.js";
 import { logger } from "./logger.js";
 import { Platform } from "./platform.js";

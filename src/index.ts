@@ -1,4 +1,4 @@
-import * as path from "path";
+import * as path from "node:path";
 import { DatadogAgentDownloader } from "./downloader.js";
 import { createBuilder } from "./builders/index.js";
 import { logger } from "./logger.js";
@@ -65,7 +65,7 @@ export class DatadogAgentBuilder {
 		goPath: string,
 		sourceDir: string
 	): Promise<void> {
-		const { mkdir, symlink, stat } = await import("fs/promises");
+		const { mkdir, symlink, stat } = await import("node:fs/promises");
 
 		const goSrcDir = path.join(goPath, "src", "github.com", "DataDog");
 		await mkdir(goSrcDir, { recursive: true });

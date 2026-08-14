@@ -1,4 +1,4 @@
-import * as path from "path";
+import * as path from "node:path";
 
 /**
  * Single source of truth for this package's npm identity.
