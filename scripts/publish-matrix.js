@@ -270,10 +270,8 @@ export function verify(rows) {
 		);
 	}
 
-	for (const [dep, range] of Object.entries(OPTIONAL_DEPS)) {
-		if (range !== PACKAGE_VERSION) {
-			problems.push(`optionalDependencies["${dep}"] is "${range}", expected exactly ` + `"${PACKAGE_VERSION}".`);
-		}
+	for (const [dep, range] of Object.entries(OPTIONAL_DEPS).filter(([, r]) => r !== PACKAGE_VERSION)) {
+		problems.push(`optionalDependencies["${dep}"] is "${range}", expected exactly "${PACKAGE_VERSION}".`);
 	}
 
 	return problems;
