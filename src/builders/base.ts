@@ -1,12 +1,12 @@
-import { execSync, spawn } from "child_process";
-import * as path from "path";
+import { execSync, spawn } from "node:child_process";
+import * as path from "node:path";
 import {
 	AgentBinaryDescriptor,
 	AgentBinaryKind,
 	BuildConfig,
 	BuildResult,
 } from "../types.js";
-import { logger } from "../logger.js";
+import { errorMessage, logger } from "../logger.js";
 
 export abstract class BaseBuilder {
 	protected config: BuildConfig;
@@ -48,18 +48,18 @@ export abstract class BaseBuilder {
 			return {
 				success: true,
 				platform,
-				outputPath: outputPaths.core,
 				outputPaths,
 				duration,
 			};
-		} catch (error: any) {
+		} catch (error) {
 			const duration = Date.now() - startTime;
-			logger.error(`Build failed: ${error.message}`);
+			const message = errorMessage(error);
+			logger.error(`Build failed: ${message}`);
 
 			return {
 				success: false,
 				platform,
-				error: error.message,
+				error: message,
 				duration,
 			};
 		}
@@ -125,16 +125,23 @@ export abstract class BaseBuilder {
 				timeout: 1200000,
 				env,
 			});
-		} catch (error: any) {
+		} catch (error) {
+			// execSync failures carry the child's exit status and captured output on the
+			// thrown Error; nothing narrower than a cast can reach them.
+			const execError = error as Error & {
+				status?: number;
+				stdout?: Buffer | string;
+				stderr?: Buffer | string;
+			};
 			logger.error(`Command failed: ${command}`);
-			logger.error(`Exit code: ${error.status}`);
-			logger.error(`Error: ${error.message}`);
+			logger.error(`Exit code: ${execError.status}`);
+			logger.error(`Error: ${execError.message}`);
 
-			if (error.stdout) {
-				logger.error(`Stdout:\n${error.stdout.toString()}`);
+			if (execError.stdout) {
+				logger.error(`Stdout:\n${execError.stdout.toString()}`);
 			}
-			if (error.stderr) {
-				logger.error(`Stderr:\n${error.stderr.toString()}`);
+			if (execError.stderr) {
+				logger.error(`Stderr:\n${execError.stderr.toString()}`);
 			}
 
 			throw error;
@@ -238,7 +245,7 @@ export abstract class BaseBuilder {
 	}
 
 	protected async ensureOutputDirectory(): Promise<void> {
-		const { mkdir } = await import("fs/promises");
+		const { mkdir } = await import("node:fs/promises");
 		await mkdir(this.config.outputDir, { recursive: true });
 	}
 
@@ -268,7 +275,7 @@ export abstract class BaseBuilder {
 	protected async copyBinariesToOutput(): Promise<
 		Partial<Record<AgentBinaryKind, string>>
 	> {
-		const { chmod, copyFile, mkdir, stat } = await import("fs/promises");
+		const { chmod, copyFile, mkdir, stat } = await import("node:fs/promises");
 		const { platform, outputDir } = this.config;
 
 		logger.debug(`Ensuring platform bin directory exists: ${outputDir}`);
@@ -290,19 +297,20 @@ export abstract class BaseBuilder {
 			// dd-trace dropping spans into a closed socket, with nothing logged.
 			try {
 				await stat(sourcePath);
-			} catch {
+			} catch (error) {
 				throw new Error(
 					`Missing ${binary.kind} agent binary: expected ${sourcePath}. ` +
 						`It is produced by \`dda --no-interactive inv ${binary.buildTask}\`; ` +
-						`check that task ran and succeeded.`
+						`check that task ran and succeeded.`,
+					{ cause: error }
 				);
 			}
 
 			try {
 				await copyFile(sourcePath, destPath);
-			} catch (error: any) {
+			} catch (error) {
 				logger.error(
-					`Failed to copy ${binary.kind} agent ${sourcePath} -> ${destPath}: ${error.message}`
+					`Failed to copy ${binary.kind} agent ${sourcePath} -> ${destPath}: ${errorMessage(error)}`
 				);
 				throw error;
 			}

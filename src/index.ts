@@ -1,7 +1,7 @@
-import * as path from "path";
+import * as path from "node:path";
 import { DatadogAgentDownloader } from "./downloader.js";
 import { createBuilder } from "./builders/index.js";
-import { logger } from "./logger.js";
+import { errorMessage, logger } from "./logger.js";
 import { BuildConfig, BuildResult } from "./types.js";
 import { Platform } from "./platform.js";
 
@@ -65,7 +65,7 @@ export class DatadogAgentBuilder {
 		goPath: string,
 		sourceDir: string
 	): Promise<void> {
-		const { mkdir, symlink, stat } = await import("fs/promises");
+		const { mkdir, symlink, stat } = await import("node:fs/promises");
 
 		const goSrcDir = path.join(goPath, "src", "github.com", "DataDog");
 		await mkdir(goSrcDir, { recursive: true });
@@ -82,8 +82,8 @@ export class DatadogAgentBuilder {
 				logger.debug(
 					`Created GOPATH symlink: ${symlinkPath} -> ${relativePath}`
 				);
-			} catch (error: any) {
-				logger.error(`Failed to create symlink: ${error.message}`);
+			} catch (error) {
+				logger.error(`Failed to create symlink: ${errorMessage(error)}`);
 				throw error;
 			}
 		}
@@ -102,9 +102,21 @@ export class DatadogAgentBuilder {
 	}
 }
 
-export * from "./types.js";
-export * from "./platform.js";
-export * from "./downloader.js";
-export * from "./builders/index.js";
-export * from "./logger.js";
-export * from "./binary-manager.js";
+// The named public API, instead of six export *. Everything else (the launcher,
+// the logger, the per-OS builder classes, SUPPORTED_PLATFORMS) is reached through
+// its own module by the scripts and shims that need it, and a wildcard here would
+// silently promote every future internal helper to public surface.
+export { BinaryManager } from "./binary-manager.js";
+export { DatadogAgentDownloader } from "./downloader.js";
+export { createBuilder } from "./builders/index.js";
+export { Platform } from "./platform.js";
+export type {
+	AgentBinaryDescriptor,
+	AgentBinaryKind,
+	Architecture,
+	BuildConfig,
+	BuildResult,
+	DownloadConfig,
+	Logger,
+	OS,
+} from "./types.js";

@@ -1,20 +1,16 @@
-import { spawn } from "child_process";
-import * as fs from "fs";
-import * as net from "net";
-import * as path from "path";
+import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as net from "node:net";
+import * as path from "node:path";
 import { BinaryManager } from "./binary-manager.js";
-import { logger } from "./logger.js";
+import { errorMessage, logger } from "./logger.js";
 import { Platform } from "./platform.js";
 import { AgentBinaryKind } from "./types.js";
 
 /**
- * The launcher shared by `bin/datadog-agent`, `bin/trace-agent`, and the wrappers
- * `BinaryManager.createBinaryWrapper()` generates.
- *
- * Those entry points were three copies of the same resolve-spawn-supervise logic, which
- * is how the trace-agent came to be missing from all of them at once. They are now
- * one-line shims: the only thing that varies is the `AgentBinaryKind` they pass in, and
- * everything kind-specific hangs off the descriptor for that kind.
+ * The launcher shared by the `bin/datadog-agent` and `bin/trace-agent` shims. The only
+ * thing that varies between them is the `AgentBinaryKind` they pass in; everything
+ * kind-specific hangs off the descriptor for that kind.
  *
  * `launchAgent()` never rejects. It owns the process lifecycle and calls `process.exit()`
  * on every terminal path, because an unhandled rejection in a launcher is the
@@ -422,8 +418,8 @@ export async function launchAgent(
 			logger.error(`Binary path: ${binaryPath}`);
 			process.exit(1);
 		});
-	} catch (error: any) {
-		const message = String(error?.message ?? error);
+	} catch (error) {
+		const message = errorMessage(error);
 		logger.error(`Failed to run ${processName}: ${message}`);
 
 		// Harper's spawn gate throws synchronously with "Command <cmd> is not allowed"
@@ -484,3 +480,16 @@ async function onExit(
 	}
 	process.exit(code || 0);
 }
+
+/**
+ * Test-only handle on the supervision internals; not public API. Each member guards
+ * a failure mode whose only production symptom is silently dropped spans, and without
+ * this export the unit suite had to re-evaluate the compiled module through a
+ * hand-built CJS wrapper to reach them.
+ */
+export const internalsForTesting = {
+	receiverPort,
+	isRunSubcommand,
+	isTraceReceiverHealthy,
+	onExit,
+};

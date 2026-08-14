@@ -31,3 +31,8 @@ export class ConsoleLogger implements Logger {
 }
 
 export const logger = new ConsoleLogger();
+
+/** Caught values are `unknown`; this keeps the narrowing in one place. */
+export function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}

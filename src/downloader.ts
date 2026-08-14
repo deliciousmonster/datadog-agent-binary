@@ -1,8 +1,8 @@
-import * as fs from "fs/promises";
-import * as path from "path";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import * as tar from "tar";
 import { DownloadConfig } from "./types.js";
-import { logger } from "./logger.js";
+import { errorMessage, logger } from "./logger.js";
 import { Platform } from "./platform.js";
 
 const DATADOG_AGENT_REPO = "https://github.com/DataDog/datadog-agent";
@@ -31,11 +31,12 @@ export class DatadogAgentDownloader {
 		let raw: string;
 		try {
 			raw = await fs.readFile(pinPath, "utf8");
-		} catch (error: any) {
+		} catch (error) {
 			throw new Error(
 				`Could not read the pinned Datadog Agent version from ${pinPath}: ` +
-					`${error?.message ?? error}. This file is required: builds must not ` +
-					`silently float to whatever upstream released most recently.`
+					`${errorMessage(error)}. This file is required: builds must not ` +
+					`silently float to whatever upstream released most recently.`,
+				{ cause: error }
 			);
 		}
 		const version = raw.trim();
@@ -95,12 +96,12 @@ export class DatadogAgentDownloader {
 		let response;
 		try {
 			response = await fetch(refUrl);
-		} catch (error: any) {
+		} catch (error) {
 			// A network failure is not a missing tag; do not block the build on it, since the
 			// clone will surface a real error moments later.
 			logger.warn(
 				`Could not verify that Datadog Agent tag ${version} exists ` +
-					`(${error?.message ?? error}). Continuing; the clone will fail if it does not.`
+					`(${errorMessage(error)}). Continuing; the clone will fail if it does not.`
 			);
 			return;
 		}
@@ -175,7 +176,7 @@ export class DatadogAgentDownloader {
 
 		logger.info("Cloning Datadog Agent repository...");
 
-		const { execSync } = await import("child_process");
+		const { execSync } = await import("node:child_process");
 
 		// Tracked outside the try/catch: a clone that succeeds but lands on the wrong ref
 		// must be fatal, not a reason to retry via tarball. Asserting inside the try would
@@ -281,7 +282,7 @@ export class DatadogAgentDownloader {
 		const missing: string[] = [];
 
 		logger.debug(`checkBuildDependencies PATH: ${process.env.PATH}`);
-		const { execSync } = await import("child_process");
+		const { execSync } = await import("node:child_process");
 		for (const tool of platformRequirements) {
 			try {
 				execSync(`which ${tool}`, { stdio: "ignore" });

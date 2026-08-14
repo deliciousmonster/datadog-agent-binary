@@ -17,9 +17,10 @@ export class MacOSBuilder extends BaseBuilder {
 		try {
 			await this.executeCommand("xcode-select -p");
 			logger.debug("Xcode command line tools found");
-		} catch {
+		} catch (error) {
 			throw new Error(
-				"Xcode command line tools not found. Run: xcode-select --install"
+				"Xcode command line tools not found. Run: xcode-select --install",
+				{ cause: error }
 			);
 		}
 	}

@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
-import * as path from "path";
+import * as path from "node:path";
 import {
 	DatadogAgentBuilder,
 	BinaryManager,
 	DatadogAgentDownloader,
 } from "./index.js";
-import { logger } from "./logger.js";
+import { errorMessage, logger } from "./logger.js";
 import { Platform, getAllSupportedPlatforms } from "./platform.js";
 
 const program = new Command();
@@ -49,21 +49,18 @@ program
 				// Report every binary. A summary that prints one path when two were built
 				// reads as a successful single-binary build, which is how a missing
 				// trace-agent went unnoticed through an entire release.
-				const produced = Object.entries(result.outputPaths ?? {});
-				if (produced.length > 0) {
-					for (const [kind, outputPath] of produced) {
-						logger.info(`✅ Successful (${kind}): ${outputPath}`);
-					}
-				} else {
-					logger.info(`✅ Successful: ${result.outputPath}`);
+				for (const [kind, outputPath] of Object.entries(
+					result.outputPaths ?? {}
+				)) {
+					logger.info(`Successful (${kind}): ${outputPath}`);
 				}
 				process.exit(0);
 			} else {
-				logger.error(`❌ Failed: ${result.error}`);
+				logger.error(`Failed: ${result.error}`);
 				process.exit(1);
 			}
-		} catch (error: any) {
-			logger.error(`Build failed: ${error.message}`);
+		} catch (error) {
+			logger.error(`Build failed: ${errorMessage(error)}`);
 			process.exit(1);
 		}
 	});
@@ -92,8 +89,8 @@ program
 			logger.info(
 				`Pinned Datadog Agent version: ${await downloader.getPinnedVersion()}`
 			);
-		} catch (error: any) {
-			logger.error(`Failed to read the pinned version: ${error.message}`);
+		} catch (error) {
+			logger.error(`Failed to read the pinned version: ${errorMessage(error)}`);
 			process.exit(1);
 		}
 
@@ -101,9 +98,9 @@ program
 			logger.info(
 				`Latest upstream Datadog Agent version: ${await downloader.getLatestVersion()}`
 			);
-		} catch (error: any) {
+		} catch (error) {
 			logger.warn(
-				`Failed to fetch the latest upstream version: ${error.message}`
+				`Failed to fetch the latest upstream version: ${errorMessage(error)}`
 			);
 		}
 	});
@@ -114,14 +111,9 @@ program
 		"Install every Datadog Agent binary (core agent and trace-agent) for the current platform"
 	)
 	.option("-v, --version <version>", "Specific version to install")
-	.option("-f, --force", "Force reinstall even if already installed")
 	.action(async (options) => {
 		try {
 			const manager = new BinaryManager();
-
-			if (options.force) {
-				logger.info("Force reinstall requested...");
-			}
 
 			// Every binary this platform ships, not just the core agent. ensureBinary()
 			// takes the kind first and the version second; commander types its options as
@@ -133,14 +125,14 @@ program
 					options.version
 				);
 				logger.info(
-					`✅ Datadog ${descriptor.kind} agent installed: ${binaryPath}`
+					`Datadog ${descriptor.kind} agent installed: ${binaryPath}`
 				);
 			}
 			logger.info(
 				"Run with: datadog-agent <command> / datadog-trace-agent <command>"
 			);
-		} catch (error: any) {
-			logger.error(`Installation failed: ${error.message}`);
+		} catch (error) {
+			logger.error(`Installation failed: ${errorMessage(error)}`);
 			logger.info("You can build from source using: datadog-agent-build build");
 			process.exit(1);
 		}

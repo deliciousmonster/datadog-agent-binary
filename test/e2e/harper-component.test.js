@@ -13,11 +13,12 @@
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const child_process = require("node:child_process");
 const { EventEmitter } = require("node:events");
+
+const { findFreePort } = require("../support/find-free-port.js");
 
 function findRepoRoot(start) {
 	let dir = start;
@@ -130,18 +131,6 @@ function createStubPlatformPackage(packageDir) {
 		resolved[binary.kind] = binaryPath;
 	}
 	return resolved;
-}
-
-/** A port nothing is listening on, so the trace launcher's already-running probe says no. */
-function findFreePort() {
-	return new Promise((resolve, reject) => {
-		const server = net.createServer();
-		server.once("error", reject);
-		server.listen(0, "127.0.0.1", () => {
-			const { port } = server.address();
-			server.close(() => resolve(port));
-		});
-	});
 }
 
 function runToCompletion(child) {

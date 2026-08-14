@@ -1,4 +1,4 @@
-import { Platform } from "./platform";
+import type { Platform } from "./platform.js";
 
 export type Architecture = "x86_64" | "arm64";
 export type OS = "linux" | "windows" | "macos";
@@ -84,8 +84,6 @@ export interface AgentBinaryDescriptor {
 export interface BuildResult {
 	success: boolean;
 	platform: Platform;
-	/** Path to the core agent binary. Retained for backwards compatibility. */
-	outputPath?: string;
 	/** Every binary produced by this build, keyed by kind. */
 	outputPaths?: Partial<Record<AgentBinaryKind, string>>;
 	error?: string;
