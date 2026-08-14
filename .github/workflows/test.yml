@@ -35,7 +35,10 @@ jobs:
         run: npm ci
 
       - name: Check formatting
-        run: npm run lint:check
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
 
       # Both configs. The root tsconfig excludes **/*.test.ts, and the
       # integration suite runs under type stripping, which erases annotations
@@ -79,8 +82,16 @@ jobs:
   # (`npx harper-integration-test-setup-loopback`, which wants sudo) before the
   # harness can hand out addresses. Linux routes all of 127.0.0.0/8 by default.
   integration:
-    name: integration (harper v5, ubuntu)
+    name: integration (harper v5, ubuntu, node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both field versions: Harper v5's engines floor (.nvmrc's 22.18) and
+        # the node:24-trixie deploy image. An explicit matrix instead of
+        # node-version-file, because that key reads one version and would pin
+        # this job to the floor while deploys run on 24.
+        node: ["22.18", "24"]
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -88,10 +99,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          # .nvmrc holds the one CI Node version (Harper v5's engines floor).
-          # The deploy image is node:24-trixie; the unit-test matrix above
-          # keeps 24 covered.
-          node-version-file: ".nvmrc"
+          node-version: ${{ matrix.node }}
           cache: "npm"
 
       - name: Install dependencies

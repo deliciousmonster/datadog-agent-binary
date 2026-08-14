@@ -42,8 +42,20 @@ const WINDOWS_BINARIES = [
 // What each generated platform package's os/cpu MUST be (Node's values), and
 // what its index.js must resolve.
 const EXPECTED = {
-	"linux-x86_64": { os: "linux", cpu: "x64", binaries: UNIX_BINARIES },
-	"linux-arm64": { os: "linux", cpu: "arm64", binaries: UNIX_BINARIES },
+	// libc on the Linux entries: CGO_ENABLED=1 links glibc, so npm must skip
+	// these packages on musl instead of installing a binary that dies ENOENT.
+	"linux-x86_64": {
+		os: "linux",
+		cpu: "x64",
+		libc: ["glibc"],
+		binaries: UNIX_BINARIES,
+	},
+	"linux-arm64": {
+		os: "linux",
+		cpu: "arm64",
+		libc: ["glibc"],
+		binaries: UNIX_BINARIES,
+	},
 	"macos-arm64": { os: "darwin", cpu: "arm64", binaries: UNIX_BINARIES },
 	"windows-x86_64": { os: "win32", cpu: "x64", binaries: WINDOWS_BINARIES },
 };
@@ -140,6 +152,30 @@ test("all platform packages are pinned to the main package version", () => {
 	}
 	for (const [dep, range] of Object.entries(mainPkg.optionalDependencies)) {
 		assert.equal(range, mainPkg.version, `${dep} should be ${mainPkg.version}`);
+	}
+});
+
+test("linux packages declare libc glibc; everywhere else the field is absent", () => {
+	const generated = readGenerated();
+	for (const [name, expected] of Object.entries(EXPECTED)) {
+		const pkg = generated[name];
+		assert.ok(pkg, `missing generated package: ${name}`);
+		if (expected.libc) {
+			assert.deepEqual(
+				pkg.libc,
+				expected.libc,
+				`${name}: libc must be ${JSON.stringify(expected.libc)}; without it npm ` +
+					`installs the glibc-linked binary on musl and every spawn dies ENOENT`
+			);
+		} else {
+			// On non-Linux the field is meaningless, and npm skips an optional dep
+			// whose libc does not match the host, so a stray value here would make
+			// the package uninstallable everywhere.
+			assert.ok(
+				!("libc" in pkg),
+				`${name}: libc must be absent on non-Linux packages`
+			);
+		}
 	}
 });
 
