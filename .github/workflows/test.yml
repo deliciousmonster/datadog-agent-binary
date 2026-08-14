@@ -23,10 +23,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node }}
           cache: "npm"
@@ -77,13 +77,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          # The image the component deploys onto is node:24-trixie.
-          node-version: "24"
+          # .nvmrc holds the one CI Node version (Harper v5's engines floor).
+          # The deploy image is node:24-trixie; the unit-test matrix above
+          # keeps 24 covered.
+          node-version-file: ".nvmrc"
           cache: "npm"
 
       - name: Install dependencies
@@ -92,6 +94,12 @@ jobs:
       - name: Build TypeScript
         # The suite resolves binaries through dist/binary-manager.js.
         run: npm run build
+
+      # harper is not a devDependency: `npm test` must stay hermetic, and the
+      # unit tests never touch a real Harper. This suite boots one, so it is
+      # installed here; --no-save keeps package.json out of the diff.
+      - name: Install harper for the integration suite
+        run: npm i --no-save harper@^5.2.1
 
       # The Datadog-binary suite skips itself with a reason when the platform
       # package has no built binaries, so this passes on a checkout that has

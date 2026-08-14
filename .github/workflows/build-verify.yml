@@ -44,7 +44,6 @@ on:
         required: false
 
 env:
-  NODE_VERSION: "22"
   # Must satisfy the go.mod `go` directive of the release pinned in
   # .datadog-agent-version. Keep in step with build-release.yml.
   GO_VERSION: "1.25.8"
@@ -63,21 +62,21 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: ".nvmrc"
           cache: "npm"
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           # dda is a Python CLI and the agent's build system is invoke-based, so
           # Python builds EITHER binary. Unrelated to the `python` build tag, which
@@ -257,3 +256,23 @@ jobs:
           [ "$code" = "200" ] || { echo "::error::receiver rejected a valid v0.4 payload (HTTP $code)."; exit 1; }
 
           echo "OK: the trace-agent bound 8126, advertised /v0.4/traces, and accepted a span."
+
+      # harper is not a devDependency: `npm test` must stay hermetic, and the
+      # unit tests never touch a real Harper. The integration suite boots one,
+      # so it is installed here; --no-save keeps package.json out of the diff.
+      - name: Install harper for the integration suite
+        if: runner.os == 'Linux'
+        run: npm i --no-save harper@^5.2.1
+
+      # test.yml runs this suite against a checkout with no binaries, so its
+      # Datadog-binary tests skip themselves. This is the one place the
+      # binaries were just built, so those tests finally run against real
+      # output instead of a stub. After the receiver check on purpose: the
+      # direct assertions above localize a failure better than a suite log.
+      #
+      # Linux only, same reasoning as test.yml: the suite skips win32, and
+      # macOS needs sudo loopback aliases before the harness can hand out
+      # addresses.
+      - name: Run the integration suite against the built binaries
+        if: runner.os == 'Linux'
+        run: npm run test:integration

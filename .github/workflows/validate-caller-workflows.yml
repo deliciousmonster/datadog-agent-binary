@@ -1,0 +1,37 @@
+name: Validate caller workflows
+
+# Thin caller of HarperFast/ai-review-prompts' `_validate-caller-workflows.yml`,
+# the same guard every other repo in the org runs. It checks any
+# `.github/workflows/claude-*.yml` / `gemini-*.yml` caller files for:
+#
+#   * Shadow jobs; a non-`uses:` job (or a `uses:` outside `HarperFast/`)
+#     alongside the legit reusable call would run with the caller's
+#     permissions WITHOUT going through the auth gate. Fail-closed.
+#   * Mutable refs in `uses:` or `with.ai-review-prompts-ref`; both
+#     must pin to a 40-char SHA.
+#
+# This repo has no AI caller workflows today, and the validator exits 0
+# when it finds none. It is wired up now so the FIRST caller someone adds
+# is validated from its first PR instead of after an incident.
+#
+# Runs on every PR and every push to `main`, no `paths:` filter.
+# A required status check that only fires on workflow-touching PRs
+# stays permanently pending on every other PR (GitHub has no
+# "required if it runs" semantic), and the validator's runtime is
+# trivial, so unconditional firing is the right trade-off.
+#
+# Make this `validate` job a REQUIRED status check on `main`.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    uses: HarperFast/ai-review-prompts/.github/workflows/_validate-caller-workflows.yml@224c2adcfdb408d68c7ca48eb618623c990a96ad # main 2026-07-28 (#80 week-of-07-20 calibration: producing-side guard verification; on 82c9484)
+    with:
+      # Same SHA as the `uses:` ref above; the reusable uses this to
+      # check out the validator script at the matching version. Same
+      # SHA-twice pattern as the other org repos' caller workflows.
+      ai-review-prompts-ref: 224c2adcfdb408d68c7ca48eb618623c990a96ad
