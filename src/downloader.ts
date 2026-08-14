@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as tar from 'tar';
 import { DownloadConfig } from './types.js';
 import { errorMessage, logger } from './logger.js';
+import { OS_BUILDS } from './builder.js';
 import { Platform } from './platform.js';
 
 const DATADOG_AGENT_REPO = 'https://github.com/DataDog/datadog-agent';
@@ -255,13 +256,7 @@ export class DatadogAgentDownloader {
 	async checkBuildDependencies(platform: Platform): Promise<void> {
 		logger.info(`Checking build dependencies for ${platform.getName()}...`);
 
-		const requirements: Record<string, string[]> = {
-			linux: ['go', 'make', 'gcc', 'git'],
-			macos: ['go', 'make', 'gcc', 'git', 'xcode-select'],
-			windows: ['go', 'make', 'gcc', 'git'],
-		};
-
-		const platformRequirements = requirements[platform.getOS()] || [];
+		const platformRequirements = OS_BUILDS[platform.getOS()]?.requires ?? [];
 		const missing: string[] = [];
 
 		logger.debug(`checkBuildDependencies PATH: ${process.env.PATH}`);

@@ -29,3 +29,10 @@ export const logger = new ConsoleLogger();
 export function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
+
+/**
+ * Printed wherever a binary could not be resolved. One constant because the launcher and
+ * the CLI both say it, and an operator who meets two spellings of the same instruction
+ * has to work out whether they mean different things.
+ */
+export const BUILD_FROM_SOURCE_HINT = 'You can build from source using: datadog-agent-build build';

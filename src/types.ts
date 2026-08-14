@@ -8,7 +8,6 @@ export interface BuildConfig {
 	version?: string;
 	outputDir: string;
 	sourceDir: string;
-	buildArgs?: string[];
 }
 
 export interface DownloadConfig {

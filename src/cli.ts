@@ -3,7 +3,7 @@
 import { Command } from 'commander';
 import * as path from 'node:path';
 import { DatadogAgentBuilder, BinaryManager, DatadogAgentDownloader } from './index.js';
-import { errorMessage, logger } from './logger.js';
+import { errorMessage, logger, BUILD_FROM_SOURCE_HINT } from './logger.js';
 import { Platform, getAllSupportedPlatforms } from './platform.js';
 
 const program = new Command();
@@ -15,7 +15,6 @@ program
 	.description('Build Datadog Agent for current platform')
 	.option('--datadog-version <version>', 'Datadog Agent version to build')
 	.option('-o, --output <dir>', 'Output directory', './build')
-	.option('--build-args <args>', 'Additional build arguments')
 	.option('-d, --debug', 'Enable debug logging')
 	.action(async (options) => {
 		if (options.debug) {
@@ -31,7 +30,6 @@ program
 			const result = await builder.buildForCurrentPlatform({
 				version: options.datadogVersion,
 				outputDir,
-				buildArgs: options.buildArgs?.split(' '),
 			});
 
 			logger.info(`\nBuild Summary:`);
@@ -106,7 +104,7 @@ program
 			logger.info('Run with: datadog-agent <command> / datadog-trace-agent <command>');
 		} catch (error) {
 			logger.error(`Installation failed: ${errorMessage(error)}`);
-			logger.info('You can build from source using: datadog-agent-build build');
+			logger.info(BUILD_FROM_SOURCE_HINT);
 			process.exit(1);
 		}
 	});

@@ -28,6 +28,7 @@ import os from 'node:os';
 import zlib from 'node:zlib';
 import { execFileSync } from 'node:child_process';
 import { SUPPORTED_PLATFORMS } from '../dist/platform.js';
+import { platformPackageName } from '../dist/package-identity.js';
 import { isCliEntry } from './cli-entry.js';
 
 const REPO_ROOT = path.join(import.meta.dirname, '..');
@@ -79,7 +80,7 @@ function parseArgs(argv) {
 export function expectedPackages() {
 	return SUPPORTED_PLATFORMS.map((platform) => ({
 		platform: platform.getName(),
-		name: `${PACKAGE_NAME}-${platform.getName()}`,
+		name: platformPackageName(platform.getName()),
 		// From the same descriptors the build and runtime use; a hand-written list
 		// would let a descriptor change pass unnoticed.
 		binaries: platform.getBinaries().map((b) => b.outputName),

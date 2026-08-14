@@ -4,14 +4,16 @@ import { AgentBinaryDescriptor, AgentBinaryKind, BuildConfig, BuildResult, OS } 
 import { errorMessage, logger } from './logger.js';
 
 /**
- * Everything that varies between the three build hosts: the label in the log line and
- * the `GOOS` the toolchain cross-compiles for. Data rather than a subclass per OS,
- * because a subclass whose whole body is one string is a place for the two to drift.
+ * Everything that varies between the three build hosts: the log label, the `GOOS` the
+ * toolchain cross-compiles for, and the tools that must be on PATH. Data rather than a
+ * subclass per OS, because a subclass whose whole body is one string is a place for the
+ * two to drift; `requires` lives here for the same reason, having previously been a
+ * second OS-keyed table inside the downloader.
  */
-const OS_BUILDS: Record<OS, { label: string; goos: string }> = {
-	linux: { label: 'Linux', goos: 'linux' },
-	macos: { label: 'macOS', goos: 'darwin' },
-	windows: { label: 'Windows', goos: 'windows' },
+export const OS_BUILDS: Record<OS, { label: string; goos: string; requires: string[] }> = {
+	linux: { label: 'Linux', goos: 'linux', requires: ['go', 'make', 'gcc', 'git'] },
+	macos: { label: 'macOS', goos: 'darwin', requires: ['go', 'make', 'gcc', 'git', 'xcode-select'] },
+	windows: { label: 'Windows', goos: 'windows', requires: ['go', 'make', 'gcc', 'git'] },
 };
 
 export function createBuilder(config: BuildConfig): AgentBuilder {

@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import { BinaryManager } from './binary-manager.js';
-import { errorMessage, logger } from './logger.js';
+import { errorMessage, logger, BUILD_FROM_SOURCE_HINT } from './logger.js';
 import { Platform } from './platform.js';
 import { AgentBinaryKind } from './types.js';
 
@@ -395,7 +395,7 @@ export async function launchAgent(
 					`indicates a modified or unexpected call path.`
 			);
 		} else if (!(error instanceof LaunchPreflightError)) {
-			logger.info('You can build from source using: datadog-agent-build build');
+			logger.info(BUILD_FROM_SOURCE_HINT);
 		}
 		process.exit(1);
 	}

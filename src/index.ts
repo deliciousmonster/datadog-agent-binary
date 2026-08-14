@@ -9,7 +9,6 @@ import { Platform } from './platform.js';
 export interface BuildOptions {
 	version?: string;
 	outputDir?: string;
-	buildArgs?: string[];
 }
 
 export class DatadogAgentBuilder {
@@ -50,7 +49,6 @@ export class DatadogAgentBuilder {
 			version,
 			outputDir,
 			sourceDir,
-			buildArgs: options.buildArgs,
 		};
 
 		return createBuilder(config).build();
