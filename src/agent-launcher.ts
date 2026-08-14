@@ -249,10 +249,9 @@ async function isTraceReceiverHealthy(port: number, timeoutMs = 1000): Promise<b
  */
 function isPortBound(port: number, timeoutMs = 250): Promise<boolean> {
 	return new Promise((resolve) => {
-		let settled = false;
+		// A later event after the first is a no-op: a promise settles once and destroy()
+		// on a destroyed socket does nothing.
 		const finish = (bound: boolean) => {
-			if (settled) return;
-			settled = true;
 			socket.destroy();
 			resolve(bound);
 		};
