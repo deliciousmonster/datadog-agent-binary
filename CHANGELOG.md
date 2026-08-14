@@ -5,6 +5,22 @@ Datadog Agent version they ship.
 
 ## Unreleased
 
+### Changed: the package is ESM-only (breaking)
+
+`package.json` now declares `"type": "module"` and `dist/` is compiled as ES modules.
+Every known consumer is an ESM Harper component and is unaffected: the exports map,
+`main`, the bin names, and the engines floor are all unchanged.
+
+- **`require()` keeps working on the supported engines.** Node loads an ES module with
+  a synchronous module graph through `require()` across the whole engines floor
+  (`^22.18.0 || >=24.0.0`), so a CommonJS consumer such as the Harper server still gets
+  the full named API. A unit test `require()`s the built entry point on every run, so
+  the graph going asynchronous breaks CI instead of a consumer.
+- **The platform packages are untouched and stay CommonJS.** Their manifests carry no
+  `"type"` field, nothing about them is republished, and the main package keeps loading
+  them via `await import()`, so an already-installed platform package keeps resolving
+  under this version.
+
 ### Added: the trace-agent (APM receiver)
 
 Every platform package now ships the Datadog **trace-agent** next to the core agent.
