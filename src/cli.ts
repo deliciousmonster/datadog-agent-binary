@@ -7,7 +7,7 @@ import {
 	BinaryManager,
 	DatadogAgentDownloader,
 } from "./index.js";
-import { logger } from "./logger.js";
+import { errorMessage, logger } from "./logger.js";
 import { Platform, getAllSupportedPlatforms } from "./platform.js";
 
 const program = new Command();
@@ -59,8 +59,8 @@ program
 				logger.error(`❌ Failed: ${result.error}`);
 				process.exit(1);
 			}
-		} catch (error: any) {
-			logger.error(`Build failed: ${error.message}`);
+		} catch (error) {
+			logger.error(`Build failed: ${errorMessage(error)}`);
 			process.exit(1);
 		}
 	});
@@ -89,8 +89,8 @@ program
 			logger.info(
 				`Pinned Datadog Agent version: ${await downloader.getPinnedVersion()}`
 			);
-		} catch (error: any) {
-			logger.error(`Failed to read the pinned version: ${error.message}`);
+		} catch (error) {
+			logger.error(`Failed to read the pinned version: ${errorMessage(error)}`);
 			process.exit(1);
 		}
 
@@ -98,9 +98,9 @@ program
 			logger.info(
 				`Latest upstream Datadog Agent version: ${await downloader.getLatestVersion()}`
 			);
-		} catch (error: any) {
+		} catch (error) {
 			logger.warn(
-				`Failed to fetch the latest upstream version: ${error.message}`
+				`Failed to fetch the latest upstream version: ${errorMessage(error)}`
 			);
 		}
 	});
@@ -131,8 +131,8 @@ program
 			logger.info(
 				"Run with: datadog-agent <command> / datadog-trace-agent <command>"
 			);
-		} catch (error: any) {
-			logger.error(`Installation failed: ${error.message}`);
+		} catch (error) {
+			logger.error(`Installation failed: ${errorMessage(error)}`);
 			logger.info("You can build from source using: datadog-agent-build build");
 			process.exit(1);
 		}

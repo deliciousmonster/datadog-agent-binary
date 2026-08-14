@@ -1,9 +1,9 @@
-import {
+import type {
 	AgentBinaryDescriptor,
 	AgentBinaryKind,
 	Architecture,
 	OS,
-} from "./types";
+} from "./types.js";
 
 export abstract class Platform {
 	protected readonly arch: Architecture;

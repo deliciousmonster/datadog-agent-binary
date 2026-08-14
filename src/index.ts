@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { DatadogAgentDownloader } from "./downloader.js";
 import { createBuilder } from "./builders/index.js";
-import { logger } from "./logger.js";
+import { errorMessage, logger } from "./logger.js";
 import { BuildConfig, BuildResult } from "./types.js";
 import { Platform } from "./platform.js";
 
@@ -82,8 +82,8 @@ export class DatadogAgentBuilder {
 				logger.debug(
 					`Created GOPATH symlink: ${symlinkPath} -> ${relativePath}`
 				);
-			} catch (error: any) {
-				logger.error(`Failed to create symlink: ${error.message}`);
+			} catch (error) {
+				logger.error(`Failed to create symlink: ${errorMessage(error)}`);
 				throw error;
 			}
 		}

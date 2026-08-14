@@ -1,4 +1,4 @@
-import { Platform } from "./platform";
+import type { Platform } from "./platform.js";
 
 export type Architecture = "x86_64" | "arm64";
 export type OS = "linux" | "windows" | "macos";

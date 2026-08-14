@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { logger } from "./logger.js";
+import { errorMessage, logger } from "./logger.js";
 import { Platform } from "./platform.js";
 import { PACKAGE_NAME, platformPackageName } from "./package-identity.js";
 import { AgentBinaryDescriptor, AgentBinaryKind } from "./types.js";
@@ -145,11 +145,11 @@ export class BinaryManager {
 					`is missing at ${binaryPath}.`
 			);
 			return null;
-		} catch (error: any) {
+		} catch (error) {
 			// Usually the optional dependency was skipped for this platform/arch, but it can
 			// also hide a real load failure, so surface the reason.
 			logger.warn(
-				`Could not load platform package ${packageName}: ${error?.message ?? error}. ` +
+				`Could not load platform package ${packageName}: ${errorMessage(error)}. ` +
 					`If this platform should be supported, confirm the optional dependency ` +
 					`is installed (npm may skip it on os/cpu mismatch or with --no-optional).`
 			);

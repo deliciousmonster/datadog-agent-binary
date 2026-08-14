@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import { BinaryManager } from "./binary-manager.js";
-import { logger } from "./logger.js";
+import { errorMessage, logger } from "./logger.js";
 import { Platform } from "./platform.js";
 import { AgentBinaryKind } from "./types.js";
 
@@ -418,8 +418,8 @@ export async function launchAgent(
 			logger.error(`Binary path: ${binaryPath}`);
 			process.exit(1);
 		});
-	} catch (error: any) {
-		const message = String(error?.message ?? error);
+	} catch (error) {
+		const message = errorMessage(error);
 		logger.error(`Failed to run ${processName}: ${message}`);
 
 		// Harper's spawn gate throws synchronously with "Command <cmd> is not allowed"
