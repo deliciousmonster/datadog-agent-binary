@@ -1,3 +1,4 @@
+import { mkdir, stat, symlink } from 'node:fs/promises';
 import * as path from 'node:path';
 import { DatadogAgentDownloader } from './downloader.js';
 import { createBuilder } from './builder.js';
@@ -36,7 +37,6 @@ export class DatadogAgentBuilder {
 
 		await this.downloader.downloadSource({
 			version,
-			platform,
 			extractTo: sourceDir,
 		});
 
@@ -55,8 +55,6 @@ export class DatadogAgentBuilder {
 	}
 
 	private async setupGoPathStructure(goPath: string, sourceDir: string): Promise<void> {
-		const { mkdir, symlink, stat } = await import('node:fs/promises');
-
 		const goSrcDir = path.join(goPath, 'src', 'github.com', 'DataDog');
 		await mkdir(goSrcDir, { recursive: true });
 

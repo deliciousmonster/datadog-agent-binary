@@ -4,6 +4,26 @@ import type { AgentBinaryDescriptor, AgentBinaryKind, Architecture, OS } from '.
 const ARCHITECTURES: Partial<Record<string, Architecture>> = { x64: 'x86_64', arm64: 'arm64' };
 const OPERATING_SYSTEMS: Partial<Record<string, OS>> = { linux: 'linux', darwin: 'macos', win32: 'windows' };
 
+/**
+ * The same bijection read the other way: this package's labels to the `process.platform` /
+ * `process.arch` values npm compares `os` and `cpu` against. Derived rather than written
+ * out, because it was previously hand-inverted in create-platform-packages.js and encoded
+ * a third time as value sets in publish-matrix.js. Three copies of one mapping is how a
+ * package shipped `os: ["macos"], cpu: ["x86_64"]` -- our vocabulary, which npm can never
+ * match, so the optional dependency was skipped in silence and the consumer got no binaries.
+ */
+const invert = <T extends string>(table: Partial<Record<string, T>>): Record<T, string> =>
+	Object.fromEntries(Object.entries(table).map(([node, ours]) => [ours, node])) as Record<T, string>;
+
+export const NODE_PLATFORMS: Record<OS, string> = invert(OPERATING_SYSTEMS);
+export const NODE_ARCHES: Record<Architecture, string> = invert(ARCHITECTURES);
+
+/** What publish-matrix checks a published manifest's `os`/`cpu` against. */
+export const NODE_FIELDS: ReadonlyArray<readonly [string, string, ReadonlySet<string>]> = [
+	['os', 'platform', new Set(Object.values(NODE_PLATFORMS))],
+	['cpu', 'arch', new Set(Object.values(NODE_ARCHES))],
+];
+
 export class Platform {
 	constructor(
 		private readonly os: OS,

@@ -1,7 +1,6 @@
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import * as tar from 'tar';
 import { DownloadConfig } from './types.js';
 import { errorMessage, logger } from './logger.js';
 import { OS_BUILDS } from './builder.js';
@@ -170,10 +169,17 @@ export class DatadogAgentDownloader {
 
 		logger.info('Cloning Datadog Agent repository...');
 
-		// Tracked outside the try/catch: a clone that succeeds but lands on the wrong ref
-		// must be fatal, not a reason to retry via tarball. Asserting inside the try would
-		// let the catch swallow it and silently produce the same mislabelled artifact.
-		let clonedVersion: string | undefined;
+		// A clone failure is fatal. A tarball fallback used to live here, and it was worse than
+		// no fallback: it was the only route that reached the check below with nothing to
+		// check, so an unverified tree built and published in silence. Its own repair could not
+		// work either -- `git init` then `git tag <version>` on a directory with no commits
+		// exits 128 ("Failed to resolve 'HEAD' as a valid ref"), inside a swallowing catch, so
+		// the `git describe` the build's ldflags read found nothing regardless. Nothing it
+		// covered is uncovered now: a tag that does not exist upstream throws from
+		// assertRefExists() before this runs, git is a hard requirement in OS_BUILDS.requires
+		// on every platform, and a fetch over the same network as the failed clone fares no
+		// better. It also cost consumers six packages (tar and five transitives).
+		let described: string;
 
 		try {
 			execSync(`git clone --depth 1 --branch ${version} ${DATADOG_AGENT_REPO} "${extractTo}"`, {
@@ -184,52 +190,19 @@ export class DatadogAgentDownloader {
 				encoding: 'utf8',
 				stdio: ['inherit', 'pipe', 'inherit'],
 			});
-			clonedVersion = gitOutput.trim();
-			logger.info(`Repository cloned at version: ${clonedVersion}`);
-		} catch {
-			logger.warn('Git clone failed, falling back to tarball download...');
-
-			const tarballUrl = `${DATADOG_AGENT_REPO}/archive/refs/tags/${version}.tar.gz`;
-			const tarballPath = path.join(path.dirname(extractTo), `datadog-agent-${version}.tar.gz`);
-
-			logger.debug(`Downloading from: ${tarballUrl}`);
-
-			const response = await fetch(tarballUrl);
-			if (!response.ok) {
-				throw new Error(`Failed to download source: ${response.statusText}`);
-			}
-
-			await fs.writeFile(tarballPath, Buffer.from(await response.arrayBuffer()));
-
-			logger.info('Extracting source code...');
-
-			await fs.mkdir(extractTo, { recursive: true });
-
-			await tar.extract({
-				file: tarballPath,
-				cwd: extractTo,
-				strip: 1,
+			described = gitOutput.trim();
+			logger.info(`Repository cloned at version: ${described}`);
+		} catch (error) {
+			throw new Error(`Failed to clone ${DATADOG_AGENT_REPO} at ${version}: ${errorMessage(error)}`, {
+				cause: error,
 			});
-
-			await fs.unlink(tarballPath);
-
-			// The build's ldflags read the version from `git describe`; a tarball carries no
-			// git metadata, so synthesize it.
-			try {
-				execSync(`git -C "${extractTo}" init`, { stdio: 'ignore' });
-				execSync(`git -C "${extractTo}" tag ${version}`, { stdio: 'ignore' });
-			} catch {
-				// Best effort; the version also reaches the build through the environment.
-			}
 		}
 
 		// A shallow clone of a tag should describe as exactly that tag. If it does not, the
 		// working tree is not the version we believe we are building and every artifact from
 		// it would be mislabelled. That is how a package published as 7.75.5 came to contain
 		// agent 7.79.2.
-		if (clonedVersion !== undefined) {
-			this.assertCheckoutMatches(version, clonedVersion);
-		}
+		this.assertCheckoutMatches(version, described);
 
 		logger.info(`Source extracted to: ${extractTo}`);
 		return extractTo;

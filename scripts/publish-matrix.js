@@ -24,10 +24,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
-import zlib from 'node:zlib';
-import { execFileSync } from 'node:child_process';
-import { SUPPORTED_PLATFORMS } from '../dist/platform.js';
+import { SUPPORTED_PLATFORMS, NODE_FIELDS } from '../dist/platform.js';
 import { platformPackageName } from '../dist/package-identity.js';
 import { isCliEntry } from './cli-entry.js';
 
@@ -40,15 +37,6 @@ const mainPkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'),
 export const PACKAGE_NAME = mainPkg.name;
 export const PACKAGE_VERSION = mainPkg.version;
 const OPTIONAL_DEPS = mainPkg.optionalDependencies ?? {};
-
-// npm matches os/cpu against process.platform / process.arch. Anything outside
-// these sets, our own "macos"/"windows"/"x86_64" included, can never install.
-const NODE_OS = new Set(['linux', 'darwin', 'win32']);
-const NODE_CPU = new Set(['x64', 'arm64']);
-const NODE_FIELDS = [
-	['os', 'platform', NODE_OS],
-	['cpu', 'arch', NODE_CPU],
-];
 
 function parseArgs(argv) {
 	const opts = {
@@ -149,27 +137,46 @@ async function fetchPackument(name, retries) {
 	return null;
 }
 
-/** Download a tarball and list its `package/bin/` entries. */
-async function listTarballBinaries(tarballUrl) {
-	const response = await fetch(tarballUrl);
-	if (!response.ok) throw new Error(`HTTP ${response.status} for ${tarballUrl}`);
-	const gz = Buffer.from(await response.arrayBuffer());
-	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ddab-matrix-'));
-	try {
-		const tarPath = path.join(tmp, 'pkg.tar');
-		fs.writeFileSync(tarPath, zlib.gunzipSync(gz));
-		// `tar -t` rather than extracting: >150 MB per platform, and only the entry
-		// names matter.
-		const listing = execFileSync('tar', ['-tf', tarPath], { encoding: 'utf8' });
-		return listing
-			.split('\n')
-			.filter((line) => /^package\/bin\/.+/.test(line))
-			.map((line) => line.replace('package/bin/', '').trim())
-			.filter(Boolean)
-			.sort();
-	} finally {
-		fs.rmSync(tmp, { recursive: true, force: true });
+const JSDELIVR_API = 'https://data.jsdelivr.com/v1/packages/npm';
+
+/**
+ * List a published package's `bin/` entries.
+ *
+ * This used to download the tarball, gunzip it to a temp file and shell out to `tar -tf`:
+ * roughly 70 MB per platform, 280 MB per run, to learn four filenames. jsDelivr indexes
+ * npm and serves the file tree as JSON, which is the same answer for about 4 KB, with no
+ * temp files and no dependency on a system `tar`.
+ *
+ * It is a derived view rather than the artifact itself, and it indexes on demand, so a
+ * just-published version can 404 here briefly. That is deliberately not swallowed: the
+ * caller records it and verify() reports it as an unproven release. The authoritative
+ * check is `--local`, which reads the staged directory before publish -- the last moment
+ * the answer can still change anything.
+ */
+async function listPublishedBinaries(name, version) {
+	const url = `${JSDELIVR_API}/${name}@${version}?structure=flat`;
+	const response = await fetch(url, { headers: { accept: 'application/json' } });
+	if (!response.ok) throw new Error(`HTTP ${response.status} from jsDelivr for ${name}@${version}`);
+
+	const body = await response.json();
+	if (!Array.isArray(body.files)) throw new Error(`jsDelivr returned no file list for ${name}@${version}`);
+
+	const binaries = body.files
+		.map((file) => file.name)
+		.filter((entry) => entry.startsWith('/bin/'))
+		.map((entry) => entry.slice('/bin/'.length))
+		.filter(Boolean)
+		.sort();
+
+	// Every platform package has a bin/. An empty result therefore means the response
+	// shape changed, not that the package shipped no binaries -- and the difference
+	// matters, because returning [] here would be reported as "missing trace-agent",
+	// blaming the release for a defect in this check.
+	if (binaries.length === 0) {
+		throw new Error(`jsDelivr listed ${body.files.length} files but no bin/ entries for ${name}@${version}`);
 	}
+
+	return binaries;
 }
 
 async function readRegistry(expected, version, deep, retries) {
@@ -187,7 +194,7 @@ async function readRegistry(expected, version, deep, retries) {
 	let files = null;
 	if (deep) {
 		try {
-			files = await listTarballBinaries(manifest.dist.tarball);
+			files = await listPublishedBinaries(expected.name, version);
 		} catch (error) {
 			expected.deepError = error.message;
 		}
@@ -234,6 +241,18 @@ export function verify(rows) {
 				`${label}: version ${row.version} does not match the main package ` +
 					`${PACKAGE_VERSION}. The two are version-locked; a skewed platform ` +
 					`package resolves the wrong accessors.`
+			);
+		}
+
+		// A --deep run that could not read the tarball has to say so. The message used to be
+		// assigned to row.deepError and read by nothing, so `files` stayed null, the
+		// authoritative per-binary check below was skipped, and the gate silently downgraded
+		// itself to the fileCount heuristic -- which passes a package whose bin/ holds the
+		// wrong files, the exact defect --deep exists to catch.
+		if (row.deepError) {
+			problems.push(
+				`${label}: could not inspect the published tarball (${row.deepError}). ` +
+					`Which binaries it contains is unverified, so this release is not proven.`
 			);
 		}
 

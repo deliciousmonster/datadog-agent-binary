@@ -8,6 +8,24 @@ import { Platform, getAllSupportedPlatforms } from './platform.js';
 
 const program = new Command();
 
+/**
+ * Commander hands `.action()` an `any`, so without these the whole callback body is
+ * unchecked: `ensureBinary(options.version, kind)` -- kind and version transposed --
+ * compiles clean and fails at runtime, which is why BinaryManager carries a hand-written
+ * guard for exactly that mistake. Naming the shapes turns it into TS2345 at build time.
+ * Each field must mirror an `.option()` below; adding one without updating these fails
+ * `tsc`, which is the same protection, not a hole in it.
+ */
+interface BuildOptions {
+	datadogVersion?: string;
+	output: string;
+	debug?: boolean;
+}
+
+interface InstallOptions {
+	version?: string;
+}
+
 program.name('datadog-agent-build').description('Build Datadog Agent from source for multiple platforms');
 
 program
@@ -16,7 +34,7 @@ program
 	.option('--datadog-version <version>', 'Datadog Agent version to build')
 	.option('-o, --output <dir>', 'Output directory', './build')
 	.option('-d, --debug', 'Enable debug logging')
-	.action(async (options) => {
+	.action(async (options: BuildOptions) => {
 		if (options.debug) {
 			process.env.DEBUG = '1';
 		}
@@ -89,13 +107,13 @@ program
 	.command('install')
 	.description('Install every Datadog Agent binary (core agent and trace-agent) for the current platform')
 	.option('-v, --version <version>', 'Specific version to install')
-	.action(async (options) => {
+	.action(async (options: InstallOptions) => {
 		try {
 			const manager = new BinaryManager();
 
 			// Every binary this platform ships, not just the core agent. ensureBinary()
-			// takes the kind first and the version second; commander types its options as
-			// `any`, so passing them in the wrong order compiles.
+			// takes the kind first and the version second; transposing them is a compile
+			// error only because InstallOptions above types what commander returns as `any`.
 			const binaries = Platform.current().getBinaries();
 			for (const descriptor of binaries) {
 				const binaryPath = await manager.ensureBinary(descriptor.kind, options.version);

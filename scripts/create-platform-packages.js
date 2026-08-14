@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { argv } from 'node:process';
-import { SUPPORTED_PLATFORMS, Platform } from '../dist/platform.js';
+import { SUPPORTED_PLATFORMS, Platform, NODE_PLATFORMS, NODE_ARCHES, NODE_FIELDS } from '../dist/platform.js';
 
 // Platform sub-packages are named `<this package>-<platform>`. Deriving the prefix
 // from the manifest keeps packaging and runtime resolution in agreement and makes
@@ -69,22 +69,15 @@ function copyPlatformBinaries(platform) {
 	}
 }
 
-// npm filters optionalDependencies using Node's `process.platform` and
-// `process.arch` values, NOT our human-readable names. Map to those so the
-// right binary package actually installs on each host.
-const NPM_OS = { linux: 'linux', macos: 'darwin', windows: 'win32' };
-const NPM_CPU = { x86_64: 'x64', arm64: 'arm64' };
-
+// npm filters optionalDependencies using Node's `process.platform` and `process.arch`
+// values, NOT our human-readable names. NODE_PLATFORMS and NODE_ARCHES are derived from the
+// one table in platform.ts; they used to be hand-inverted here and encoded a third time in
+// publish-matrix.js, which is how a package shipped os/cpu npm could never match.
 function npmValue(table, key, field) {
 	const mapped = table[key];
 	if (!mapped) throw new Error(`No npm ${field} mapping for "${key}"`);
 	return mapped;
 }
-
-const NODE_FIELDS = [
-	['os', 'platform', new Set(Object.values(NPM_OS))],
-	['cpu', 'arch', new Set(Object.values(NPM_CPU))],
-];
 
 /**
  * The macos-x86_64 platform package was published with os/cpu "macos"/"x86_64",
@@ -170,8 +163,8 @@ function writePlatformPackageJson(platform) {
 		...packageTemplate,
 		name: `${PACKAGE_NAME}-${platform.getName()}`,
 		description: `Datadog Agent and trace-agent binaries for ${os} ${arch}`,
-		os: [npmValue(NPM_OS, os, 'os')],
-		cpu: [npmValue(NPM_CPU, arch, 'cpu')],
+		os: [npmValue(NODE_PLATFORMS, os, 'os')],
+		cpu: [npmValue(NODE_ARCHES, arch, 'cpu')],
 		keywords: [...packageTemplate.keywords, 'apm', 'trace-agent', os, arch],
 	};
 

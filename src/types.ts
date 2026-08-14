@@ -12,7 +12,6 @@ export interface BuildConfig {
 
 export interface DownloadConfig {
 	version: string;
-	platform: Platform;
 	extractTo: string;
 }
 

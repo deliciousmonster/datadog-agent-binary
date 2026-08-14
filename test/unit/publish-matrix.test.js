@@ -139,3 +139,27 @@ test('optionalDependencies matches SUPPORTED_PLATFORMS, and drift is detected', 
 			'an undeclared platform should be reported'
 		);
 	}));
+
+test('a --deep tarball read that failed is a problem, not a silent downgrade', () =>
+	withTempDir('ddab-matrix-', (dir) => {
+		// The message used to be written to row.deepError and read by nothing. `files` stayed
+		// null, so the authoritative per-binary check was skipped and the gate fell through to
+		// the fileCount heuristic -- which counts 5 files and passes a package holding the
+		// wrong five. A release could be reported "verified" with nothing having read the
+		// tarball at all.
+		stageAll(dir);
+		const rows = rowsFor(dir);
+		rows[0].files = null;
+		rows[0].deepError = 'socket hang up';
+
+		const problems = verify(rows, { mode: 'registry' });
+		assert.equal(problems.length, 1);
+		assert.match(problems[0], /could not inspect the published tarball \(socket hang up\)/);
+		assert.match(problems[0], /not proven/);
+	}));
+
+test('a --deep read that succeeded stays silent', () =>
+	withTempDir('ddab-matrix-', (dir) => {
+		stageAll(dir);
+		assert.deepEqual(verify(rowsFor(dir), { mode: 'registry' }), []);
+	}));

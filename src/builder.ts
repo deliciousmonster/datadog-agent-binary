@@ -1,5 +1,5 @@
 import { execSync, spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, stat } from 'node:fs/promises';
 import * as path from 'node:path';
 import { AgentBinaryDescriptor, AgentBinaryKind, BuildConfig, BuildResult, OS } from './types.js';
 import { errorMessage, logger } from './logger.js';
@@ -299,7 +299,6 @@ export class AgentBuilder {
 	}
 
 	protected async ensureOutputDirectory(): Promise<void> {
-		const { mkdir } = await import('node:fs/promises');
 		await mkdir(this.config.outputDir, { recursive: true });
 	}
 
@@ -350,7 +349,6 @@ export class AgentBuilder {
 	}
 
 	protected async copyBinariesToOutput(): Promise<Partial<Record<AgentBinaryKind, string>>> {
-		const { chmod, copyFile, mkdir, stat } = await import('node:fs/promises');
 		const { platform, outputDir } = this.config;
 
 		logger.debug(`Ensuring platform bin directory exists: ${outputDir}`);

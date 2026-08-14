@@ -12,7 +12,6 @@ import * as path from 'node:path';
 
 interface PackageJson {
 	name?: string;
-	version?: string;
 }
 
 /**
@@ -47,9 +46,6 @@ const pkg = readPackageJson();
  * `undefined-linux-x86_64` in a diagnostic.
  */
 export const PACKAGE_NAME: string = pkg.name ?? '@deliciousmonster/datadog-agent-binary';
-
-/** This package's own version, used to version-lock the platform sub-packages. */
-export const PACKAGE_VERSION: string = pkg.version ?? '0.0.0';
 
 /**
  * Name of the platform sub-package carrying the binaries for `platformName` (e.g.
