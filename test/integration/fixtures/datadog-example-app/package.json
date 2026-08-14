@@ -1,0 +1,8 @@
+{
+	"name": "datadog-example-app",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Harper component that executes the shipped example/dd-supervisor.js (copied in at test setup together with the example's conf.d) and records the supervisor's status object for test/integration/harper-spawn.test.ts. Dependencies are empty on purpose: the test pre-seeds node_modules with this repo's real build, and Harper skips its own install when node_modules exists.",
+	"dependencies": {}
+}

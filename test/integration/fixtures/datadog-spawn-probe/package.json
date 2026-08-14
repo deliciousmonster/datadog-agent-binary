@@ -1,8 +1,0 @@
-{
-	"name": "datadog-spawn-probe",
-	"version": "0.0.0",
-	"private": true,
-	"type": "module",
-	"description": "Harper component that exercises Harper v5's spawn enforcement at load time, once per worker thread, and records what it observed for test/integration/harper-spawn.test.ts to assert on.",
-	"dependencies": {}
-}
