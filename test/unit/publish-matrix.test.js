@@ -6,8 +6,12 @@ import path from 'node:path';
 import { expectedPackages, readLocal, verify, PACKAGE_NAME, PACKAGE_VERSION } from '../../scripts/publish-matrix.js';
 import { withTempDir } from '../support/harness.js';
 
+// verify() rejects a binary below a size floor, so a fixture standing in for a
+// real agent has to clear it. truncate sets the size without writing the bytes.
+const REALISTIC_BINARY_BYTES = 2 * 1024 * 1024;
+
 /** Stage a package dir on disk the way create-platform-packages.js would. */
-function stage(dir, platform, { os: pkgOs, cpu, version, binaries }) {
+function stage(dir, platform, { os: pkgOs, cpu, version, binaries, binaryBytes = REALISTIC_BINARY_BYTES }) {
 	const packageDir = path.join(dir, platform);
 	fs.mkdirSync(path.join(packageDir, 'bin'), { recursive: true });
 	fs.writeFileSync(
@@ -20,7 +24,9 @@ function stage(dir, platform, { os: pkgOs, cpu, version, binaries }) {
 		})
 	);
 	for (const name of binaries) {
-		fs.writeFileSync(path.join(packageDir, 'bin', name), 'x');
+		const binaryPath = path.join(packageDir, 'bin', name);
+		fs.writeFileSync(binaryPath, '');
+		fs.truncateSync(binaryPath, binaryBytes);
 	}
 }
 
@@ -84,6 +90,35 @@ test('rejects a package missing the trace-agent (the original defect)', () =>
 		assert.ok(
 			problems.some((p) => /missing trace-agent/.test(p)),
 			`expected a missing-binary problem, got: ${problems.join(' | ')}`
+		);
+	}));
+
+test('an empty bin/ is a problem, not a silent pass', () =>
+	withTempDir('ddab-matrix-', (dir) => {
+		// The gate inferred "this is a --dummy package" from an empty bin/ and skipped its
+		// own per-binary check, so a staging with four correct manifests and no binaries at
+		// all cleared the last step before `npm publish` reporting zero problems.
+		stageAll(dir, (platform, spec) => {
+			if (platform === 'linux-x86_64') spec.binaries = [];
+		});
+		const problems = verify(rowsFor(dir), { mode: 'local' });
+		assert.ok(
+			problems.some((p) => /linux-x86_64/.test(p) && /missing trace-agent/.test(p)),
+			`a staged package with no binaries must not clear the pre-publish gate, got: ${problems.join(' | ')}`
+		);
+	}));
+
+test('rejects a binary too small to be a real agent', () =>
+	withTempDir('ddab-matrix-', (dir) => {
+		// Both filenames present, no content behind them. A check that only matches names
+		// passes this and prints 0 MB in the SIZE column next to OK.
+		stageAll(dir, (platform, spec) => {
+			if (platform === 'macos-arm64') spec.binaryBytes = 0;
+		});
+		const problems = verify(rowsFor(dir), { mode: 'local' });
+		assert.ok(
+			problems.some((p) => /macos-arm64/.test(p) && /trace-agent is 0 bytes/.test(p)),
+			`expected a size-floor problem, got: ${problems.join(' | ')}`
 		);
 	}));
 
@@ -162,4 +197,36 @@ test('a --deep read that succeeded stays silent', () =>
 	withTempDir('ddab-matrix-', (dir) => {
 		stageAll(dir);
 		assert.deepEqual(verify(rowsFor(dir), { mode: 'registry' }), []);
+	}));
+
+test('a published package that reports nothing about its bin/ is unverified, not OK', () =>
+	withTempDir('ddab-matrix-', (dir) => {
+		// --registry without --deep leans entirely on dist.fileCount. A manifest carrying
+		// none matched neither the file-list check nor the count heuristic, so the run
+		// printed OK having verified nothing about what was published.
+		stageAll(dir);
+		const rows = rowsFor(dir);
+		rows[0].files = null;
+		delete rows[0].sizes;
+		rows[0].bytes = 12_000;
+
+		const problems = verify(rows, { mode: 'registry' });
+		assert.equal(problems.length, 1);
+		assert.match(problems[0], /unverified/);
+	}));
+
+test('a published package too small to hold its binaries is a problem', () =>
+	withTempDir('ddab-matrix-', (dir) => {
+		// The count heuristic is satisfied by five files of any size, so without a floor a
+		// tarball holding two empty binaries is indistinguishable from a real release.
+		stageAll(dir);
+		const rows = rowsFor(dir);
+		rows[0].files = null;
+		delete rows[0].sizes;
+		rows[0].fileCount = 5;
+		rows[0].bytes = 40 * 1024;
+
+		const problems = verify(rows, { mode: 'registry' });
+		assert.equal(problems.length, 1);
+		assert.match(problems[0], /cannot hold/);
 	}));

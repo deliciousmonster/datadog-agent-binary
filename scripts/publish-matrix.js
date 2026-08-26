@@ -102,12 +102,11 @@ export function readLocal(expected, dir) {
 	if (!fs.existsSync(manifestPath)) return absentRow(expected, packageDir);
 	const binDir = path.join(packageDir, 'bin');
 	const files = fs.existsSync(binDir) ? fs.readdirSync(binDir).sort() : [];
+	const sizes = Object.fromEntries(files.map((f) => [f, fs.statSync(path.join(binDir, f)).size]));
 	return presentRow(expected, packageDir, JSON.parse(fs.readFileSync(manifestPath, 'utf8')), {
 		files,
-		bytes: files.reduce((sum, f) => sum + fs.statSync(path.join(binDir, f)).size, 0),
-		// --dummy packages legitimately carry no binaries; record it and let the
-		// caller decide whether that is acceptable.
-		dummy: files.length === 0,
+		sizes,
+		bytes: Object.values(sizes).reduce((sum, size) => sum + size, 0),
 	});
 }
 
@@ -162,11 +161,10 @@ async function listPublishedBinaries(name, version) {
 	if (!Array.isArray(body.files)) throw new Error(`jsDelivr returned no file list for ${name}@${version}`);
 
 	const binaries = body.files
-		.map((file) => file.name)
-		.filter((entry) => entry.startsWith('/bin/'))
-		.map((entry) => entry.slice('/bin/'.length))
-		.filter(Boolean)
-		.sort();
+		.filter((file) => file.name.startsWith('/bin/'))
+		.map((file) => ({ name: file.name.slice('/bin/'.length), size: file.size }))
+		.filter((entry) => entry.name)
+		.sort((a, b) => a.name.localeCompare(b.name));
 
 	// Every platform package has a bin/. An empty result therefore means the response
 	// shape changed, not that the package shipped no binaries -- and the difference
@@ -176,7 +174,12 @@ async function listPublishedBinaries(name, version) {
 		throw new Error(`jsDelivr listed ${body.files.length} files but no bin/ entries for ${name}@${version}`);
 	}
 
-	return binaries;
+	// jsDelivr reports a size per file, so --deep applies the same per-binary floor to a
+	// published artifact that --local applies to a staged one.
+	return {
+		files: binaries.map((entry) => entry.name),
+		sizes: Object.fromEntries(binaries.map((entry) => [entry.name, entry.size])),
+	};
 }
 
 async function readRegistry(expected, version, deep, retries) {
@@ -192,9 +195,10 @@ async function readRegistry(expected, version, deep, retries) {
 	}
 
 	let files = null;
+	let sizes;
 	if (deep) {
 		try {
-			files = await listPublishedBinaries(expected.name, version);
+			({ files, sizes } = await listPublishedBinaries(expected.name, version));
 		} catch (error) {
 			expected.deepError = error.message;
 		}
@@ -204,12 +208,95 @@ async function readRegistry(expected, version, deep, retries) {
 		// The version asked for, not the one the manifest self-reports.
 		version,
 		files,
+		sizes,
 		// The cheap signal without --deep. A package carrying both binaries has 5
 		// files (2 binaries + index.js + package.json + README.md); the core-only
-		// packages that caused the original defect had 4.
-		fileCount: manifest.dist.fileCount,
-		bytes: manifest.dist.unpackedSize,
+		// packages that caused the original defect had 4. A registry that reports
+		// neither field leaves the row with no evidence at all, which verify() treats
+		// as unproven rather than fine.
+		fileCount: manifest.dist?.fileCount,
+		bytes: manifest.dist?.unpackedSize,
 	});
+}
+
+/**
+ * A Go agent binary is tens of MB, so no real one comes near this floor. It fails only a
+ * truncated or placeholder file, which a check on filenames alone passes.
+ */
+const MIN_BINARY_BYTES = 1024 * 1024;
+
+/**
+ * Per-package checks matched to whatever evidence the source can supply, with the absence
+ * of evidence a problem in its own right. An empty staged bin/ used to match neither the
+ * file-list arm nor the fileCount arm, so the gate printed OK having checked nothing.
+ *
+ * Do not restore a tolerance for a package carrying no binaries. The `--dummy` stagings
+ * that motivated one come from a metadata test that never runs this script, and an empty
+ * bin/ here is a build that failed.
+ */
+function binaryProblems(row, label) {
+	const problems = [];
+
+	// A --deep run that could not read the tarball has to say so. The message used to be
+	// assigned to row.deepError and read by nothing, so `files` stayed null, the
+	// authoritative per-binary check below was skipped, and the gate silently downgraded
+	// itself to the fileCount heuristic -- which passes a package whose bin/ holds the
+	// wrong files, the exact defect --deep exists to catch.
+	if (row.deepError) {
+		problems.push(
+			`${label}: could not inspect the published tarball (${row.deepError}). ` +
+				`Which binaries it contains is unverified, so this release is not proven.`
+		);
+	}
+
+	if (Array.isArray(row.files)) {
+		for (const required of row.binaries.filter((b) => !row.files.includes(b))) {
+			problems.push(
+				`${label}: missing ${required}. Shipping the core agent without the ` +
+					`trace-agent is the defect this package exists to fix: nothing binds ` +
+					`127.0.0.1:8126 and every span is dropped in silence.`
+			);
+		}
+
+		for (const required of row.binaries) {
+			// A binary that is absent has no size and was named above; this is the one
+			// that is present and empty.
+			const size = row.sizes?.[required];
+			if (size != null && size < MIN_BINARY_BYTES) {
+				problems.push(
+					`${label}: ${required} is ${size} bytes, under the ${MIN_BINARY_BYTES} floor. ` +
+						`A real agent binary is tens of MB, so this one is truncated or a ` +
+						`placeholder, and it satisfies a check that only matches filenames.`
+				);
+			}
+		}
+	} else if (row.fileCount != null) {
+		const expectedCount = row.binaries.length + 3; // + index.js, package.json, README.md
+		if (row.fileCount < expectedCount) {
+			problems.push(
+				`${label}: fileCount ${row.fileCount} is below the ${expectedCount} a ` +
+					`package carrying ${row.binaries.join(' + ')} should have. Re-run with ` +
+					`--deep to list the tarball contents.`
+			);
+		}
+
+		// Five files of any size satisfy the count, so without a floor a tarball holding
+		// two empty binaries reads as a real release. Only a total is available here.
+		const floor = row.binaries.length * MIN_BINARY_BYTES;
+		if (row.bytes != null && row.bytes < floor) {
+			problems.push(
+				`${label}: ${row.bytes} bytes unpacked cannot hold ${row.binaries.join(' + ')}, ` +
+					`which are tens of MB each. Re-run with --deep to list the tarball contents.`
+			);
+		}
+	} else if (!row.deepError) {
+		problems.push(
+			`${label}: the source reported neither a file list nor a fileCount, so what is ` +
+				`in bin/ is unverified. Re-run with --deep.`
+		);
+	}
+
+	return problems;
 }
 
 export function verify(rows) {
@@ -244,36 +331,7 @@ export function verify(rows) {
 			);
 		}
 
-		// A --deep run that could not read the tarball has to say so. The message used to be
-		// assigned to row.deepError and read by nothing, so `files` stayed null, the
-		// authoritative per-binary check below was skipped, and the gate silently downgraded
-		// itself to the fileCount heuristic -- which passes a package whose bin/ holds the
-		// wrong files, the exact defect --deep exists to catch.
-		if (row.deepError) {
-			problems.push(
-				`${label}: could not inspect the published tarball (${row.deepError}). ` +
-					`Which binaries it contains is unverified, so this release is not proven.`
-			);
-		}
-
-		if (Array.isArray(row.files) && !row.dummy) {
-			for (const required of row.binaries.filter((b) => !row.files.includes(b))) {
-				problems.push(
-					`${label}: missing ${required}. Shipping the core agent without the ` +
-						`trace-agent is the defect this package exists to fix: nothing binds ` +
-						`127.0.0.1:8126 and every span is dropped in silence.`
-				);
-			}
-		} else if (row.fileCount != null) {
-			const expectedCount = row.binaries.length + 3; // + index.js, package.json, README.md
-			if (row.fileCount < expectedCount) {
-				problems.push(
-					`${label}: fileCount ${row.fileCount} is below the ${expectedCount} a ` +
-						`package carrying ${row.binaries.join(' + ')} should have. Re-run with ` +
-						`--deep to list the tarball contents.`
-				);
-			}
-		}
+		problems.push(...binaryProblems(row, label));
 	}
 
 	// Drift between these two is how a platform ends up declared but never built,
@@ -303,7 +361,6 @@ function mib(bytes) {
 
 function binariesCell(row) {
 	if (!row.present) return '-';
-	if (row.dummy) return '(dummy)';
 	if (Array.isArray(row.files)) return row.files.join(', ') || '(none)';
 	return `${row.fileCount} files`;
 }
