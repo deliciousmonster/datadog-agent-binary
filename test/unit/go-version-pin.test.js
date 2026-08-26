@@ -9,8 +9,10 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
-import { importDist } from '../support/harness.js';
+import { importDist, withTempDir } from '../support/harness.js';
 
 const { AgentBuilder } = await importDist('builder.js');
 
@@ -65,3 +67,27 @@ test('a two-component pin still compares on the minor', async () => {
 	await builderWith({ pin: '1.26\n', goVersion: darwin('1.26.6') }).checkGoVersion();
 	await assert.rejects(() => builderWith({ pin: '1.25\n', goVersion: darwin('1.26.6') }).checkGoVersion());
 });
+
+/** A builder over a real source tree, so the pin read is the real one. */
+function builderOver(sourceDir) {
+	return new (class extends AgentBuilder {
+		async executeCommand() {
+			return darwin('1.26.5');
+		}
+	})({ sourceDir });
+}
+
+test('a source tree with no .go-version has no opinion, which is what old tags look like', () =>
+	withTempDir('go-pin-absent-', (sourceDir) => builderOver(sourceDir).checkGoVersion()));
+
+test('a .go-version that exists but cannot be read fails the build instead of reading as absent', () =>
+	withTempDir('go-pin-unreadable-', (sourceDir) => {
+		// A directory in the pin's place is the portable way to provoke a non-ENOENT read
+		// failure: chmod 000 is a no-op on Windows and root defeats it everywhere else.
+		fs.mkdirSync(path.join(sourceDir, '.go-version'));
+		return assert.rejects(
+			() => builderOver(sourceDir).checkGoVersion(),
+			/Cannot read \.go-version/,
+			'an unreadable pin must not fall through to whatever Go is on PATH'
+		);
+	}));

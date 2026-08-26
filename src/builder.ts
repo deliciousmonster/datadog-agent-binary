@@ -96,21 +96,28 @@ export class AgentBuilder {
 		}
 	}
 
-	/** Absent on old tags rather than an error, so a missing file means "no opinion". */
 	protected async readGoVersionPin(): Promise<string | undefined> {
-		try {
-			return await readFile(path.join(this.config.sourceDir, '.go-version'), 'utf8');
-		} catch {
-			return undefined;
-		}
+		return this.readToolchainPin('.go-version');
 	}
 
-	/** Same contract as `.go-version`: absent means the tag has no opinion. */
 	protected async readPythonVersionPin(): Promise<string | undefined> {
+		return this.readToolchainPin('.python-version');
+	}
+
+	/**
+	 * Old tags ship neither file, so ENOENT is a legitimate "no opinion". Nothing else is:
+	 * collapsing EACCES or a truncated clone into the same `undefined` lets a broken source
+	 * tree read as an unpinned one, and both callers then fall back to whatever happens to
+	 * be on PATH, which is the drift these pins exist to stop.
+	 */
+	private async readToolchainPin(file: string): Promise<string | undefined> {
 		try {
-			return await readFile(path.join(this.config.sourceDir, '.python-version'), 'utf8');
-		} catch {
-			return undefined;
+			return await readFile(path.join(this.config.sourceDir, file), 'utf8');
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+				return undefined;
+			}
+			throw new Error(`Cannot read ${file} in ${this.config.sourceDir}: ${errorMessage(error)}`, { cause: error });
 		}
 	}
 
@@ -125,7 +132,9 @@ export class AgentBuilder {
 	protected async checkGoVersion(): Promise<void> {
 		const pinned = (await this.readGoVersionPin())?.trim();
 		if (!pinned) {
-			logger.debug('Source ships no .go-version; skipping toolchain check');
+			// warn, not debug: every tag this package builds ships the file, so reaching
+			// here is already odd, and a DEBUG-gated line is absent from every CI log.
+			logger.warn('Source ships no .go-version; building with whatever Go is on PATH');
 			return;
 		}
 		const local = /go(\d+\.\d+(?:\.\d+)?)/.exec(await this.executeCommand('go version'))?.[1];
@@ -475,6 +484,7 @@ export class AgentBuilder {
 	protected async pipxPythonFlag(): Promise<string> {
 		const pinned = (await this.readPythonVersionPin())?.trim();
 		if (!pinned) {
+			logger.warn('Source ships no .python-version; letting pipx choose its own interpreter for dda');
 			return '';
 		}
 		const atLeast = (version: string) => {
