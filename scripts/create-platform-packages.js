@@ -207,7 +207,7 @@ npm install ${PACKAGE_NAME}
 \`\`\`
 
 The main package resolves the binaries shipped here at runtime. See the
-[main package README](https://github.com/HarperFast/datadog-agent-binary#readme)
+[main package README](https://github.com/deliciousmonster/datadog-agent-binary#readme)
 for usage, configuration, and Harper integration details.
 
 ## License

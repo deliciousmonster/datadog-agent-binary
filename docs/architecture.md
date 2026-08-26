@@ -48,11 +48,14 @@ reconsidering; that question is open and listed as such.
 Two binaries is also what upstream does for its own distribution, so the packaging is the path
 Datadog already tests.
 
-One consequence worth stating because it inverts the obvious assumption: the core agent's
-`--build-exclude=systemd,python` must **not** be forwarded to the trace-agent build. Neither tag
-appears in the trace-agent's tag set, and its build task has no rtloader or embedded-path
-parameters for the excludes to act on. Forwarding them would be wrong rather than merely
-redundant.
+One consequence worth stating because it inverts the obvious assumption: the core agent's build
+flags must **not** be forwarded to the trace-agent build. It is built with
+`--build-exclude=systemd,python --exclude-rtloader --no-enable-bazel`, where the last two skip an
+embedded-rtloader install that `--build-exclude` never gated and whose output the excluded `python`
+tag then discarded. Neither excluded tag appears in the trace-agent's tag set, and its build task
+has no rtloader or embedded-path parameters for the rest to act on, so forwarding any of it would
+be wrong rather than merely redundant. Upstream splits it the same way: its AIX packaging passes
+`--no-enable-bazel --exclude-rtloader` to `agent.build`, then runs `trace-agent.build` bare.
 
 ## One agent per node, not one per worker thread
 

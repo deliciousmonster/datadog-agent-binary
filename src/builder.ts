@@ -1,5 +1,6 @@
 import { execSync, spawn } from 'node:child_process';
-import { chmod, copyFile, mkdir, readFile, stat } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { AgentBinaryDescriptor, AgentBinaryKind, BuildConfig, BuildResult, OS } from './types.js';
 import { errorMessage, logger } from './logger.js';
@@ -29,6 +30,8 @@ export function createBuilder(config: BuildConfig): AgentBuilder {
 
 export class AgentBuilder {
 	protected config: BuildConfig;
+	protected cacheDir?: string;
+	protected tempDir?: string;
 
 	constructor(config: BuildConfig) {
 		this.config = config;
@@ -102,6 +105,15 @@ export class AgentBuilder {
 		}
 	}
 
+	/** Same contract as `.go-version`: absent means the tag has no opinion. */
+	protected async readPythonVersionPin(): Promise<string | undefined> {
+		try {
+			return await readFile(path.join(this.config.sourceDir, '.python-version'), 'utf8');
+		} catch {
+			return undefined;
+		}
+	}
+
 	/**
 	 * Upstream pins the toolchain it tests against in `.go-version`. Nothing here used to
 	 * read it, so three build paths drifted to three different compilers: CI hardcoded
@@ -137,6 +149,9 @@ export class AgentBuilder {
 
 	protected async buildCommon(): Promise<void> {
 		await this.checkGoVersion();
+		await this.ensureCacheDirectory();
+		await this.ensureEmbeddedPath();
+		await this.ensureWindowsPreconditions();
 
 		logger.info('Checking for dda installation...');
 		await this.ensureDdaInstalled();
@@ -161,9 +176,10 @@ export class AgentBuilder {
 	}
 
 	/**
-	 * Per-binary rather than global: the core agent's `--build-exclude=systemd,python`
-	 * is wrong on the trace-agent (see `AgentBinaryDescriptor.buildArgs`). Args are
-	 * spawned without a shell, so an override must be plain space-separated tokens.
+	 * Per-binary rather than global: every flag the core agent takes is wrong on the
+	 * trace-agent, whose task has no rtloader or embedded-path parameters at all (see
+	 * `AgentBinaryDescriptor.buildArgs`). Args are spawned without a shell, so an
+	 * override must be plain space-separated tokens.
 	 */
 	protected getBuildArgs(binary: AgentBinaryDescriptor): string {
 		return process.env[binary.buildArgsEnvVar]?.trim() || binary.buildArgs;
@@ -295,11 +311,200 @@ export class AgentBuilder {
 			GOARCH: platform.getGoArch(),
 			GOOS: this.osBuild().goos,
 			CGO_ENABLED: '1',
+			...(this.cacheDir ? { XDG_CACHE_HOME: this.cacheDir } : {}),
+			...(this.tempDir ? { TEMP: this.tempDir, TMP: this.tempDir } : {}),
+			...this.pdbEnv(),
 		};
+	}
+
+	/**
+	 * 7.82.1's `go_build` splices `-Wl,--pdb=<bin>.pdb` into extldflags for every Windows
+	 * target unless DD_GO_PDB=0, and with CGO_ENABLED=1 that flag reaches the host's ld
+	 * for real. Nothing here ships a PDB, so the flag can only cost: a link failure if the
+	 * ld on PATH predates `--pdb`, and on a Windows host two extra bazel invocations per
+	 * binary, since the same branch calls `bazel cquery @winlibs_mingw64//:gcc` to find a
+	 * hermetic MinGW. Turning it off is upstream's own documented escape hatch and returns
+	 * the link to what earlier tags did.
+	 */
+	protected pdbEnv(): Record<string, string> {
+		return this.config.platform.getOS() === 'windows' ? { DD_GO_PDB: '0' } : {};
+	}
+
+	/**
+	 * Upstream's bazel wrapper (`tools/bazel`) exits 2 when `CI` is set and XDG_CACHE_HOME
+	 * does not already name an absolute directory, and it derives GOCACHE and GOMODCACHE
+	 * from it. With `CI` unset that same wrapper only prints a hint and carries on, so a
+	 * laptop build never meets the check and a runner dies four minutes in, inside
+	 * `agent.build`. An explicit value wins so a cache action can point this at a path it
+	 * restores and saves.
+	 */
+	protected async ensureCacheDirectory(): Promise<void> {
+		if (!process.env.CI) {
+			return;
+		}
+		const configured = process.env.XDG_CACHE_HOME?.trim();
+		this.cacheDir = configured ? path.resolve(configured) : path.join(os.homedir(), '.cache');
+		await mkdir(this.cacheDir, { recursive: true });
+		logger.debug(`Using XDG_CACHE_HOME ${this.cacheDir}`);
+	}
+
+	/**
+	 * Two host assumptions upstream's Windows build makes that a GitHub runner does not
+	 * satisfy. Both gate bazel before anything compiles.
+	 *
+	 * Guarded on the OS being built FOR, not `process.platform`. `Platform.current()` is
+	 * the only thing that ever assembles a BuildConfig (src/index.ts), so target and host
+	 * are the same machine, and every other host check in this file already reads
+	 * `getOS()`. Guarding on the target is also what keeps this reachable from a hermetic
+	 * test on any OS.
+	 */
+	protected async ensureWindowsPreconditions(): Promise<void> {
+		if (this.config.platform.getOS() !== 'windows') {
+			return;
+		}
+		await this.writeBazelShellOverride();
+		await this.relocateTempForShortNames();
+	}
+
+	/**
+	 * Where MSYS2 actually lands. Upstream's `.bazelrc` names chocolatey's path; the
+	 * GitHub Windows image installs to the first entry instead. `BAZEL_SH` comes first
+	 * when it is set, since that is the name upstream already gives this setting.
+	 */
+	protected windowsShellCandidates(): string[] {
+		const drive = (process.env.SystemDrive || 'C:').replace(/[\\/]+$/, '');
+		const candidates = [`${drive}/msys64/usr/bin/bash.exe`, `${drive}/tools/msys64/usr/bin/bash.exe`];
+		const configured = process.env.BAZEL_SH?.trim();
+		return configured ? [configured, ...candidates] : candidates;
+	}
+
+	/**
+	 * `.bazelrc` at 7.82.1 pins both `--repo_env=BAZEL_SH` and `--shell_executable` to
+	 * `C:/tools/msys64/usr/bin/bash.exe`, active on every Windows run through
+	 * `common --enable_platform_specific_config`. GitHub's image puts MSYS2 at
+	 * `C:\msys64`, and the miss only surfaces once the analysis graph needs a shell
+	 * action, tens of minutes into a build. `try-import %workspace%/user.bazelrc` is the
+	 * last line of `.bazelrc` and the file is gitignored upstream, so the override needs
+	 * nothing of theirs patched and the source tree stays clean for `git describe`.
+	 *
+	 * Repeated `--repo_env` keys resolve last-wins, which is why the flag is worth
+	 * repeating rather than exporting `BAZEL_SH` into the environment:
+	 * `--experimental_strict_repo_env` (also set upstream) hides the ambient value from
+	 * repository rules entirely.
+	 */
+	protected async writeBazelShellOverride(): Promise<void> {
+		// Backslashes are what an inherited BAZEL_SH is likely to carry, and bazel reads
+		// them as escapes in an rc file.
+		const shell = (await this.resolveWindowsShell()).replace(/\\/g, '/');
+		const file = path.join(this.config.sourceDir, 'user.bazelrc');
+		await writeFile(
+			file,
+			'# Written by @deliciousmonster/datadog-agent-binary. .bazelrc points both of these\n' +
+				'# at C:/tools/msys64, which the GitHub Windows image does not have.\n' +
+				`common:windows --repo_env=BAZEL_SH=${shell}\n` +
+				`common:windows --shell_executable=${shell}\n`,
+			'utf8'
+		);
+		logger.debug(`Pointed bazel's Windows shell at ${shell} via ${file}`);
+	}
+
+	protected async resolveWindowsShell(): Promise<string> {
+		const candidates = this.windowsShellCandidates();
+		for (const candidate of candidates) {
+			try {
+				await stat(candidate);
+			} catch {
+				continue;
+			}
+			return candidate;
+		}
+		throw new Error(
+			`No MSYS2 bash found for bazel. Looked at: ${candidates.join(', ')}. ` +
+				'Install MSYS2, or set BAZEL_SH to an existing bash.exe. Without one, bazel falls ' +
+				'back to the C:/tools/msys64 path hardcoded in upstream .bazelrc and dies on the ' +
+				'first shell action.'
+		);
+	}
+
+	/**
+	 * `tools/bazel.bat` at 7.82.1 creates `%TEMP%\123456789.1234` and exits 2 when Windows
+	 * gives that file no 8.3 short name, before bazel starts. NTFS enables short-name
+	 * creation on the system volume and disables it on every other volume by default, and
+	 * GitHub puts the workspace and RUNNER_TEMP on `D:`, so the drive %TEMP% happens to
+	 * sit on decides whether a Windows build starts at all.
+	 *
+	 * The user profile is on the system volume, so pointing TEMP back at its own Temp is
+	 * preferred over `fsutil 8dot3name set <drive> 0`, which needs elevation and
+	 * permanently changes a volume's naming policy on a machine this package does not own.
+	 * It is also just the Windows default for that user, so on a host whose TEMP was never
+	 * moved it changes nothing.
+	 */
+	protected async relocateTempForShortNames(): Promise<void> {
+		this.tempDir = path.join(os.homedir(), 'AppData', 'Local', 'Temp');
+		await mkdir(this.tempDir, { recursive: true });
+		logger.debug(`Using TEMP ${this.tempDir} so bazel's 8.3 short-name check passes`);
 	}
 
 	protected async ensureOutputDirectory(): Promise<void> {
 		await mkdir(this.config.outputDir, { recursive: true });
+	}
+
+	/**
+	 * `get_build_flags` in `tasks/libs/common/utils.py` raises "unable to locate embedded
+	 * path" unless `get_embedded_path` finds a `dev` directory under the source root, and
+	 * that directory exists only as a side effect of the rtloader install the core agent
+	 * now skips. Empty is what upstream wants: the check is `os.path.exists` with no look
+	 * inside, and `get_rtloader_paths` over an empty tree returns nothing, so no build-tree
+	 * RPATH and no `CGO_LDFLAGS -L` are baked into either binary. `trace-agent.build` needs
+	 * the directory too and its `build()` signature has no `--embedded-path` to point
+	 * elsewhere, which is why this runs once for the whole descriptor loop rather than as a
+	 * core-agent build flag.
+	 */
+	protected async ensureEmbeddedPath(): Promise<void> {
+		await mkdir(path.join(this.config.sourceDir, 'dev'), { recursive: true });
+	}
+
+	/**
+	 * pipx creates each venv with the interpreter pipx itself was installed under, and
+	 * PATH does not change that. The ubuntu-22.04 runner installs pipx under the image's
+	 * Python 3.10 while dda requires 3.12, so `pipx install dda` rejects every published
+	 * version and actions/setup-python has no effect on it. Hand pipx an interpreter
+	 * explicitly, but only once it is known to satisfy the pin upstream ships in
+	 * `.python-version`; otherwise pipx's own default is the better guess.
+	 */
+	protected async pipxPythonFlag(): Promise<string> {
+		const pinned = (await this.readPythonVersionPin())?.trim();
+		if (!pinned) {
+			return '';
+		}
+		const atLeast = (version: string) => {
+			const [major, minor = 0] = version.split('.').map(Number);
+			const [pinnedMajor, pinnedMinor = 0] = pinned.split('.').map(Number);
+			return major > pinnedMajor || (major === pinnedMajor && minor >= pinnedMinor);
+		};
+		for (const candidate of ['python3', 'python']) {
+			let reported: string;
+			try {
+				reported = await this.executeCommand(
+					`${candidate} -c "import sys;print('%d.%d' % sys.version_info[:2], sys.executable)"`
+				);
+			} catch {
+				continue;
+			}
+			const [version, executable] = reported.trim().split(/ (.+)/);
+			if (!executable || !atLeast(version)) {
+				continue;
+			}
+			// dda install commands are spawned without a shell and split on spaces, so a
+			// path with one in it would arrive as two arguments.
+			if (executable.includes(' ')) {
+				logger.warn(`Cannot pass ${executable} to pipx: the path contains a space`);
+				continue;
+			}
+			return ` --python ${executable}`;
+		}
+		logger.warn(`No Python ${pinned} or newer on PATH; letting pipx choose its own interpreter for dda`);
+		return '';
 	}
 
 	/**
@@ -334,8 +539,10 @@ export class AgentBuilder {
 			} catch {
 				continue;
 			}
-			logger.debug(`Installing dda with: ${install}`);
-			await this.executeCommand(install);
+			// uv provisions an interpreter of its own; pipx inherits one it cannot change.
+			const command = install.startsWith('pipx') ? `${install}${await this.pipxPythonFlag()}` : install;
+			logger.debug(`Installing dda with: ${command}`);
+			await this.executeCommand(command);
 			return;
 		}
 

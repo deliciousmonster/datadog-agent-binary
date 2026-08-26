@@ -14,8 +14,9 @@ mutually exclusive in practice, because npm provenance binds the attestation to 
 that built the artifact, and the release preflight refuses to publish when the manifest's
 repository and the building repository disagree.
 
-**If deferred:** The upstream path stays open and nothing is lost, since the repointing change is
-a handful of lines held in reserve. Deferring costs schedule, not optionality. Full detail in
+**Answered 2026-08-26:** publish under `@deliciousmonster`, from a repository we control, now; offer
+the upstream PR after. The repointing landed as `18c8019` and contains nothing else, so switching
+back is a revert of one commit rather than a re-plan. Full detail in
 [delivery options](delivery-options.md).
 
 ## 2. Are host metrics and log forwarding in scope

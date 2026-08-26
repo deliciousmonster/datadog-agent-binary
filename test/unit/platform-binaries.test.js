@@ -19,9 +19,10 @@ const { Platform, SUPPORTED_PLATFORMS, getAllSupportedPlatforms } = await import
 /**
  * The `python` build tag links librtloader and an embedded CPython by an rpath
  * into the build tree, producing a core agent that only runs on the machine that
- * built it. `systemd` pulls in libsystemd.
+ * built it. `systemd` pulls in libsystemd. The rtloader flags are separate because
+ * `--build-exclude` only strips a Go tag; see test/unit/skip-rtloader-bazel.test.js.
  */
-const CORE_BUILD_ARGS = '--build-exclude=systemd,python';
+const CORE_BUILD_ARGS = '--build-exclude=systemd,python --exclude-rtloader --no-enable-bazel';
 
 /**
  * `buildStem`/`outputStem` are extension-free; the tests append `.exe` on

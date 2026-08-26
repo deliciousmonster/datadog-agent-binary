@@ -1,6 +1,6 @@
 # Datadog Agent Binary
 
-[![Datadog Agent Binaries](https://github.com/HarperFast/datadog-agent-binary/actions/workflows/build-release.yml/badge.svg)](https://github.com/HarperFast/datadog-agent-binary/actions/workflows/build-release.yml)
+[![Datadog Agent Binaries](https://github.com/deliciousmonster/datadog-agent-binary/actions/workflows/build-release.yml/badge.svg)](https://github.com/deliciousmonster/datadog-agent-binary/actions/workflows/build-release.yml)
 
 Distributes the pre-compiled [Datadog Agent](https://github.com/DataDog/datadog-agent) as an npm package, so the agent is installed and versioned as a normal Node dependency instead of through a system package manager or a container sidecar. Intended for running the agent alongside a Node application, including inside Harper v5.
 
@@ -184,16 +184,20 @@ One run produces both binaries. The builder iterates the platform's binary descr
 
 | Binary | Task | Flags |
 | --- | --- | --- |
-| Core agent | `dda --no-interactive inv agent.build` | `--build-exclude=systemd,python` |
+| Core agent | `dda --no-interactive inv agent.build` | `--build-exclude=systemd,python --exclude-rtloader --no-enable-bazel` |
 | Trace-agent | `dda --no-interactive inv trace-agent.build` | none |
 
-**The trace-agent takes no `--build-exclude`, and passing the core agent's would be wrong rather than redundant.** `TRACE_AGENT_TAGS` contains neither `python` nor `systemd`, and `tasks/trace_agent.py::build()` has no `embedded_path`, `rtloader_root`, or `exclude_rtloader` parameter. It is a plain `go_build`. Override either binary's flags with `DD_AGENT_BUILD_ARGS` or `DD_TRACE_AGENT_BUILD_ARGS`.
+**`--build-exclude` strips Go build tags and nothing more.** `tasks/agent.py` gates the embedded-rtloader install on a separate `exclude_rtloader` parameter, so every build before this one ran that install and then discarded its output. At 7.82.1 the install runs under bazel by default and extracts an LLVM toolchain the Linux code path never invokes, which exhausted the runner's disk before a Go file compiled. `--no-enable-bazel` is belt and braces: if a later tag reaches the install through another branch, it lands on the cmake path this project already provisions. Upstream uses the same pair in `packaging/aix/stages/04-agent.sh`.
+
+Nothing a user can reach changes in the shipped core agent. `--build-exclude=python` already stripped the `python` build tag, so `pkg/collector/python` was never compiled in and the published binary already had no embedded CPython and no Python checks. The one artifact-level difference is that `get_build_flags` no longer bakes a build-tree RPATH into the binary: `get_rtloader_paths` returns nothing over the empty `dev/` the builder creates in place of the rtloader install's output. That is derived from the upstream source, not read off the ELF.
+
+**The trace-agent descriptor takes none of these.** `TRACE_AGENT_TAGS` contains neither `python` nor `systemd`, and `tasks/trace_agent.py::build()` has no `embedded_path`, `rtloader_root`, or `exclude_rtloader` parameter. It is a plain `go_build`, and upstream's AIX packaging invokes it bare right after `agent.build --no-enable-bazel --exclude-rtloader`. Override either binary's flags with `DD_AGENT_BUILD_ARGS` or `DD_TRACE_AGENT_BUILD_ARGS`.
 
 Upstream writes `<sourceDir>/bin/agent/agent` and `<sourceDir>/bin/trace-agent/trace-agent`; the builder copies them out as `datadog-agent` and `trace-agent`. A missing binary fails the build, naming the expected path and the task that produces it, rather than packaging a partial result.
 
 ### Requirements
 
-Node `^22.18.0 || >=24.0.0`, Python 3.12+, CMake, Git, and a C toolchain: GCC on Linux, Xcode Command Line Tools on macOS, MinGW-w64 GCC on Windows. CMake is core-agent-only; it builds rtloader, which the trace-agent does not link. Both binaries link glibc dynamically on Linux (the trace-agent's `netcgo` tag rules out a static build), and CI checks both against the floor.
+Node `^22.18.0 || >=24.0.0`, Python 3.12+, CMake, Git, and a C toolchain: GCC on Linux, Xcode Command Line Tools on macOS, MinGW-w64 GCC on Windows. CMake is off the default build path now that `--exclude-rtloader` skips the install that used it; CI still provisions it so `--no-enable-bazel` has somewhere to land if a later tag reaches the rtloader install another way. Both binaries link glibc dynamically on Linux (the trace-agent's `netcgo` tag rules out a static build), and CI checks both against the floor.
 
 **Go must match the source's `.go-version`** (7.82.x pins 1.26.5). The builder reads that file and refuses a *minor* mismatch, because Go's runtime and crypto defaults move between minors; a patch gap only warns. Without this check the three build paths drift independently — that is how source pinning Go 1.25.10 came to ship a `go1.26.4` binary.
 
@@ -219,12 +223,20 @@ npm run matrix      # what is published per platform, and whether it is correct
 
 TypeScript 7 no longer auto-includes `node_modules/@types`, so `tsconfig.json` names `"types": ["node"]` explicitly. `@types/node` deliberately tracks the 22 line rather than the newest release: it must match the engines floor, or code calling an API absent from Node 22.18 compiles clean and fails for a consumer on the version we advertise.
 
+### Branches
+
+`main` is the default branch and the release branch; `dev` is where work integrates. A change branches off `dev`, opens a pull request into `dev`, and reaches `main` in a later pull request from `dev`. `main` is the repository default, so `gh pr create` aims there unless you pass `--base dev`.
+
+A merge to `main` does not publish. Only a `v*` tag does, and nothing cuts one automatically: **Cut Prerelease** reports the version it would have cut and stops unless the `RELEASE_ENABLED` variable and a `REPO_TOKEN` PAT are both present, and neither is.
+
 ## Releasing
 
-The git tag is the only input to the publish pipeline. It sets the npm version, and whether it parses as a semver prerelease decides the dist-tag, so a mistyped tag is a bad default install for every consumer rather than a typo.
+The git tag is the only input to the publish pipeline. It sets the npm version, and whether it parses as a semver prerelease decides the dist-tag, so a mistyped tag is a bad default install for every consumer rather than a typo. Push the tag deliberately; **Cut Prerelease** can compute and push it instead, but only once `RELEASE_ENABLED` is `true` and a `REPO_TOKEN` PAT exists, because a tag pushed with `GITHUB_TOKEN` starts no workflow.
 
-- **Prerelease:** run the **Cut Prerelease** workflow. It asks the registry which `-next.N` versions exist, computes the next one, and pushes the tag. Default is a dry run; re-run with `dry_run=false`. Consumers get it with `npm install @deliciousmonster/datadog-agent-binary@next`.
-- **Stable:** push a tag with no prerelease segment (`v7.75.6`). It publishes under `latest`.
+The package version is its own line and carries no agent version. The bundled agent is pinned in `.datadog-agent-version`, which ships inside the tarball, so a consumer reads which agent they got instead of inferring it from the package number.
+
+- **Prerelease:** a push to `main` runs **Cut Prerelease** on its own. It waits for that commit's `Test` run to go green, asks both the registry and the git tags which `-next.N` numbers are already taken, and pushes the next one. Running the workflow by hand defaults to a dry run; re-run with `dry_run=false` to push. Consumers get it with `npm install @deliciousmonster/datadog-agent-binary@next`.
+- **Stable:** push a tag with no prerelease segment (`v1.0.1`). It publishes under `latest`.
 
 A prerelease cannot move `latest`, with one exception the pipeline guards: on the very first publish npm sets `latest` regardless of `--tag`, because a package with no dist-tags needs one. The publish job asserts afterwards that `latest` is not the prerelease and fails if it is.
 
@@ -238,6 +250,8 @@ A prerelease cannot move `latest`, with one exception the pipeline guards: on th
 | after publish | `publish-matrix --registry --deep` against the real registry; the matrix is appended to the release notes |
 
 **Authentication.** Trusted publishing is preferred: configure a trusted publisher on npmjs.com for this repo and `build-release.yml`, and leave `NPM_TOKEN` unset. The workflow has `id-token: write`, so npm exchanges the OIDC token for a short-lived credential and attaches build provenance. `NPM_TOKEN` is a bootstrap fallback only, for a first publish under a new scope where no trusted publisher can be configured yet; publish once, configure the publisher, delete the secret.
+
+**Provenance needs a public source repository.** npm's prerequisite is a public `repository` field matching where the publish runs from. `release-preflight.js` compares the slug and not the visibility, so a private repository clears preflight and then fails at `npm publish --provenance`, after every platform's Go build.
 
 ## License
 
