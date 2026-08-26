@@ -39,36 +39,45 @@ const bashAt = (dir) => {
 	return file;
 };
 
-test('a Windows target writes both bazel shell overrides into user.bazelrc', async () => {
+/**
+ * The emitted spelling is posix on every host: upstream's own .bazelrc at 7.82.1 writes
+ * C:/tools/msys64/usr/bin/bash.exe, and bazel reads \ in an rc file as an escape. So the
+ * shell fixture is a literal Windows path rather than whatever mkdtemp handed the host.
+ * Interpolating the host's own path is what let this pass on macOS while Windows failed:
+ * a POSIX temp path has no backslash to convert, so the assertion agreed with a broken
+ * implementation by accident.
+ */
+const WINDOWS_SHELL = 'C:\\msys64\\usr\\bin\\bash.exe';
+
+test('a Windows target writes both bazel shell overrides, forward-slashed, into user.bazelrc', async () => {
 	await withTempDir('win-shell-', (dir) =>
 		withHome(dir, async () => {
-			const shell = bashAt(dir);
-			const build = builderWith({ sourceDir: dir, shells: [shell] });
+			const build = builderWith({ sourceDir: dir });
+			build.resolveWindowsShell = async () => WINDOWS_SHELL;
 			await build.ensureWindowsPreconditions();
 
 			const written = fs.readFileSync(path.join(dir, 'user.bazelrc'), 'utf8');
-			assert.match(written, /^common:windows --repo_env=BAZEL_SH=.+$/m);
-			assert.match(written, /^common:windows --shell_executable=.+$/m);
-			const lines = written.split('\n').filter((line) => line.startsWith('common:'));
-			assert.deepEqual(lines, [
-				`common:windows --repo_env=BAZEL_SH=${shell}`,
-				`common:windows --shell_executable=${shell}`,
-			]);
+			assert.ok(!written.includes('\\'), written);
+			assert.deepEqual(
+				written.split('\n').filter((line) => line.startsWith('common:')),
+				[
+					'common:windows --repo_env=BAZEL_SH=C:/msys64/usr/bin/bash.exe',
+					'common:windows --shell_executable=C:/msys64/usr/bin/bash.exe',
+				]
+			);
 		})
 	);
 });
 
-test('a backslash path is rewritten to the forward slashes bazel accepts in an rc file', async () => {
-	await withTempDir('win-slash-', (dir) =>
+test('the resolver takes the first candidate that exists, not the first it is handed', async () => {
+	await withTempDir('win-resolve-', (dir) =>
 		withHome(dir, async () => {
-			const build = builderWith({ sourceDir: dir, shells: [bashAt(dir)] });
-			// stat() resolves either separator on Windows; the rc file must not carry \.
-			build.resolveWindowsShell = async () => 'C:\\msys64\\usr\\bin\\bash.exe';
-			await build.writeBazelShellOverride();
+			const shell = bashAt(dir);
+			const build = builderWith({ sourceDir: dir, shells: ['C:\\absent\\usr\\bin\\bash.exe', shell] });
 
-			const written = fs.readFileSync(path.join(dir, 'user.bazelrc'), 'utf8');
-			assert.ok(!written.includes('\\'));
-			assert.ok(written.includes('--shell_executable=C:/msys64/usr/bin/bash.exe'));
+			// Compared as handed back, with no respelling: resolution is separate from how
+			// writeBazelShellOverride() then spells the winner.
+			assert.equal(await build.resolveWindowsShell(), shell);
 		})
 	);
 });
@@ -130,12 +139,21 @@ test('a non-Windows target writes no override file and exports no TEMP', async (
 test('no MSYS2 bash anywhere fails loudly instead of writing a path that is wrong differently', async () => {
 	await withTempDir('win-nobash-', (dir) =>
 		withHome(dir, async () => {
-			const missing = path.join(dir, 'nowhere', 'bash.exe');
+			// Windows-shaped and absent on every host, so the diagnostic is checked in the
+			// spelling a real Windows run would produce.
+			const missing = 'C:\\nowhere\\usr\\bin\\bash.exe';
 			const build = builderWith({ sourceDir: dir, shells: [missing] });
 
-			await assert.rejects(() => build.ensureWindowsPreconditions(), {
-				message: new RegExp(`No MSYS2 bash found.+${missing.replace(/[\\/]/g, '.')}.+BAZEL_SH`, 's'),
-			});
+			await assert.rejects(
+				() => build.ensureWindowsPreconditions(),
+				(error) => {
+					// Verbatim, backslashes intact: the candidate is quoted for an operator to
+					// paste, and the posix respelling applies to the rc file, not to this.
+					assert.ok(error.message.includes(missing), error.message);
+					assert.match(error.message, /No MSYS2 bash found.+BAZEL_SH/s);
+					return true;
+				}
+			);
 			assert.ok(!fs.existsSync(path.join(dir, 'user.bazelrc')));
 		})
 	);
