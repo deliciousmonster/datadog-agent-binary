@@ -186,7 +186,14 @@ Datadog supervisor: Harper's constrained child_process is active (probe rejected
   "Command harper-datadog-spawn-probe-must-not-exist is not allowed"). ...
 Datadog supervisor: started the trace-agent (pid 1234): /.../bin/trace-agent run -c /.../datadog/datadog.yaml
 Datadog supervisor: started the core agent (pid 1235): /.../bin/datadog-agent run -c /.../datadog
+Datadog supervisor: the trace-agent is serving the APM receiver on 127.0.0.1:8126; dd-trace
+  has somewhere to send spans.
 ```
+
+The last line is the only one that is a measurement rather than a report. If it says the
+trace-agent was started but nothing answered `/info`, the agent is running and dd-trace is
+dropping every span; read `<runtime dir>/logs/trace-agent.log` and check `DD_APM_ENABLED`,
+which overrides the `apm_config.enabled` this supervisor writes.
 
 Other worker threads print this instead, which is the correct outcome:
 
@@ -240,7 +247,8 @@ curl -s 127.0.0.1:8126/info | jq -e '.endpoints | index("/v0.4/traces")'
 ls <ROOTPATH>/pids/                                  # datadog-agent.pid  datadog-trace-agent.pid
 pgrep -f 'bin/(datadog-agent|trace-agent)' | wc -l   # 2
 
-# The whole picture, including whether spawn interception is live.
+# The whole picture, including whether spawn interception is live. The trace-agent's
+# `receiverBound` is the field to read: `started` only means spawn did not throw.
 curl -s -u HDB_ADMIN:password http://localhost:9926/DatadogStatus/ | jq
 ```
 
