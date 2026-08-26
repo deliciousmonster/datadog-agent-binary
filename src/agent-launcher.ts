@@ -245,15 +245,15 @@ function receiverPort(): number {
  */
 const VALUE_FLAGS = new Set([...CONFIG_FLAGS, '-l', '--cpu-profile', '-m', '--mem-profile', '-p', '--pidfile']);
 
+/** Flags that make the process print something and exit instead of serving. */
+const QUERY_FLAGS = new Set(['-h', '--help']);
+
 /**
  * Signals that mean someone asked the agent to stop. Everything else that kills it is a
  * crash or an OOM kill, and reporting one of those as a clean stop hides the death from
  * every restart policy, shell `&&`, and systemd unit that reads only the exit code.
  */
 const GRACEFUL_SIGNALS = new Set<NodeJS.Signals>(['SIGTERM', 'SIGINT', 'SIGHUP']);
-
-/** Flags that make the process print something and exit instead of serving. */
-const QUERY_FLAGS = new Set(['-h', '--help']);
 
 /**
  * True if `args` invoke the trace-agent's long-running receiver.
@@ -467,33 +467,37 @@ export async function launchAgent(
 			if (isRunSubcommand(args)) {
 				const port = receiverPort();
 				if (port === RECEIVER_DISABLED) {
-					// Deliberate, so it is not refused. It is still the state where dd-trace's
-					// default target goes unserved, which nothing else here would report.
+					// Deliberate, so it is not refused, and no watch is set: there is no socket
+					// to assert on. It is still the state where dd-trace's default target goes
+					// unserved, which nothing else here would report.
 					logger.warn(
 						`DD_APM_RECEIVER_PORT=0 turns the trace-agent's HTTP receiver off, so ` +
 							`nothing will listen on 127.0.0.1:${DEFAULT_RECEIVER_PORT} and dd-trace will ` +
 							`drop every span unless it has been pointed at a Unix socket. Starting ` +
 							`the agent and skipping the receiver checks.`
 					);
-				} else if (await isTraceReceiverHealthy(port)) {
-					logger.info(
-						`A trace-agent receiver is already listening on 127.0.0.1:${port} and ` +
-							`answered /info; not starting a second one. dd-trace will reach the ` +
-							`running receiver, so this is a successful no-op, not a failure.`
-					);
-					process.exit(0);
-				} else if (await isPortBound(port)) {
-					// Something holds the port but does not speak the trace protocol. Starting
-					// anyway yields a real EADDRINUSE instead of reporting success next to a
-					// stray socket.
-					logger.warn(
-						`127.0.0.1:${port} is bound but did not answer the trace-agent /info ` +
-							`endpoint, so it is not a healthy receiver. Starting the trace-agent ` +
-							`anyway; if that port is held by an unrelated process this will fail ` +
-							`with EADDRINUSE rather than silently pretending APM is working.`
-					);
+				} else {
+					if (await isTraceReceiverHealthy(port)) {
+						logger.info(
+							`A trace-agent receiver is already listening on 127.0.0.1:${port} and ` +
+								`answered /info; not starting a second one. dd-trace will reach the ` +
+								`running receiver, so this is a successful no-op, not a failure.`
+						);
+						process.exit(0);
+					}
+					if (await isPortBound(port)) {
+						// Something holds the port but does not speak the trace protocol. Starting
+						// anyway yields a real EADDRINUSE instead of reporting success next to a
+						// stray socket.
+						logger.warn(
+							`127.0.0.1:${port} is bound but did not answer the trace-agent /info ` +
+								`endpoint, so it is not a healthy receiver. Starting the trace-agent ` +
+								`anyway; if that port is held by an unrelated process this will fail ` +
+								`with EADDRINUSE rather than silently pretending APM is working.`
+						);
+					}
+					watch = { port, bound: false };
 				}
-				if (port !== RECEIVER_DISABLED) watch = { port, bound: false };
 			}
 		}
 
@@ -564,6 +568,8 @@ export async function launchAgent(
 	} catch (error) {
 		const message = errorMessage(error);
 		logger.error(`Failed to run ${processName}: ${message}`);
+		// Windows reports some spawn failures synchronously; POSIX does not.
+		const diagnosis = resolvedBinaryPath ? describeSpawnFailure(error, resolvedBinaryPath) : null;
 
 		// Harper's spawn gate throws synchronously with "Command <cmd> is not allowed"
 		// (security/jsLoader.ts) when the absolute path is absent from
@@ -580,9 +586,8 @@ export async function launchAgent(
 				`Harper requires a spawn "name" option. This launcher passes one, so this ` +
 					`indicates a modified or unexpected call path.`
 			);
-		} else if (resolvedBinaryPath && describeSpawnFailure(error, resolvedBinaryPath)) {
-			// Windows reports some of these synchronously; POSIX does not.
-			logger.error(describeSpawnFailure(error, resolvedBinaryPath)!);
+		} else if (diagnosis) {
+			logger.error(diagnosis);
 		} else if (!(error instanceof LaunchPreflightError)) {
 			logger.info(BUILD_FROM_SOURCE_HINT);
 		}
