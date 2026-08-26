@@ -319,6 +319,40 @@ function isPortBound(port: number, timeoutMs = 250): Promise<boolean> {
 	});
 }
 
+/** `uid`, or a placeholder on a platform that has no such thing. */
+function uidLabel(): string {
+	return typeof process.getuid === 'function' ? String(process.getuid()) : '?';
+}
+
+/**
+ * Why a spawn failed, when the reason is a property of the file rather than of the
+ * configuration. Both of these arrive as a bare "Failed to execute", which reads like a
+ * bad argument and sends people to look at datadog.yaml.
+ *
+ * A wrong-architecture binary passes every check this package makes: npm's os/cpu gate
+ * covers the install, and nothing covers a build matrix leg that filled
+ * build/linux-arm64/bin/ from an x86_64 runner.
+ */
+function describeSpawnFailure(error: unknown, binaryPath: string): string | null {
+	const code = (error as NodeJS.ErrnoException | null)?.code;
+	if (code === 'ENOEXEC') {
+		return (
+			`${binaryPath} is not executable code for this machine (ENOEXEC). The platform ` +
+			`package installed here must carry a ${Platform.current().getName()} binary; a build ` +
+			`that filled it from another architecture produces exactly this. Check with ` +
+			`\`file ${binaryPath}\`.`
+		);
+	}
+	if (code === 'EACCES') {
+		return (
+			`${binaryPath} exists but uid ${uidLabel()} may not execute it (EACCES). npm ` +
+			`preserves the mode bits; an archive unpacked by hand or a cache restored without ` +
+			`them does not. \`chmod +x ${binaryPath}\`.`
+		);
+	}
+	return null;
+}
+
 /**
  * Whether the receiver this launch is responsible for has ever been seen answering.
  * Written by waitForReceiver() and read by onExit(), because a trace-agent that exits 0
@@ -518,7 +552,7 @@ export async function launchAgent(
 				// allowlist rejection is not one of these; createSpawn throws synchronously
 				// before any child exists, so that case lands in the catch below.
 				logger.error(`Failed to execute ${processName}: ${error.message}`);
-				logger.error(`Binary path: ${binaryPath}`);
+				logger.error(describeSpawnFailure(error, binaryPath) ?? `Binary path: ${binaryPath}`);
 				process.exit(1);
 			});
 		}
@@ -546,6 +580,9 @@ export async function launchAgent(
 				`Harper requires a spawn "name" option. This launcher passes one, so this ` +
 					`indicates a modified or unexpected call path.`
 			);
+		} else if (resolvedBinaryPath && describeSpawnFailure(error, resolvedBinaryPath)) {
+			// Windows reports some of these synchronously; POSIX does not.
+			logger.error(describeSpawnFailure(error, resolvedBinaryPath)!);
 		} else if (!(error instanceof LaunchPreflightError)) {
 			logger.info(BUILD_FROM_SOURCE_HINT);
 		}
@@ -618,6 +655,7 @@ async function onExit(
  * hand-built CJS wrapper to reach them.
  */
 export const internalsForTesting = {
+	describeSpawnFailure,
 	receiverPort,
 	isRunSubcommand,
 	isTraceReceiverHealthy,

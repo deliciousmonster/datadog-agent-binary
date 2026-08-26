@@ -299,6 +299,28 @@ test('NEGATIVE: end-to-end, a trace-agent that never binds exits the shim non-ze
 	assert.match(stderr, new RegExp(`127\\.0\\.0\\.1:${port}`), 'the failure must name the port that stayed unbound');
 });
 
+test('end-to-end: a binary without its exec bit is reported as that, not as a bad argument', async (t) => {
+	if (isWindows) {
+		t.skip('POSIX mode bits do not gate execution on Windows');
+		return;
+	}
+	if (typeof process.getuid === 'function' && process.getuid() === 0) {
+		t.skip('root ignores the mode bits this test relies on');
+		return;
+	}
+	// spawn reports EACCES asynchronously, so the launcher prints "Failed to
+	// execute" and the operator goes looking at the config. The mode bit is a
+	// property of the file npm unpacked, and the message has to say so.
+	fs.chmodSync(sandboxBinaries.core, 0o644);
+	try {
+		const { code, stderr } = await runShim('datadog-agent', ['version']);
+		assert.notEqual(code, 0, 'an unexecutable binary must not exit 0');
+		assert.match(stderr, /chmod \+x/, `the failure must carry the fix; got: ${stderr}`);
+	} finally {
+		fs.chmodSync(sandboxBinaries.core, 0o755);
+	}
+});
+
 /**
  * Run `launchAgent` with `child_process.spawn` replaced, and `process.exit`
  * replaced by a throw so a launcher bailout surfaces as a test failure instead of

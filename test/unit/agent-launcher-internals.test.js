@@ -15,9 +15,10 @@ import net from 'node:net';
 import { findFreePort } from '../support/find-free-port.js';
 import { importDist, withEnv } from '../support/harness.js';
 
-const { receiverPort, isRunSubcommand, isTraceReceiverHealthy, waitForReceiver, onExit } = (
+const { describeSpawnFailure, receiverPort, isRunSubcommand, isTraceReceiverHealthy, waitForReceiver, onExit } = (
 	await importDist('agent-launcher.js')
 ).internalsForTesting;
+const { Platform } = await importDist('platform.js');
 
 /** The one variable every test here turns. */
 const withReceiverPort = (value, run) => withEnv('DD_APM_RECEIVER_PORT', value, run);
@@ -128,6 +129,31 @@ test('DD_APM_RECEIVER_PORT=0 is a configuration, not a typo', async () => {
 		})
 	);
 	assert.deepEqual(warnings, [], 'an explicit 0 must not be reported as a bad value');
+});
+
+test('a wrong-architecture binary is diagnosed as one', () => {
+	// ENOEXEC arrives as "Failed to execute", which reads like a bad argument and
+	// sends people to the config. npm's os/cpu gate covers the install; nothing
+	// covers a build leg that filled one platform's bin/ from another's runner.
+	const message = describeSpawnFailure({ code: 'ENOEXEC' }, '/pkg/bin/trace-agent');
+	assert.ok(message.includes('/pkg/bin/trace-agent'));
+	assert.ok(
+		message.includes(Platform.current().getName()),
+		`the message must name the architecture that was expected; got: ${message}`
+	);
+});
+
+test('a binary without its exec bit is diagnosed as one', () => {
+	const message = describeSpawnFailure({ code: 'EACCES' }, '/pkg/bin/trace-agent');
+	assert.match(message, /chmod \+x/, 'the message must carry the fix, not just the errno');
+});
+
+test('NEGATIVE: an unrelated spawn failure gets no invented diagnosis', () => {
+	// A guess dressed as a diagnosis is worse than the errno: it describes a world
+	// that is not the one that failed.
+	for (const error of [{ code: 'ENOENT' }, new Error('boom'), undefined, null]) {
+		assert.equal(describeSpawnFailure(error, '/pkg/bin/trace-agent'), null, JSON.stringify(error));
+	}
 });
 
 test('isRunSubcommand() treats a bare invocation and `run` as the receiver', () => {
