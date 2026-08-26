@@ -149,6 +149,7 @@ export class AgentBuilder {
 	protected async buildCommon(): Promise<void> {
 		await this.checkGoVersion();
 		await this.ensureCacheDirectory();
+		await this.ensureEmbeddedPath();
 
 		logger.info('Checking for dda installation...');
 		await this.ensureDdaInstalled();
@@ -331,6 +332,21 @@ export class AgentBuilder {
 
 	protected async ensureOutputDirectory(): Promise<void> {
 		await mkdir(this.config.outputDir, { recursive: true });
+	}
+
+	/**
+	 * `get_build_flags` in `tasks/libs/common/utils.py` raises "unable to locate embedded
+	 * path" unless `get_embedded_path` finds a `dev` directory under the source root, and
+	 * that directory exists only as a side effect of the rtloader install the core agent
+	 * now skips. Empty is what upstream wants: the check is `os.path.exists` with no look
+	 * inside, and `get_rtloader_paths` over an empty tree returns nothing, so no build-tree
+	 * RPATH and no `CGO_LDFLAGS -L` are baked into either binary. `trace-agent.build` needs
+	 * the directory too and its `build()` signature has no `--embedded-path` to point
+	 * elsewhere, which is why this runs once for the whole descriptor loop rather than as a
+	 * core-agent build flag.
+	 */
+	protected async ensureEmbeddedPath(): Promise<void> {
+		await mkdir(path.join(this.config.sourceDir, 'dev'), { recursive: true });
 	}
 
 	/**

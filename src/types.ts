@@ -59,9 +59,19 @@ export interface AgentBinaryDescriptor {
 	 * librtloader and an embedded CPython by an rpath into the build tree, yielding a
 	 * binary that only runs on the build machine.
 	 *
-	 * The trace-agent needs no excludes. `TRACE_AGENT_TAGS` contains neither tag, and
-	 * `tasks/trace_agent.py::build()` is a plain `go_build` with no rtloader parameters,
-	 * so forwarding the core agent's excludes here would be wrong rather than redundant.
+	 * That flag strips a Go build tag and nothing else. `tasks/agent.py` gates the
+	 * embedded-rtloader install on a separate `exclude_rtloader` parameter, so the build
+	 * kept doing the expensive work whose output the excluded tag then discarded. Under
+	 * the default `enable_bazel=True` that install extracts an LLVM toolchain the Linux
+	 * code path never invokes (`bazel/tools/BUILD.bazel` stubs `install_name_tool` for
+	 * Windows only, and `dd_cc_packaged.bzl` reaches it through an implicit attribute,
+	 * which makes it an unconditional analysis edge). It filled a 14 GB runner before a
+	 * single Go file compiled. `--exclude-rtloader --no-enable-bazel` skips both.
+	 *
+	 * The trace-agent takes none of this. `TRACE_AGENT_TAGS` contains neither excluded
+	 * tag, and `tasks/trace_agent.py::build()` is a plain `go_build` whose signature has
+	 * no rtloader parameter at all, so forwarding any of it would be wrong rather than
+	 * redundant.
 	 */
 	buildArgs: string;
 

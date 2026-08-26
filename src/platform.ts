@@ -69,7 +69,7 @@ export class Platform {
 				buildName: `agent${ext}`,
 				outputName: `datadog-agent${ext}`,
 				// See AgentBinaryDescriptor.buildArgs for why the core agent needs these.
-				buildArgs: '--build-exclude=systemd,python',
+				buildArgs: '--build-exclude=systemd,python --exclude-rtloader --no-enable-bazel',
 				buildArgsEnvVar: 'DD_AGENT_BUILD_ARGS',
 				accessorName: 'getBinaryPath',
 				processName: 'datadog-agent',

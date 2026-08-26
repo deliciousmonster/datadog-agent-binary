@@ -102,6 +102,10 @@ test('the build sequence reaches the cache directory before dda is installed', a
 		async ensureCacheDirectory() {
 			order.push('cache');
 		}
+		// Stubbed rather than left to run: sourceDir is deliberately unwritable here.
+		async ensureEmbeddedPath() {
+			order.push('dev');
+		}
 		async ensureDdaInstalled() {
 			order.push('dda');
 		}
@@ -111,5 +115,5 @@ test('the build sequence reaches the cache directory before dda is installed', a
 	})({ platform: new Platform('linux', 'x86_64'), sourceDir: '/nonexistent', outputDir: '/nonexistent/out' });
 
 	await build.buildCommon();
-	assert.deepEqual(order, ['cache', 'dda']);
+	assert.deepEqual(order, ['cache', 'dev', 'dda']);
 });
