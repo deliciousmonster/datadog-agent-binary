@@ -1,9 +1,30 @@
 # Changelog
 
-Notable changes to `@deliciousmonster/datadog-agent-binary`. Package versions track the
-Datadog Agent version they ship.
+Notable changes to `@deliciousmonster/datadog-agent-binary`. Entries are keyed by the
+Datadog Agent release they ship, with the package version second.
 
-## Unreleased
+The two numbers are independent. Mirroring them holds only while exactly one package ever
+ships per agent release, and packaging fixes go out while the agent pin stands still.
+Forcing them together is what produced a package published as `7.75.5`, a string matching
+no upstream Datadog tag, carrying agent `7.79.2`.
+
+The agent version is a shipped fact, not a version claim. `.datadog-agent-version` holds
+the pin and is listed in `files[]`, so it lands in the installed tree and can be read
+directly:
+
+```bash
+cat node_modules/@deliciousmonster/datadog-agent-binary/.datadog-agent-version
+```
+
+## Agent 7.82.1 (package 1.0.0, unreleased)
+
+### Changed: the package version line restarts at 1.0.0
+
+The npm version moves on packaging changes and says nothing about the agent inside.
+`7.75.5` was invented on the HarperFast line and matches no upstream Datadog tag; nothing
+has been published under `@deliciousmonster`, so the reset strands no consumer.
+`scripts/update-optional-deps.js` derives the four `optionalDependencies` pins from the
+root version, and `test/e2e/platform-packages.test.js` fails if they drift.
 
 ### Changed: the bundled agent moves 7.79.1 → 7.82.1
 

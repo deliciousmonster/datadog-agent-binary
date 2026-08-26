@@ -223,8 +223,10 @@ TypeScript 7 no longer auto-includes `node_modules/@types`, so `tsconfig.json` n
 
 The git tag is the only input to the publish pipeline. It sets the npm version, and whether it parses as a semver prerelease decides the dist-tag, so a mistyped tag is a bad default install for every consumer rather than a typo.
 
+The package version is its own line and carries no agent version. The bundled agent is pinned in `.datadog-agent-version`, which ships inside the tarball, so a consumer reads which agent they got instead of inferring it from the package number.
+
 - **Prerelease:** run the **Cut Prerelease** workflow. It asks the registry which `-next.N` versions exist, computes the next one, and pushes the tag. Default is a dry run; re-run with `dry_run=false`. Consumers get it with `npm install @deliciousmonster/datadog-agent-binary@next`.
-- **Stable:** push a tag with no prerelease segment (`v7.75.6`). It publishes under `latest`.
+- **Stable:** push a tag with no prerelease segment (`v1.0.1`). It publishes under `latest`.
 
 A prerelease cannot move `latest`, with one exception the pipeline guards: on the very first publish npm sets `latest` regardless of `--tag`, because a package with no dist-tags needs one. The publish job asserts afterwards that `latest` is not the prerelease and fails if it is.
 

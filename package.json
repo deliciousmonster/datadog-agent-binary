@@ -1,6 +1,6 @@
 {
 	"name": "@deliciousmonster/datadog-agent-binary",
-	"version": "7.75.5",
+	"version": "1.0.0",
 	"description": "Distributes the pre-compiled Datadog Agent as an npm package, so the agent is installed and versioned as a normal Node dependency instead of through a system package manager or a container sidecar. Intended for running the agent alongside a Node application, including inside Harper v5.",
 	"type": "module",
 	"main": "dist/index.js",
@@ -80,10 +80,10 @@
 	},
 	"homepage": "https://github.com/deliciousmonster/datadog-agent-binary#readme",
 	"optionalDependencies": {
-		"@deliciousmonster/datadog-agent-binary-linux-x86_64": "7.75.5",
-		"@deliciousmonster/datadog-agent-binary-linux-arm64": "7.75.5",
-		"@deliciousmonster/datadog-agent-binary-macos-arm64": "7.75.5",
-		"@deliciousmonster/datadog-agent-binary-windows-x86_64": "7.75.5"
+		"@deliciousmonster/datadog-agent-binary-linux-x86_64": "1.0.0",
+		"@deliciousmonster/datadog-agent-binary-linux-arm64": "1.0.0",
+		"@deliciousmonster/datadog-agent-binary-macos-arm64": "1.0.0",
+		"@deliciousmonster/datadog-agent-binary-windows-x86_64": "1.0.0"
 	},
 	"lint-staged": {
 		"*.{ts,js,json}": [
