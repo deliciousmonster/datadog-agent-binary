@@ -34,39 +34,59 @@ jobs:
   # tests against the ref being published: tagging a green commit is the common case
   # but nothing enforced it.
   #
-  # Fast hermetic checks only. The real-Harper integration suite lives in test.yml
-  # and already ran on the branch; repeating it here would double every release's
-  # critical path.
-  test:
-    name: test (gate)
+  # This asserts the commit already has a green Test run rather than running a suite
+  # of its own. Re-running one ubuntu leg here was strictly weaker than what the
+  # branch already got: test.yml runs eight legs, six unit legs across ubuntu, macOS
+  # and Windows on Node 22 and 24 plus two real-Harper integration legs, so a
+  # Windows-only failure passed this gate and shipped. Asserting is also seconds
+  # instead of minutes, because it needs neither a checkout nor an npm ci.
+  #
+  # prerelease.yml runs the same check before it cuts a tag, as two similar steps
+  # rather than one shared composite action: an action has to be checked out before
+  # it can be used, and the checkout is the cost this job just removed. Drift
+  # between the two fails closed on both sides, because a query that stops
+  # returning a run never reaches the success branch.
+  tested:
+    name: require a green Test run
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Reading workflow runs. Spelled out because this workflow declares no
+      # top-level permissions, so the job would otherwise take the repo default.
+      actions: read
     steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version-file: '.nvmrc'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Check formatting
-        run: npm run format:check
-
-      - name: Lint
-        run: npm run lint
-
-      # Both configs; the root tsconfig excludes **/*.test.ts.
-      - name: Type check
+      # Fail closed when no Test run exists for the commit. A tag can point at any
+      # commit at all, and one that never ran the suite is precisely what must not
+      # ship; test.yml has workflow_dispatch to arm an old commit by hand.
+      #
+      # "Absent" is also what a tag pushed seconds after a merge sees, because the
+      # Test run that merge started may not be created yet, so absence has to wait
+      # out the same ceiling as a run still in flight rather than fail immediately.
+      - name: Require a green Test run for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npm run typecheck
-          npm run typecheck:test
-
-      - name: Run npm test
-        run: npm test
+          set -euo pipefail
+          # 60 * 30s = 30 minutes, matching prerelease.yml. The Test matrix plus the
+          # integration legs finish well inside that; past it something is wedged and
+          # a human should look before a release does.
+          for i in $(seq 1 60); do
+            RUN=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/test.yml/runs?head_sha=${GITHUB_SHA}&per_page=1" \
+              --jq '.workflow_runs[0] | if . == null then "absent absent -" else "\(.status) \(.conclusion) \(.html_url)" end')
+            read -r STATUS CONCLUSION URL <<<"$RUN"
+            if [ "$STATUS" = "completed" ]; then
+              if [ "$CONCLUSION" = "success" ]; then
+                echo "Test succeeded for ${GITHUB_SHA}: ${URL}"
+                exit 0
+              fi
+              echo "::error::Test concluded '${CONCLUSION}' for ${GITHUB_SHA} (${URL}); refusing to build a release. Fix the commit and tag the fix, or re-run Test until it is green."
+              exit 1
+            fi
+            echo "Test is ${STATUS} for ${GITHUB_SHA}; waiting... ($i/60)"
+            sleep 30
+          done
+          echo "::error::No completed Test run for ${GITHUB_SHA} within 30 minutes; refusing to build a release. If this commit was never pushed to a branch, run test.yml against it with workflow_dispatch first."
+          exit 1
 
   # The same preflight prerelease.yml runs before cutting a tag, repeated here
   # because a hand-pushed tag or a dispatch on a tag ref skips that workflow
@@ -97,7 +117,7 @@ jobs:
           esac
 
   build:
-    needs: [test, preflight]
+    needs: [tested, preflight]
     # Cap each leg so a runner that never gets scheduled (e.g. a retired runner
     # image) can't stall the build, and therefore the publish, for the default 6h.
     # A real agent build finishes well within this.

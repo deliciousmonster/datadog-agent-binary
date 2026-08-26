@@ -120,3 +120,37 @@ jobs:
       # and always runs.
       - name: Run Harper integration tests
         run: npm run test:integration
+
+  # An early warning on the way into main, not a gate: build-release.yml runs the
+  # same script on the tag, and only that run decides anything. The registry and the
+  # token move on their own, so a green answer here vouches for nothing later. What
+  # it buys is finding a dead publish path while the PR is open instead of after a
+  # tag has spent an hour building four Go agents.
+  #
+  # It lives here rather than behind a `pull_request` trigger on build-release.yml
+  # because that trigger makes the whole workflow PR-runnable, and its build job
+  # carries no `if:`. Every PR would start four Go agent builds, and the `if:` that
+  # stopped them would skip the jobs downstream of it as well.
+  #
+  # Same-repo PRs only. A fork PR gets an empty NPM_TOKEN, and the script reads that
+  # as "no token, and none of the five names is published", so the job would fail on
+  # a condition it created itself.
+  preflight:
+    name: release preflight (early warning)
+    if: >-
+      github.event_name == 'pull_request' && github.base_ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Check the publish path
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node scripts/release-preflight.js
