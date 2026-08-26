@@ -247,13 +247,18 @@ function assembleFixtureApp(workspace: Workspace, binaries: { core: string; trac
  * the empty string, which the supervisor treats as unset) so the fingerprint it
  * hashes is deterministic and the missing-DD_API_KEY warning path executes
  * regardless of what the developer's shell exports.
+ *
+ * ROOTPATH is pinned empty for the same reason and one more: it is the first
+ * candidate the supervisor's path resolution takes, so a developer who exports
+ * it would silently move this run off the derivation under test. Cleared, the
+ * only remaining source is the boot properties file Harper writes into the
+ * isolated HOME, which is what the assertions below check.
  */
 function supervisorEnv(workspace: Workspace): Record<string, string> {
 	return {
 		DD_SPAWN_PROBE_DIR: workspace.dir,
 		DD_SPAWN_PROBE_COMMAND: workspace.longLivedCommand,
-		DD_HARPER_RUNTIME_DIR: join(workspace.dir, 'dd-runtime'),
-		DD_HARPER_LOG_PATH: join(workspace.dir, 'hdb-under-test.log'),
+		ROOTPATH: '',
 		DD_API_KEY: '',
 		DD_SITE: '',
 		DD_ENV: '',
@@ -613,26 +618,28 @@ suite('the shipped example supervisor under Harper v5 spawn enforcement', { skip
 	});
 
 	test("the runtime tree is rendered from the example's templates", () => {
-		// Recomputed rather than captured: supervisorEnv() is a pure function of the
-		// workspace, so this is the very environment the Harper process was given.
-		const env = supervisorEnv(workspace);
 		const [{ status }] = supervisorStatuses(rows);
-		assert.equal(status.runtimeDir, env.DD_HARPER_RUNTIME_DIR);
-		assert.equal(status.harperLogPath, env.DD_HARPER_LOG_PATH);
+		// Nothing in the Harper process's environment names either path: ROOTPATH is
+		// pinned empty by supervisorEnv(). Both values can only have come from the
+		// boot properties file, which is the derivation under test, running against a
+		// Harper that wrote that file itself.
+		const rootPath = ctx.harper.dataRootDir;
+		assert.equal(status.runtimeDir, join(rootPath, 'datadog'));
+		assert.equal(status.harperLogPath, join(rootPath, 'log', 'hdb.log'));
 		assert.equal(status.service, 'harper', 'DD_SERVICE was empty, so the documented default applies');
 		assert.equal(status.apiKey, 'MISSING', 'DD_API_KEY was empty; the supervisor must report that, not fail on it');
 
-		const datadogYaml = readFileSync(join(env.DD_HARPER_RUNTIME_DIR, 'datadog.yaml'), 'utf8');
+		const datadogYaml = readFileSync(join(status.runtimeDir!, 'datadog.yaml'), 'utf8');
 		assert.match(datadogYaml, /receiver_port: 8126/, 'the generated datadog.yaml must carry the APM receiver port');
 
-		const logsConfig = readFileSync(join(env.DD_HARPER_RUNTIME_DIR, 'conf.d', 'harperdb.d', 'conf.yaml'), 'utf8');
+		const logsConfig = readFileSync(join(status.runtimeDir!, 'conf.d', 'harperdb.d', 'conf.yaml'), 'utf8');
 		assert.ok(
 			!logsConfig.includes('__HDB_LOG_PATH__') && !logsConfig.includes('__DD_SERVICE__'),
 			'every placeholder in the shipped conf.d template must be substituted'
 		);
 		assert.ok(
-			logsConfig.includes(env.DD_HARPER_LOG_PATH),
-			'the logs source must tail the path DD_HARPER_LOG_PATH names'
+			logsConfig.includes(status.harperLogPath!),
+			'the logs source must tail the log path the supervisor derived'
 		);
 	});
 

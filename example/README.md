@@ -135,8 +135,7 @@ threads:
   preload: dd-trace/register.js # ESM loader hooks for http instrumentation
 
 logging:
-  file: true
-  path: /abs/path/to/harper/log/hdb.log # must match DD_HARPER_LOG_PATH below
+  file: true # the log source tails <rootPath>/log/hdb.log
   level: info # else the agents' startup lines are dropped
 ```
 
@@ -165,10 +164,12 @@ export DD_API_KEY=<your key>          # omit to run without an account, see belo
 export DD_SITE=datadoghq.com
 export DD_ENV=development
 export DD_SERVICE=harper-example      # must match `service` on the log source
-export DD_HARPER_LOG_PATH=/abs/path/to/harper/log/hdb.log
-# Optional. Defaults to <ROOTPATH>/datadog, or ~/.harper-datadog when ROOTPATH is unset.
-export DD_HARPER_RUNTIME_DIR=/abs/path/to/harper/datadog
 ```
+
+These are Datadog's own variables. The supervisor invents none of its own: the runtime
+directory and the log path are derived from Harper's root path, which is `ROOTPATH` when the
+image sets it and otherwise comes from `~/.harperdb/hdb_boot_properties.file` by way of the
+`settings_path` it names. See [Non-root paths](#non-root-paths).
 
 `DD_API_KEY` is read from the environment and deliberately never written into the generated
 `datadog.yaml`.
@@ -355,9 +356,17 @@ File logging is disabled *and* both log paths are relocated, so an agent that ig
 `disable_file_logging` still writes somewhere it is permitted to instead of emitting a
 permission-denied line per log line into Harper's own log.
 
-The runtime directory is `DD_HARPER_RUNTIME_DIR`, else `<ROOTPATH>/datadog`, else
-`~/.harper-datadog`. The component's own directory is deliberately not used: `harper deploy`
-replaces it, which would delete the run directory out from under a live agent.
+The runtime directory is `<root>/datadog`, and the tailed log is `<root>/log/hdb.log`, where
+`<root>` is `ROOTPATH` if the environment carries it and otherwise the `rootPath` read out of
+Harper's own configuration: `~/.harperdb/hdb_boot_properties.file` names the settings file in
+a `settings_path = <path>` line, and that file carries `rootPath` at the top level. Every step
+degrades rather than throws, so a missing boot file, an unreadable one, or a `settings_path`
+pointing at nothing falls through to the next candidate. With no root path anywhere the
+runtime directory becomes `~/.harper-datadog` and log collection is skipped with a line saying
+so; traces are unaffected.
+
+The component's own directory is deliberately not used as the runtime directory: `harper
+deploy` replaces it, which would delete the run directory out from under a live agent.
 
 The two binaries disagree about `-c`, verified against the shipped binaries: the core
 agent's `-c`/`--cfgpath` is the **directory** containing `datadog.yaml`, and the
@@ -380,3 +389,5 @@ checks writability before spawning.
 | Stack traces arrive as one log per line | The `multi_line` rule is not reaching the agent. Check `confd_path` and the rendered `conf.d/harperdb.d/conf.yaml`. |
 | Nothing in Datadog, no errors anywhere | `DD_API_KEY` unset or wrong. Spans and logs are accepted locally and dropped at the intake. |
 | Agent startup lines absent from `hdb.log` | `logging.level` is `warn` (Harper's default). Set it to `info`. |
+| `no log source was written, because Harper's root path could not be determined` | `ROOTPATH` is unset and `~/.harperdb/hdb_boot_properties.file` is absent, or its `settings_path` names a config with no absolute `rootPath`. Export `ROOTPATH`. |
+| Log source configured but nothing arrives | `logging.file` is off, or `logging.root`/`logging.path` moved the log off `<rootPath>/log/hdb.log`, which is the only place the source looks. |

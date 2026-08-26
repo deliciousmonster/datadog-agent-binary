@@ -23,7 +23,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { threadId } from 'node:worker_threads';
 // Bare specifier, so Harper loads this natively. Fine: nothing in it spawns. The spawn stays
 // in this file, which Harper does instrument.
@@ -134,6 +134,42 @@ export function assertSpawnInterception() {
 }
 
 /**
+ * Harper's root path, read the way Harper reads it: the boot properties file names the
+ * settings file, and the settings file carries `rootPath`.
+ *
+ * `node:fs` is genuinely available here. Harper's application loader substitutes exactly one
+ * builtin, `child_process` (`REPLACED_BUILTIN_MODULES`, security/jsLoader.ts), so a component
+ * reads both files the same way any Node module would.
+ *
+ * Returns null for anything unexpected, and never throws. This runs at component load inside
+ * a database node, so an absent boot file, a `settings_path` naming a file that is gone, or a
+ * line in a shape neither Harper nor this function expects has to fall through to the caller's
+ * next candidate rather than take the node down with it.
+ *
+ * @returns {string | null}
+ */
+function readHarperRootPath() {
+	try {
+		const boot = readFileSync(join(homedir(), '.harperdb', 'hdb_boot_properties.file'), 'utf-8');
+		// Java-style properties, not YAML, and Harper indents every line after the first, so
+		// the leading whitespace class is load-bearing. Same shape Harper's own installer
+		// matches with (utility/install/installer.js).
+		const settingsPath = boot.match(/^[ \t]*settings_path[ \t]*=[ \t]*(.+?)[ \t]*$/m)?.[1];
+		if (!settingsPath) return null;
+		// `rootPath` is top level in harper-config.yaml, so it is the one key readable off a
+		// single line without tracking indentation. A YAML parser would be a dependency taken
+		// on to read one key.
+		const settings = readFileSync(settingsPath, 'utf-8');
+		const rootPath = settings.match(/^rootPath[ \t]*:[ \t]*(.+?)[ \t]*(?:#.*)?$/m)?.[1].replace(/^(['"])(.*)\1$/, '$2');
+		// Rejects `rootPath: null`, which is what Harper's own defaultConfig.yaml ships, along
+		// with anything relative: a worker's cwd is not Harper's.
+		return rootPath && isAbsolute(rootPath) ? rootPath : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Directory holding datadog.yaml, conf.d, the auth token, the IPC certificate and the agent
  * logs. Nothing may land in the Datadog defaults: the deploy target runs as a non-root user
  * (`USER harperdb` on node:24-trixie) where /etc/datadog-agent, /opt/datadog-agent,
@@ -144,29 +180,31 @@ export function assertSpawnInterception() {
  * The component directory is deliberately not used: `harper deploy` replaces it, deleting the
  * run directory out from under a live agent.
  */
-function resolveRuntimeDir() {
-	if (process.env.DD_HARPER_RUNTIME_DIR) return process.env.DD_HARPER_RUNTIME_DIR;
-	// ROOTPATH is set by the harper-pro image and points at the mounted volume, so the
-	// Datadog tree sits next to Harper's own state and survives a restart.
-	if (process.env.ROOTPATH) return join(process.env.ROOTPATH, 'datadog');
-	// Harper's default root path is in its boot properties file and is not derivable from
-	// here. Fall back to a directory writable both in the container (HOME=/home/harperdb) and
-	// in a developer shell.
+export function resolveRuntimeDir() {
+	// ROOTPATH is set by the harper-pro image and points at the mounted volume, so the Datadog
+	// tree sits next to Harper's own state and survives a restart. Everywhere else, Harper's
+	// boot properties are what name the root path.
+	const rootPath = process.env.ROOTPATH || readHarperRootPath();
+	if (rootPath) return join(rootPath, 'datadog');
+	// Nothing named a root path. Fall back to a directory writable both in the container
+	// (HOME=/home/harperdb) and in a developer shell.
 	return join(homedir(), '.harper-datadog');
 }
 
 /**
  * Path to Harper's own log file, which the Datadog logs source tails.
  *
- * Never guessed from the home directory: Harper's root path lives in
- * `~/.harperdb/hdb_boot.properties`, which a component cannot read, and a guessed path that
- * does not exist produces a logs source that silently tails nothing. The operator pins it,
- * ROOTPATH supplies it, or log collection is skipped with an explanation.
+ * Never guessed from the home directory: a path that does not exist produces a logs source
+ * that silently tails nothing, and says so nowhere. Each candidate is a root path Harper
+ * itself recorded; when none of them answers, log collection is skipped with an explanation.
+ *
+ * `log/hdb.log` is Harper's default (`logging.root` defaults to `log`, and the log is named in
+ * `LOG_NAMES.HDB`). An operator who relocates `logging.root` is not followed here, which
+ * surfaces as the warning that the tailed file does not exist.
  */
-function resolveHarperLogPath() {
-	if (process.env.DD_HARPER_LOG_PATH) return process.env.DD_HARPER_LOG_PATH;
-	if (process.env.ROOTPATH) return join(process.env.ROOTPATH, 'log', 'hdb.log');
-	return null;
+export function resolveHarperLogPath() {
+	const rootPath = process.env.ROOTPATH || readHarperRootPath();
+	return rootPath ? join(rootPath, 'log', 'hdb.log') : null;
 }
 
 /**
@@ -431,9 +469,9 @@ function prepareRuntime(componentDir) {
 		}
 	} else {
 		log.warn(
-			`Datadog supervisor: no log source was written, because Harper's log path could ` +
-				`not be determined. It is recorded in Harper's boot properties, not anywhere a ` +
-				`component can read. Set DD_HARPER_LOG_PATH (or ROOTPATH) to enable log ` +
+			`Datadog supervisor: no log source was written, because Harper's root path could ` +
+				`not be determined: ROOTPATH is unset, and ~/.harperdb/hdb_boot_properties.file ` +
+				`did not lead to a config carrying rootPath. Set ROOTPATH to enable log ` +
 				`collection. Traces are unaffected.`
 		);
 	}
