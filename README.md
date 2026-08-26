@@ -223,13 +223,17 @@ npm run matrix      # what is published per platform, and whether it is correct
 
 TypeScript 7 no longer auto-includes `node_modules/@types`, so `tsconfig.json` names `"types": ["node"]` explicitly. `@types/node` deliberately tracks the 22 line rather than the newest release: it must match the engines floor, or code calling an API absent from Node 22.18 compiles clean and fails for a consumer on the version we advertise.
 
+### Branches
+
+`dev` is the default branch and where every change lands. `main` is a release trigger and nothing else: a push to it that touches anything outside `**/*.md` and `example/` cuts a `-next.N` tag and publishes to npm, with nobody asked to confirm. Open pull requests against `dev`. Merge into `main` only when a release is intended, and use `[skip release]` in the commit subject when it is not.
+
 ## Releasing
 
-The git tag is the only input to the publish pipeline. It sets the npm version, and whether it parses as a semver prerelease decides the dist-tag, so a mistyped tag is a bad default install for every consumer rather than a typo.
+The git tag is the only input to the publish pipeline. It sets the npm version, and whether it parses as a semver prerelease decides the dist-tag, so a mistyped tag is a bad default install for every consumer rather than a typo. Nothing hand-types it: **Cut Prerelease** computes the number and pushes the tag, and it runs by itself on every qualifying push to `main`.
 
 The package version is its own line and carries no agent version. The bundled agent is pinned in `.datadog-agent-version`, which ships inside the tarball, so a consumer reads which agent they got instead of inferring it from the package number.
 
-- **Prerelease:** run the **Cut Prerelease** workflow. It asks the registry which `-next.N` versions exist, computes the next one, and pushes the tag. Default is a dry run; re-run with `dry_run=false`. Consumers get it with `npm install @deliciousmonster/datadog-agent-binary@next`.
+- **Prerelease:** a push to `main` runs **Cut Prerelease** on its own. It waits for that commit's `Test` run to go green, asks both the registry and the git tags which `-next.N` numbers are already taken, and pushes the next one. Running the workflow by hand defaults to a dry run; re-run with `dry_run=false` to push. Consumers get it with `npm install @deliciousmonster/datadog-agent-binary@next`.
 - **Stable:** push a tag with no prerelease segment (`v1.0.1`). It publishes under `latest`.
 
 A prerelease cannot move `latest`, with one exception the pipeline guards: on the very first publish npm sets `latest` regardless of `--tag`, because a package with no dist-tags needs one. The publish job asserts afterwards that `latest` is not the prerelease and fails if it is.
@@ -244,6 +248,8 @@ A prerelease cannot move `latest`, with one exception the pipeline guards: on th
 | after publish | `publish-matrix --registry --deep` against the real registry; the matrix is appended to the release notes |
 
 **Authentication.** Trusted publishing is preferred: configure a trusted publisher on npmjs.com for this repo and `build-release.yml`, and leave `NPM_TOKEN` unset. The workflow has `id-token: write`, so npm exchanges the OIDC token for a short-lived credential and attaches build provenance. `NPM_TOKEN` is a bootstrap fallback only, for a first publish under a new scope where no trusted publisher can be configured yet; publish once, configure the publisher, delete the secret.
+
+**Provenance needs a public source repository.** npm's prerequisite is a public `repository` field matching where the publish runs from. `release-preflight.js` compares the slug and not the visibility, so a private repository clears preflight and then fails at `npm publish --provenance`, after every platform's Go build.
 
 ## License
 
