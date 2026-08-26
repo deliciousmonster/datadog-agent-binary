@@ -485,7 +485,15 @@ function launchOne(descriptor, binaryPath, paths, version) {
 		// it was watching is gone.
 		state.exited = true;
 		if (signal) {
-			log.warn(`Datadog supervisor: the ${descriptor.title} was terminated by ${signal}.`);
+			// SIGTERM/SIGINT/SIGHUP are someone asking it to stop. SIGKILL is usually the OOM
+			// killer, and the rest are crashes; reporting those at warn buries them.
+			const asked = signal === 'SIGTERM' || signal === 'SIGINT' || signal === 'SIGHUP';
+			const report = asked ? log.warn : log.error;
+			report.call(
+				log,
+				`Datadog supervisor: the ${descriptor.title} was terminated by ${signal}` +
+					`${asked ? '.' : ', which is a crash or an OOM kill rather than a shutdown.'}`
+			);
 			return;
 		}
 		if (code === 0) {

@@ -261,8 +261,24 @@ test('a receiver that served and then stopped exits 0', async () => {
 	assert.equal(await exitCodeFrom(() => onExit('trace', 'datadog-trace-agent', 0, null, { port, bound: true })), 0);
 });
 
-test('onExit() treats a signal as a clean stop', async () => {
-	assert.equal(await exitCodeFrom(() => onExit('core', 'datadog-agent', null, 'SIGTERM')), 0);
+test('onExit() treats a requested stop as a clean stop', async () => {
+	for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+		assert.equal(await exitCodeFrom(() => onExit('core', 'datadog-agent', null, signal)), 0, signal);
+	}
+});
+
+test('NEGATIVE: a crash or an OOM kill does not exit 0', async () => {
+	// The OOM killer takes the trace-agent and the wrapper reports success, so a
+	// container restart policy, a shell `&&`, or a systemd unit sees a clean stop.
+	// SIGKILL is 9 wherever Node reports it, so the 128 + signum convention is pinned
+	// on that one. The rest are only required to be non-zero: Windows numbers SIGABRT
+	// 22 rather than 6 and does not define SIGBUS at all, and asserting the arithmetic
+	// against os.constants would be asserting the implementation against itself.
+	assert.equal(await exitCodeFrom(() => onExit('trace', 'datadog-trace-agent', null, 'SIGKILL')), 137);
+	for (const signal of ['SIGSEGV', 'SIGABRT', 'SIGBUS']) {
+		const code = await exitCodeFrom(() => onExit('trace', 'datadog-trace-agent', null, signal));
+		assert.notEqual(code, 0, `${signal} was reported as a clean stop`);
+	}
 });
 
 test('onExit() passes a clean exit through', async () => {

@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { BinaryManager } from './binary-manager.js';
 import { errorMessage, logger, BUILD_FROM_SOURCE_HINT } from './logger.js';
@@ -243,6 +244,13 @@ function receiverPort(): number {
  * keyed on `run` skips itself while saying nothing.
  */
 const VALUE_FLAGS = new Set([...CONFIG_FLAGS, '-l', '--cpu-profile', '-m', '--mem-profile', '-p', '--pidfile']);
+
+/**
+ * Signals that mean someone asked the agent to stop. Everything else that kills it is a
+ * crash or an OOM kill, and reporting one of those as a clean stop hides the death from
+ * every restart policy, shell `&&`, and systemd unit that reads only the exit code.
+ */
+const GRACEFUL_SIGNALS = new Set<NodeJS.Signals>(['SIGTERM', 'SIGINT', 'SIGHUP']);
 
 /** Flags that make the process print something and exit instead of serving. */
 const QUERY_FLAGS = new Set(['-h', '--help']);
@@ -553,8 +561,19 @@ async function onExit(
 	watch?: ReceiverWatch
 ): Promise<void> {
 	if (signal) {
-		logger.warn(`${processName} terminated by signal ${signal}`);
-		process.exit(0);
+		if (GRACEFUL_SIGNALS.has(signal)) {
+			logger.warn(`${processName} terminated by signal ${signal}`);
+			process.exit(0);
+		}
+		logger.error(
+			`${processName} was killed by ${signal}. The OOM killer sends SIGKILL, and ` +
+				`SIGSEGV/SIGABRT/SIGBUS are crashes; none of them is a shutdown, so this exits ` +
+				`non-zero to let whatever supervises this process restart the agent.`
+		);
+		// The shell convention. os.constants covers every signal Node can report; the
+		// fallback is there because process.exit(NaN) exits 0, which is the bug being fixed.
+		const signum = os.constants.signals[signal];
+		process.exit(signum ? 128 + signum : 1);
 	}
 
 	const port = watch?.port ?? receiverPort();
