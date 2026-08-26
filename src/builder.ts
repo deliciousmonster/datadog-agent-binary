@@ -176,9 +176,10 @@ export class AgentBuilder {
 	}
 
 	/**
-	 * Per-binary rather than global: the core agent's `--build-exclude=systemd,python`
-	 * is wrong on the trace-agent (see `AgentBinaryDescriptor.buildArgs`). Args are
-	 * spawned without a shell, so an override must be plain space-separated tokens.
+	 * Per-binary rather than global: every flag the core agent takes is wrong on the
+	 * trace-agent, whose task has no rtloader or embedded-path parameters at all (see
+	 * `AgentBinaryDescriptor.buildArgs`). Args are spawned without a shell, so an
+	 * override must be plain space-separated tokens.
 	 */
 	protected getBuildArgs(binary: AgentBinaryDescriptor): string {
 		return process.env[binary.buildArgsEnvVar]?.trim() || binary.buildArgs;
