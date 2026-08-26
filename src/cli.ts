@@ -1,130 +1,210 @@
 #!/usr/bin/env node
 
-import { Command } from 'commander';
+import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
 import * as path from 'node:path';
 import { DatadogAgentBuilder, BinaryManager, DatadogAgentDownloader } from './index.js';
 import { errorMessage, logger, BUILD_FROM_SOURCE_HINT } from './logger.js';
 import { Platform, getAllSupportedPlatforms } from './platform.js';
 
-const program = new Command();
+const NAME = 'datadog-agent-build';
+
+const HELP = {
+	'': `Usage: ${NAME} [options] [command]
+
+Build Datadog Agent from source for multiple platforms
+
+Options:
+  -h, --help         display help for command
+
+Commands:
+  build [options]    Build Datadog Agent for current platform
+  platforms          List all supported platforms
+  version            Show the pinned and the latest Datadog Agent versions
+  install [options]  Install every Datadog Agent binary (core agent and
+                     trace-agent) for the current platform`,
+	'build': `Usage: ${NAME} build [options]
+
+Build Datadog Agent for current platform
+
+Options:
+  --datadog-version <version>  Datadog Agent version to build
+  -o, --output <dir>           Output directory (default: "./build")
+  -d, --debug                  Enable debug logging
+  -h, --help                   display help for command`,
+	'platforms': `Usage: ${NAME} platforms
+
+List all supported platforms
+
+Options:
+  -h, --help  display help for command`,
+	'version': `Usage: ${NAME} version
+
+Show the pinned and the latest Datadog Agent versions
+
+Options:
+  -h, --help  display help for command`,
+	'install': `Usage: ${NAME} install [options]
+
+Install every Datadog Agent binary (core agent and trace-agent) for the current
+platform
+
+Options:
+  -v, --version <version>  Specific version to install
+  -h, --help               display help for command`,
+};
+
+const HELP_ONLY = { help: { type: 'boolean', short: 'h' } } as const;
 
 /**
- * Commander hands `.action()` an `any`, so without these the whole callback body is
- * unchecked: `ensureBinary(options.version, kind)` -- kind and version transposed --
- * compiles clean and fails at runtime, which is why BinaryManager carries a hand-written
- * guard for exactly that mistake. Naming the shapes turns it into TS2345 at build time.
- * Each field must mirror an `.option()` below; adding one without updating these fails
- * `tsc`, which is the same protection, not a hole in it.
+ * `allowPositionals` is off everywhere on purpose: it is what makes
+ * `datadog-agent-build install 7.79.2` exit non-zero instead of silently installing the
+ * current platform, which is the behaviour that argument used to have.
  */
-interface BuildOptions {
-	datadogVersion?: string;
-	output: string;
-	debug?: boolean;
+function parse<T extends ParseArgsOptionsConfig>(options: T) {
+	return parseArgs({ args: process.argv.slice(3), options, allowPositionals: false });
 }
 
-interface InstallOptions {
-	version?: string;
+async function build(): Promise<void> {
+	const { values } = parse({
+		'datadog-version': { type: 'string' },
+		'output': { type: 'string', short: 'o', default: './build' },
+		'debug': { type: 'boolean', short: 'd' },
+		...HELP_ONLY,
+	});
+
+	if (values.help) {
+		console.log(HELP.build);
+		return;
+	}
+
+	if (values.debug) {
+		process.env.DEBUG = '1';
+	}
+
+	const builder = new DatadogAgentBuilder();
+
+	try {
+		logger.info('Building for current platform...');
+		const currentPlatform = Platform.current();
+		const outputDir = path.join(values.output, currentPlatform.getName(), 'bin');
+		const result = await builder.buildForCurrentPlatform({
+			version: values['datadog-version'],
+			outputDir,
+		});
+
+		logger.info(`\nBuild Summary:`);
+		if (result.success) {
+			// Report every binary. A summary that prints one path when two were built
+			// reads as a successful single-binary build, which is how a missing
+			// trace-agent went unnoticed through an entire release.
+			for (const [kind, outputPath] of Object.entries(result.outputPaths ?? {})) {
+				logger.info(`Successful (${kind}): ${outputPath}`);
+			}
+			process.exit(0);
+		} else {
+			logger.error(`Failed: ${result.error}`);
+			process.exit(1);
+		}
+	} catch (error) {
+		logger.error(`Build failed: ${errorMessage(error)}`);
+		process.exit(1);
+	}
 }
 
-program.name('datadog-agent-build').description('Build Datadog Agent from source for multiple platforms');
+function platforms(): void {
+	const { values } = parse(HELP_ONLY);
 
-program
-	.command('build')
-	.description('Build Datadog Agent for current platform')
-	.option('--datadog-version <version>', 'Datadog Agent version to build')
-	.option('-o, --output <dir>', 'Output directory', './build')
-	.option('-d, --debug', 'Enable debug logging')
-	.action(async (options: BuildOptions) => {
-		if (options.debug) {
-			process.env.DEBUG = '1';
+	if (values.help) {
+		console.log(HELP.platforms);
+		return;
+	}
+
+	logger.info('Supported platforms:');
+	for (const platform of getAllSupportedPlatforms()) {
+		logger.info(`  ${platform}`);
+	}
+}
+
+async function version(): Promise<void> {
+	const { values } = parse(HELP_ONLY);
+
+	if (values.help) {
+		console.log(HELP.version);
+		return;
+	}
+
+	const downloader = new DatadogAgentDownloader();
+
+	// The pin is what `build` uses, so report it first and report it even when the
+	// network lookup below fails.
+	try {
+		logger.info(`Pinned Datadog Agent version: ${await downloader.getPinnedVersion()}`);
+	} catch (error) {
+		logger.error(`Failed to read the pinned version: ${errorMessage(error)}`);
+		process.exit(1);
+	}
+
+	try {
+		logger.info(`Latest upstream Datadog Agent version: ${await downloader.getLatestVersion()}`);
+	} catch (error) {
+		logger.warn(`Failed to fetch the latest upstream version: ${errorMessage(error)}`);
+	}
+}
+
+async function install(): Promise<void> {
+	const { values } = parse({ version: { type: 'string', short: 'v' }, ...HELP_ONLY });
+
+	if (values.help) {
+		console.log(HELP.install);
+		return;
+	}
+
+	try {
+		const manager = new BinaryManager();
+
+		// Every binary this platform ships, not just the core agent. ensureBinary()
+		// takes the kind first and the version second; transposing them is a compile
+		// error because parseArgs types `values` from the option table above.
+		const binaries = Platform.current().getBinaries();
+		for (const descriptor of binaries) {
+			const binaryPath = await manager.ensureBinary(descriptor.kind, values.version);
+			logger.info(`Datadog ${descriptor.kind} agent installed: ${binaryPath}`);
 		}
+		logger.info('Run with: datadog-agent <command> / datadog-trace-agent <command>');
+	} catch (error) {
+		logger.error(`Installation failed: ${errorMessage(error)}`);
+		logger.info(BUILD_FROM_SOURCE_HINT);
+		process.exit(1);
+	}
+}
 
-		const builder = new DatadogAgentBuilder();
+const COMMANDS: Record<string, () => void | Promise<void>> = { build, platforms, version, install };
 
-		try {
-			logger.info('Building for current platform...');
-			const currentPlatform = Platform.current();
-			const outputDir = path.join(options.output, currentPlatform.getName(), 'bin');
-			const result = await builder.buildForCurrentPlatform({
-				version: options.datadogVersion,
-				outputDir,
-			});
+async function main(): Promise<void> {
+	const command = process.argv[2];
 
-			logger.info(`\nBuild Summary:`);
-			if (result.success) {
-				// Report every binary. A summary that prints one path when two were built
-				// reads as a successful single-binary build, which is how a missing
-				// trace-agent went unnoticed through an entire release.
-				for (const [kind, outputPath] of Object.entries(result.outputPaths ?? {})) {
-					logger.info(`Successful (${kind}): ${outputPath}`);
-				}
-				process.exit(0);
-			} else {
-				logger.error(`Failed: ${result.error}`);
-				process.exit(1);
-			}
-		} catch (error) {
-			logger.error(`Build failed: ${errorMessage(error)}`);
-			process.exit(1);
-		}
-	});
+	if (command === undefined || command === '-h' || command === '--help' || command === 'help') {
+		console.log(HELP['']);
+		// Commander exits 1 when invoked with no command at all, and 0 for an explicit
+		// help request. Scripts branch on that, so keep it.
+		process.exit(command === undefined ? 1 : 0);
+	}
 
-program
-	.command('platforms')
-	.description('List all supported platforms')
-	.action(() => {
-		const platforms = getAllSupportedPlatforms();
+	const run = COMMANDS[command];
+	if (!run) {
+		console.error(`error: unknown command '${command}'`);
+		process.exit(1);
+	}
 
-		logger.info('Supported platforms:');
-		for (const platform of platforms) {
-			logger.info(`  ${platform}`);
-		}
-	});
+	await run();
+}
 
-program
-	.command('version')
-	.description('Show the pinned and the latest Datadog Agent versions')
-	.action(async () => {
-		const downloader = new DatadogAgentDownloader();
-
-		// The pin is what `build` uses, so report it first and report it even when the
-		// network lookup below fails.
-		try {
-			logger.info(`Pinned Datadog Agent version: ${await downloader.getPinnedVersion()}`);
-		} catch (error) {
-			logger.error(`Failed to read the pinned version: ${errorMessage(error)}`);
-			process.exit(1);
-		}
-
-		try {
-			logger.info(`Latest upstream Datadog Agent version: ${await downloader.getLatestVersion()}`);
-		} catch (error) {
-			logger.warn(`Failed to fetch the latest upstream version: ${errorMessage(error)}`);
-		}
-	});
-
-program
-	.command('install')
-	.description('Install every Datadog Agent binary (core agent and trace-agent) for the current platform')
-	.option('-v, --version <version>', 'Specific version to install')
-	.action(async (options: InstallOptions) => {
-		try {
-			const manager = new BinaryManager();
-
-			// Every binary this platform ships, not just the core agent. ensureBinary()
-			// takes the kind first and the version second; transposing them is a compile
-			// error only because InstallOptions above types what commander returns as `any`.
-			const binaries = Platform.current().getBinaries();
-			for (const descriptor of binaries) {
-				const binaryPath = await manager.ensureBinary(descriptor.kind, options.version);
-				logger.info(`Datadog ${descriptor.kind} agent installed: ${binaryPath}`);
-			}
-			logger.info('Run with: datadog-agent <command> / datadog-trace-agent <command>');
-		} catch (error) {
-			logger.error(`Installation failed: ${errorMessage(error)}`);
-			logger.info(BUILD_FROM_SOURCE_HINT);
-			process.exit(1);
-		}
-	});
-
-program.parse();
+// parseArgs throws for an unknown option and, with allowPositionals off, for an excess
+// argument. Both are usage errors: exit non-zero with the message, never a stack.
+main().catch((error: unknown) => {
+	if (error instanceof Error && String((error as NodeJS.ErrnoException).code ?? '').startsWith('ERR_PARSE_ARGS_')) {
+		console.error(`error: ${error.message}`);
+		process.exit(1);
+	}
+	throw error;
+});

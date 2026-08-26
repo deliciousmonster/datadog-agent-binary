@@ -58,8 +58,8 @@ what makes a stale copy fail loudly instead of silently building on the wrong co
 
 ### Changed: TypeScript 7
 
-`typescript` 5.9 → 7.0, `prettier` 3.6 → 3.9, `lint-staged` 16 → 17. All dev-only; the
-one shipped runtime dependency is still `commander`.
+`typescript` 5.9 → 7.0, `prettier` 3.6 → 3.9, `lint-staged` 16 → 17. All dev-only, and
+after the entry below there is no runtime dependency left for them to sit beside.
 
 TypeScript 7 no longer auto-includes every package under `node_modules/@types`, so
 `tsconfig.json` now names `"types": ["node"]`. Without it the entire Node global surface
@@ -73,6 +73,26 @@ version we advertise. The types track the floor, not the newest release.
 
 `lint-staged` 17 requires Node `>=22.22.1`, above our `^22.18.0` floor. That constrains
 contributors only, never consumers, since it never enters the published tarball.
+
+### Removed: `commander`, the last runtime dependency
+
+`dependencies` is now empty. `src/cli.ts` parses with `node:util` `parseArgs`, stable on
+both engines the package supports, so installing this package adds the two platform
+binaries and nothing else to a consumer's tree.
+
+Every subcommand, flag, short form, help screen, and exit code is unchanged. Only the
+wording of two errors moves, from commander's phrasing to Node's:
+
+```
+error: unknown option '--nope'                        → error: Unknown option '--nope'
+error: too many arguments for 'install'. …            → error: Unexpected argument '7.79.2'. …
+```
+
+The typed `BuildOptions` and `InstallOptions` interfaces are gone with it. They existed
+because commander hands `.action()` an `any`, and a hand-written mirror of the flag table
+is a second place to forget an edit. `parseArgs` derives the value types from the option
+table itself, so `ensureBinary(version, kind)` with the arguments transposed is still
+TS2345 and now cannot drift.
 
 ### Removed: `--build-args`, `BuildOptions.buildArgs`, `BuildConfig.buildArgs` (breaking)
 

@@ -46,9 +46,6 @@
 	],
 	"author": "",
 	"license": "Apache-2.0",
-	"dependencies": {
-		"commander": "^15.0.0"
-	},
 	"devDependencies": {
 		"@harperfast/code-guidelines": "^0.1.2",
 		"@harperfast/integration-testing": "^0.7.1",
