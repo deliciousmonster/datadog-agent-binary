@@ -731,19 +731,14 @@ suite(
 	}
 );
 
-/**
- * Resolve both agent binaries the way a Harper application would. A version is
- * passed so the not-found path stops at the local build lookup instead of falling
- * through to getLatestVersion(), which calls the GitHub API; a skip must not
- * depend on the network.
- */
+/** Resolve both agent binaries the way a Harper application would. */
 async function resolveAgentBinaries(): Promise<{ core: string; trace: string } | { error: string }> {
 	try {
 		const { BinaryManager } = require(join(REPO_ROOT, 'dist', 'binary-manager.js'));
 		const manager = new BinaryManager();
 		return {
-			core: await manager.ensureBinary('core', 'not-a-published-version'),
-			trace: await manager.ensureBinary('trace', 'not-a-published-version'),
+			core: await manager.ensureBinary('core'),
+			trace: await manager.ensureBinary('trace'),
 		};
 	} catch (error) {
 		return { error: errorMessage(error) };

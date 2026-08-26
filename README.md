@@ -114,7 +114,7 @@ const corePath = await manager.ensureBinary(); // core agent
 const tracePath = await manager.ensureTraceAgentBinary(); // trace-agent
 ```
 
-`ensureBinary(kind?, version?)` takes the kind first and the version second, so `ensureBinary("trace")` and `ensureTraceAgentBinary()` are the same call. No arguments resolves the core agent.
+`ensureBinary(kind?)` takes the binary kind, so `ensureBinary("trace")` and `ensureTraceAgentBinary()` are the same call. No arguments resolves the core agent.
 
 Each resolves through the platform package's accessor, falling back to a locally built binary. A platform package published before the trace-agent existed has no `getTraceAgentBinaryPath()`; `ensureTraceAgentBinary()` says so by name rather than failing generically.
 

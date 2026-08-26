@@ -14,14 +14,14 @@ const HELP = {
 Build Datadog Agent from source for multiple platforms
 
 Options:
-  -h, --help         display help for command
+  -h, --help       display help for command
 
 Commands:
-  build [options]    Build Datadog Agent for current platform
-  platforms          List all supported platforms
-  version            Show the pinned and the latest Datadog Agent versions
-  install [options]  Install every Datadog Agent binary (core agent and
-                     trace-agent) for the current platform`,
+  build [options]  Build Datadog Agent for current platform
+  platforms        List all supported platforms
+  version          Show the pinned and the latest Datadog Agent versions
+  install          Install every Datadog Agent binary (core agent and
+                   trace-agent) for the current platform`,
 	'build': `Usage: ${NAME} build [options]
 
 Build Datadog Agent for current platform
@@ -43,14 +43,13 @@ Show the pinned and the latest Datadog Agent versions
 
 Options:
   -h, --help  display help for command`,
-	'install': `Usage: ${NAME} install [options]
+	'install': `Usage: ${NAME} install
 
 Install every Datadog Agent binary (core agent and trace-agent) for the current
 platform
 
 Options:
-  -v, --version <version>  Specific version to install
-  -h, --help               display help for command`,
+  -h, --help  display help for command`,
 };
 
 const HELP_ONLY = { help: { type: 'boolean', short: 'h' } } as const;
@@ -152,7 +151,7 @@ async function version(): Promise<void> {
 }
 
 async function install(): Promise<void> {
-	const { values } = parse({ version: { type: 'string', short: 'v' }, ...HELP_ONLY });
+	const { values } = parse(HELP_ONLY);
 
 	if (values.help) {
 		console.log(HELP.install);
@@ -162,12 +161,11 @@ async function install(): Promise<void> {
 	try {
 		const manager = new BinaryManager();
 
-		// Every binary this platform ships, not just the core agent. ensureBinary()
-		// takes the kind first and the version second; transposing them is a compile
-		// error because parseArgs types `values` from the option table above.
+		// Every binary this platform ships, not just the core agent: resolving the core
+		// agent alone is how a release went out with nothing bound to 127.0.0.1:8126.
 		const binaries = Platform.current().getBinaries();
 		for (const descriptor of binaries) {
-			const binaryPath = await manager.ensureBinary(descriptor.kind, values.version);
+			const binaryPath = await manager.ensureBinary(descriptor.kind);
 			logger.info(`Datadog ${descriptor.kind} agent installed: ${binaryPath}`);
 		}
 		logger.info('Run with: datadog-agent <command> / datadog-trace-agent <command>');
