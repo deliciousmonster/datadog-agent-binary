@@ -1,5 +1,6 @@
 import { execSync, spawn } from 'node:child_process';
 import { chmod, copyFile, mkdir, readFile, stat } from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { AgentBinaryDescriptor, AgentBinaryKind, BuildConfig, BuildResult, OS } from './types.js';
 import { errorMessage, logger } from './logger.js';
@@ -29,6 +30,7 @@ export function createBuilder(config: BuildConfig): AgentBuilder {
 
 export class AgentBuilder {
 	protected config: BuildConfig;
+	protected cacheDir?: string;
 
 	constructor(config: BuildConfig) {
 		this.config = config;
@@ -146,6 +148,7 @@ export class AgentBuilder {
 
 	protected async buildCommon(): Promise<void> {
 		await this.checkGoVersion();
+		await this.ensureCacheDirectory();
 
 		logger.info('Checking for dda installation...');
 		await this.ensureDdaInstalled();
@@ -304,7 +307,26 @@ export class AgentBuilder {
 			GOARCH: platform.getGoArch(),
 			GOOS: this.osBuild().goos,
 			CGO_ENABLED: '1',
+			...(this.cacheDir ? { XDG_CACHE_HOME: this.cacheDir } : {}),
 		};
+	}
+
+	/**
+	 * Upstream's bazel wrapper (`tools/bazel`) exits 2 when `CI` is set and XDG_CACHE_HOME
+	 * does not already name an absolute directory, and it derives GOCACHE and GOMODCACHE
+	 * from it. With `CI` unset that same wrapper only prints a hint and carries on, so a
+	 * laptop build never meets the check and a runner dies four minutes in, inside
+	 * `agent.build`. An explicit value wins so a cache action can point this at a path it
+	 * restores and saves.
+	 */
+	protected async ensureCacheDirectory(): Promise<void> {
+		if (!process.env.CI) {
+			return;
+		}
+		const configured = process.env.XDG_CACHE_HOME?.trim();
+		this.cacheDir = configured ? path.resolve(configured) : path.join(os.homedir(), '.cache');
+		await mkdir(this.cacheDir, { recursive: true });
+		logger.debug(`Using XDG_CACHE_HOME ${this.cacheDir}`);
 	}
 
 	protected async ensureOutputDirectory(): Promise<void> {
