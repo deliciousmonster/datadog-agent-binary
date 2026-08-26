@@ -54,10 +54,12 @@ suite red, and today it does not.
 
 ## What you need to decide
 
-Two answers change the work rather than the schedule. Whether host metrics and log forwarding are
+One answer changes the work rather than the schedule: whether host metrics and log forwarding are
 in scope, because trace-agent alone is a simpler shape that genuinely works and gives those up.
-And which delivery path to take, because npm provenance binds an artifact to the repository that
-built it, so contributing upstream and publishing under a separate scope cannot both be held open
-past the point of publishing.
+
+The delivery path was settled on 2026-08-26, publishing under `@deliciousmonster` now and offering
+the upstream PR after. npm provenance binds an artifact to the repository that built it, so
+contributing upstream and publishing under a separate scope could not both stay open past the point
+of publishing.
 
 Everything else can be decided as the work proceeds.

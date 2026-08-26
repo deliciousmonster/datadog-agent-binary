@@ -38,9 +38,9 @@ and refuses to publish when they disagree. Repointing the manifest at our own re
 means a build inside `HarperFast/datadog-agent-binary` fails that check, and vice versa.
 
 That is the correct behaviour. Provenance whose repository field does not match the builder is
-provenance that means nothing. The practical consequence: the repointing change is prepared but
-held, and applied only if the upstream path is declined. Applying it while an upstream PR is live
-would break that PR's ability to publish.
+provenance that means nothing. The practical consequence: the repointing change is applied for
+exactly one path at a time. It is applied now, at `18c8019`, for Path B, and it has to come back
+out before an upstream PR can publish.
 
 ## What happens to the already-published packages
 
@@ -69,6 +69,11 @@ absorb one rename rather than two. If neither a scope change nor a rename happen
 names stay and the safeguard is the pre-publish matrix check rather than the naming.
 
 ## Recommendation
+
+**Decided 2026-08-26: Path B first, Path A after.** The order below is inverted in practice. The
+repointing commit is applied rather than held, `@deliciousmonster` is the publishing scope, and the
+upstream PR follows once the fix is in the customer's hands. What changed is which path waits, not
+the reasoning.
 
 Offer the upstream PR first. The fix belongs in the package that has the problem, the customer
 already depends on that package, and a merged upstream change costs them nothing in
