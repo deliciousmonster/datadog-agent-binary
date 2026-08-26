@@ -542,13 +542,26 @@ function prepareRuntime(componentDir) {
 	const logPath = resolveHarperLogPath();
 	let logsYaml = '';
 	if (logPath) {
-		logsYaml = renderLogsConfig(componentDir, logPath, service);
-		writeFileAtomic(join(paths.confd, 'harperdb.d', 'conf.yaml'), logsYaml);
-		if (!existsSync(logPath)) {
+		try {
+			logsYaml = renderLogsConfig(componentDir, logPath, service);
+			writeFileAtomic(join(paths.confd, 'harperdb.d', 'conf.yaml'), logsYaml);
+			if (!existsSync(logPath)) {
+				log.warn(
+					`Datadog supervisor: Harper's log file ${logPath} does not exist yet. The agent ` +
+						`will tail it once it appears, but if it never does, logging.file is off or ` +
+						`logging.path points somewhere else.`
+				);
+			}
+		} catch (error) {
+			// Log collection is optional; the trace-agent is not. This block used to throw
+			// out of prepareRuntime, and the catch around it stopped BOTH spawns, so a
+			// renamed conf.d template took APM down with it. Reset rather than keep a
+			// half-rendered string: the fingerprint has to describe what was written.
+			logsYaml = '';
 			log.warn(
-				`Datadog supervisor: Harper's log file ${logPath} does not exist yet. The agent ` +
-					`will tail it once it appears, but if it never does, logging.file is off or ` +
-					`logging.path points somewhere else.`
+				`Datadog supervisor: no log source was written (${error.message}). The template ` +
+					`is conf.d/harperdb.d/conf.yaml under the component directory, and it has to be ` +
+					`readable by the Harper user. Traces are unaffected.`
 			);
 		}
 	} else {
