@@ -9,8 +9,10 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
-import { importDist } from '../support/harness.js';
+import { importDist, withTempDir } from '../support/harness.js';
 
 const { AgentBuilder } = await importDist('builder.js');
 
@@ -121,3 +123,29 @@ test('neither installer present still refuses rather than leaving a broken user-
 	const { builder } = builderWith({ pin: '3.12\n', tools: [] });
 	await assert.rejects(() => builder.ensureDdaInstalled(), /uv tool install dda/);
 });
+
+/** A builder over a real source tree, so the pin read is the real one. */
+function builderOver(sourceDir) {
+	return new (class extends AgentBuilder {
+		async executeCommand() {
+			return '';
+		}
+	})({ sourceDir });
+}
+
+test('a source tree with no .python-version leaves the interpreter to pipx', () =>
+	withTempDir('py-pin-absent-', async (sourceDir) => {
+		assert.equal(await builderOver(sourceDir).pipxPythonFlag(), '');
+	}));
+
+test('a .python-version that exists but cannot be read fails instead of reading as absent', () =>
+	withTempDir('py-pin-unreadable-', (sourceDir) => {
+		// See the .go-version case: a directory is the one non-ENOENT failure every host
+		// produces the same way.
+		fs.mkdirSync(path.join(sourceDir, '.python-version'));
+		return assert.rejects(
+			() => builderOver(sourceDir).pipxPythonFlag(),
+			/Cannot read \.python-version/,
+			'an unreadable pin must not hand pipx the interpreter choice it cannot make'
+		);
+	}));

@@ -30,18 +30,24 @@ const RTLOADER_FLAGS = ['--exclude-rtloader', '--no-enable-bazel'];
 
 /**
  * A builder over a real (empty) source tree whose commands are recorded rather than run,
- * each with whether `dev/` already existed at the moment it was issued.
+ * each with whether `dev/` already existed at the moment it was issued. Both command
+ * paths are stubbed: the invoke tasks stream, and an unstubbed `streamCommand` would
+ * spawn a real dda.
  */
 function recordingBuilder(sourceDir) {
 	const issued = [];
 	const dev = path.join(sourceDir, 'dev');
+	const record = (command) => issued.push({ command, devExisted: fs.existsSync(dev) });
 	const builder = new (class extends AgentBuilder {
 		async checkGoVersion() {}
 		async ensureCacheDirectory() {}
 		async ensureDdaInstalled() {}
 		async executeCommand(command) {
-			issued.push({ command, devExisted: fs.existsSync(dev) });
+			record(command);
 			return '';
+		}
+		async streamCommand(command) {
+			record(command);
 		}
 	})({
 		platform: new Platform('linux', 'x86_64'),
