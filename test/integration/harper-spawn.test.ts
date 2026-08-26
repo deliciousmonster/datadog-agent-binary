@@ -106,6 +106,8 @@ type SupervisorStatus = {
 	configFile?: string;
 	harperLogPath?: string | null;
 	service?: string;
+	/** Core checks whose configuration reached the runtime conf.d, by check name. */
+	coreChecks?: string[];
 	version?: number;
 	error?: string;
 };
@@ -219,6 +221,11 @@ function assembleFixtureApp(
 	cpSync(join(REPO_ROOT, 'package.json'), join(packageDir, 'package.json'));
 	cpSync(join(REPO_ROOT, '.datadog-agent-version'), join(packageDir, '.datadog-agent-version'));
 	cpSync(PACKAGE_DIST_DIR, join(packageDir, 'dist'), { recursive: true });
+	// conf.d ships in the package's `files`, and the supervisor resolves the core-check
+	// configurations through the package rather than through the component. Omit it here and
+	// the suite proves nothing about host metrics while still going green: the supervisor
+	// treats an unreadable conf.d as the optional feature it is and warns.
+	cpSync(join(REPO_ROOT, 'conf.d'), join(packageDir, 'conf.d'), { recursive: true });
 	copyDependencyClosure(Object.keys(PACKAGE_MANIFEST.dependencies ?? {}), modulesDir);
 
 	// dist is the arbiter of the platform package's name and accessor contract,
@@ -675,6 +682,22 @@ suite('the shipped example supervisor under Harper v5 spawn enforcement', { skip
 			logsConfig.includes(status.harperLogPath!),
 			'the logs source must tail the log path the supervisor derived'
 		);
+
+		// The collector schedules only what conf.d names. With nothing here but the log
+		// source the agent runs no check at all, and says so nowhere useful: the forwarder
+		// still posts datadog.agent.running, which the aggregator appends to every flush
+		// rather than collecting, so the pipeline reports success while carrying nothing
+		// about the host.
+		assert.ok(
+			Array.isArray(status.coreChecks) && status.coreChecks.includes('cpu'),
+			`the supervisor reported no cpu check: ${JSON.stringify(status.coreChecks)}`
+		);
+		for (const name of status.coreChecks!) {
+			assert.ok(
+				existsSync(join(status.runtimeDir!, 'conf.d', `${name}.d`, 'conf.yaml.default')),
+				`${name} was reported as configured but nothing was written for it`
+			);
+		}
 	});
 
 	test('killing the child unlinks its PID file', async () => {
@@ -810,15 +833,25 @@ suite('the example supervisor with the optional logs template missing', { skip: 
 	});
 
 	test('datadog.yaml is still written, and no logs source is', () => {
-		const env = supervisorEnv(workspace);
+		// Derived the way the supervisor derives it, from the root path Harper recorded.
+		// This used to read DD_HARPER_RUNTIME_DIR out of supervisorEnv(), which stopped
+		// existing when the path derivation replaced that variable: the two changes landed
+		// in parallel, each green against a base that lacked the other, and the merge left
+		// join() taking undefined.
+		const runtimeDir = join(ctx.harper.dataRootDir, 'datadog');
 		assert.ok(
-			existsSync(join(env.DD_HARPER_RUNTIME_DIR, 'datadog.yaml')),
+			existsSync(join(runtimeDir, 'datadog.yaml')),
 			'the trace-agent is fatal without a config file that exists'
 		);
 		assert.equal(
-			existsSync(join(env.DD_HARPER_RUNTIME_DIR, 'conf.d', 'harperdb.d', 'conf.yaml')),
+			existsSync(join(runtimeDir, 'conf.d', 'harperdb.d', 'conf.yaml')),
 			false,
 			'nothing should have been rendered from a template that was not there'
+		);
+		assert.ok(
+			existsSync(join(runtimeDir, 'conf.d', 'cpu.d', 'conf.yaml.default')),
+			'the core-check configurations come from the package, not from the component ' +
+				'template, so a missing logs template must not take host metrics with it'
 		);
 	});
 });

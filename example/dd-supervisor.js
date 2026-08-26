@@ -21,13 +21,27 @@
 
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+	accessSync,
+	constants,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs';
+import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { threadId } from 'node:worker_threads';
 // Bare specifier, so Harper loads this natively. Fine: nothing in it spawns. The spawn stays
 // in this file, which Harper does instrument.
 import { BinaryManager } from '@deliciousmonster/datadog-agent-binary';
+
+/** Must stay the specifier imported above; resolvePackageConfd() looks the package up by it. */
+const PACKAGE_NAME = '@deliciousmonster/datadog-agent-binary';
 
 /**
  * Harper seeds every application compartment with `logger`; entries land in hdb.log prefixed
@@ -332,6 +346,84 @@ function renderLogsConfig(componentDir, logPath, service) {
 }
 
 /**
+ * The package's own conf.d, which carries the core-check configurations.
+ *
+ * Resolved through the package rather than from the component directory, so the configurations
+ * travel with the agent version they were written against: `harper deploy` replaces the
+ * component, and a check that gained or lost a platform between agent releases would otherwise
+ * be described by whatever the component was last deployed with.
+ */
+function resolvePackageConfd() {
+	return join(dirname(createRequire(import.meta.url).resolve(`${PACKAGE_NAME}/package.json`)), 'conf.d');
+}
+
+/**
+ * Names of the platforms a check directory applies to, from an optional `platforms` file
+ * beside its config. Absent means every platform. Values are Node's (`linux`, `darwin`,
+ * `win32`), because that is what they are compared against.
+ *
+ * A check with no implementation for the running platform is not inert: the collector reports
+ * it under Loading Errors in `datadog-agent status`, which reads like a broken install rather
+ * than like a check that was never going to run here.
+ */
+function readPlatformGate(checkDir) {
+	let contents;
+	try {
+		contents = readFileSync(join(checkDir, 'platforms'), 'utf-8');
+	} catch {
+		return null;
+	}
+	return contents.replace(/#.*$/gm, '').split(/\s+/).filter(Boolean);
+}
+
+/**
+ * Write the shipped core-check configurations into the runtime conf.d, and return what was
+ * written.
+ *
+ * Without them the agent collects no host metrics at all. Every core check is compiled into
+ * the binary, but the collector schedules only what conf.d names: against an empty conf.d,
+ * `configcheck` prints nothing and `status` reports "No checks have run yet". What keeps
+ * flowing regardless is `datadog.agent.running`, which the aggregator appends to every flush
+ * rather than collecting from a check, so the pipeline looks healthy while carrying nothing
+ * about the host.
+ *
+ * Written as `conf.yaml.default`, upstream's own extension, because the file provider drops a
+ * default whenever a plain `conf.yaml` for the same check sits in the same directory
+ * (comp/core/autodiscovery/providers/config_reader.go). That gives an operator a per-check
+ * override this function will not overwrite on the next start.
+ *
+ * The supervisor owns exactly the files named `conf.yaml.default` under
+ * `<runtime>/conf.d/*.d/`, so anything it did not just write is stale and removed: the runtime
+ * tree sits on a persistent volume and outlives both the container and the package version
+ * that created it.
+ */
+function writeCoreCheckConfigs(confdPath, packageConfd) {
+	const written = [];
+	for (const entry of readdirSync(packageConfd, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+		if (!entry.isDirectory() || !entry.name.endsWith('.d')) continue;
+		const source = join(packageConfd, entry.name, 'conf.yaml.default');
+		if (!existsSync(source)) continue;
+
+		const platforms = readPlatformGate(join(packageConfd, entry.name));
+		if (platforms && !platforms.includes(process.platform)) continue;
+
+		const body = readFileSync(source, 'utf-8');
+		const target = join(confdPath, entry.name);
+		mkdirSync(target, { recursive: true });
+		writeFileAtomic(join(target, 'conf.yaml.default'), body);
+		written.push({ dir: entry.name, name: entry.name.slice(0, -'.d'.length), body });
+	}
+
+	const owned = new Set(written.map((check) => check.dir));
+	for (const entry of readdirSync(confdPath, { withFileTypes: true })) {
+		if (!entry.isDirectory() || owned.has(entry.name)) continue;
+		rmSync(join(confdPath, entry.name, 'conf.yaml.default'), { force: true });
+	}
+
+	return written;
+}
+
+/**
  * Everything that has to be true before `spawn` is called.
  *
  * Spawning a missing binary under Harper is worse than not spawning at all. Harper takes the
@@ -548,8 +640,14 @@ function launchOne(descriptor, binaryPath, paths, version) {
 	return state;
 }
 
-/** Create the runtime tree and write both config files. */
-function prepareRuntime(componentDir) {
+/**
+ * Create the runtime tree and write every config file the agents read from it.
+ *
+ * Exported for the hermetic suite, which asserts the tree it produces rather than the strings
+ * that went into it: what the agent reads is the tree, and the defect this guards against was
+ * a tree that was written correctly and simply had nothing in it about the host.
+ */
+export function prepareRuntime(componentDir) {
 	const runtimeDir = resolveRuntimeDir();
 	const paths = {
 		runtimeDir,
@@ -574,6 +672,19 @@ function prepareRuntime(componentDir) {
 	// The trace-agent is fatal without a config file that EXISTS; the contents may be empty.
 	const datadogYaml = renderDatadogYaml(paths);
 	writeFileAtomic(paths.configFile, datadogYaml);
+
+	let checks = [];
+	try {
+		checks = writeCoreCheckConfigs(paths.confd, resolvePackageConfd());
+	} catch (error) {
+		// Host metrics are optional in the same sense log collection is: worth a warning, not
+		// worth taking APM down for. The trace-agent is what must not be blocked here.
+		log.warn(
+			`Datadog supervisor: no core check configuration was written (${error.message}). The ` +
+				`agent will still run, and will still report datadog.agent.running, but it will ` +
+				`collect no host metrics. Traces and logs are unaffected.`
+		);
+	}
 
 	const service = process.env.DD_SERVICE || 'harper';
 	const logPath = resolveHarperLogPath();
@@ -610,7 +721,13 @@ function prepareRuntime(componentDir) {
 		);
 	}
 
-	return { paths, logPath, service, fingerprint: datadogYaml + logsYaml };
+	return {
+		paths,
+		logPath,
+		service,
+		coreChecks: checks.map((check) => check.name),
+		fingerprint: datadogYaml + logsYaml + checks.map((check) => check.body).join(''),
+	};
 }
 
 let started;
@@ -656,6 +773,7 @@ export function startDatadogAgents(componentDir) {
 			status.configFile = runtime.paths.configFile;
 			status.harperLogPath = runtime.logPath;
 			status.service = runtime.service;
+			status.coreChecks = runtime.coreChecks;
 
 			const manager = new BinaryManager();
 			// Resolve both paths up front. The version covers the pair, and each path is then

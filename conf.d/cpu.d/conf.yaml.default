@@ -1,0 +1,11 @@
+# system.cpu.* - user, system, idle, iowait, steal, guest, and num_cores.
+#
+# Upstream ships this as cpu.d/conf.yaml.default with every option commented out, so the
+# effective instance is the empty one below. cmd/agent/dist/conf.d/cpu.d/conf.yaml.default in
+# the Datadog source is the full option list; report_total_percpu is the only one, and it turns
+# one series into one per core.
+
+init_config:
+
+instances:
+  - {}

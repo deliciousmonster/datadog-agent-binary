@@ -41,7 +41,7 @@ The main package is platform-agnostic and declares one `optionalDependency` per 
 
 | Pillar | Status | What you get, and what you don't |
 | --- | --- | --- |
-| Metrics | On by default | Go corechecks (`cpu`, `memory`, `disk`, `io`, `load`, `uptime`, `filehandles`, `network`, `ntp`) and DogStatsD, as soon as the core agent runs with an API key. **No Python integrations**: the build excludes the `python` tag, so `postgres`, `redis`, `nginx`, and the rest of `datadog_checks.*` are absent. |
+| Metrics | Needs check configuration | DogStatsD works as soon as the core agent runs with an API key, but a host check runs only if `conf.d` names it: the checks are compiled into the binary and the collector schedules nothing else. Configurations ship in [`conf.d/`](conf.d) and the [example component](example/) writes them into its runtime tree. See [Host metrics](#host-metrics). **No Python integrations**: the build excludes the `python` tag, so `postgres`, `redis`, `nginx`, and the rest of `datadog_checks.*` are absent. |
 | Logs | Supported, off by default | `DD_LOGS_ENABLED` defaults to `false`, and turning it on is not sufficient: the Agent also needs a `conf.d` file source. See [Log collection](#log-collection-harper-hdblog). |
 | Traces | Via the trace-agent | Needs `dd-trace` loaded in the application *and* the trace-agent running. Either alone produces no traces and no error. |
 
@@ -84,6 +84,27 @@ The `datadog-trace-agent` wrapper checks both before spawning and names the offe
 A keyless trace-agent gets its own startup warning, because it is the most deceptive case: it binds the receiver and accepts spans normally, and only the intake rejects them, so the tracer sees a successful flush and an empty APM view is the only symptom.
 
 Full list: [Agent environment variables](https://docs.datadoghq.com/agent/guide/environment-variables/).
+
+### Host metrics
+
+An agent whose `conf.d` names no check collects nothing about the host, and says so nowhere useful. `datadog.agent.running` still arrives on every flush, because the aggregator appends it rather than collecting it, so the forwarder reports `202 Accepted` for a payload with no `system.*` series in it. In the Datadog UI that reads as a working pipeline and a host with no metrics.
+
+Configurations for the host checks ship under [`conf.d/`](conf.d), one `<check>.d/conf.yaml.default` per check:
+
+| Check | Metrics | Platforms |
+| --- | --- | --- |
+| `cpu` | `system.cpu.*` | all |
+| `memory` | `system.mem.*`, `system.swap.*` | all |
+| `uptime` | `system.uptime` | all |
+| `load` | `system.load.*` | not Windows, which has no load average |
+| `io` | `system.io.*` | all |
+| `disk` | `system.disk.*`, `system.fs.inodes.*` | all |
+| `file_handle` | `system.fs.file_handles.*` | all |
+| `network` | `system.net.*` | Linux and Windows; the check has no macOS implementation |
+
+Point `confd_path`/`DD_CONFD_PATH` at that directory and the Agent reads them as they are: `.default` is the extension its file provider treats as a check to run by default, and it is superseded by a plain `conf.yaml` for the same check in the same directory, which is where your own settings go.
+
+`ntp` is deliberately absent. Upstream enables it, but it reaches a public NTP pool over UDP every fifteen minutes and reports `CRITICAL` when that egress is blocked, which is the normal case in a container, about a clock the container cannot set anyway. Add `ntp.d/conf.yaml` with `instances: [{}]` if you want it.
 
 ### Log collection (Harper `hdb.log`)
 

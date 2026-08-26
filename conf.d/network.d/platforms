@@ -1,0 +1,4 @@
+# There is no macOS network check to configure. The v1 check builds for linux || aix and the v2
+# check for linux || windows, so on darwin the catalog has no "network" entry at all and this
+# config would surface as a Loading Error in `datadog-agent status` rather than as metrics.
+linux win32
