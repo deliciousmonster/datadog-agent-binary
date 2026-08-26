@@ -196,7 +196,7 @@ jobs:
       # copy of the core agent. `version` cannot tell those apart: a misdispatched
       # binary prints a version and exits 0 with no receiver in it. pkg/trace/api
       # is the package that binds the port.
-      - name: Assert the trace binary contains the APM receiver
+      - name: Assert the trace binary contains the APM receiver (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -220,10 +220,55 @@ jobs:
           [ "$t_cmd" -gt 0 ] || { echo "::error::trace-agent contains no cmd/trace-agent symbols."; rc=1; }
           exit "$rc"
 
+      # Same assertion, no `strings` on the runner. Go writes each function's full
+      # package path into the PE the same way it writes it into an ELF, so an
+      # ordinary byte scan finds it: on the 7.82.1 artifacts trace-agent.exe holds
+      # 1330 occurrences and datadog-agent.exe holds 0, against 797 / 0 for the
+      # linux-x86_64 pair from the same build.
+      - name: Assert the trace binary contains the APM receiver (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $platform = node -e "console.log(require('./dist/platform.js').Platform.current().getName())"
+          $bindir = "build/$platform/bin"
+
+          # Latin-1 maps every byte to one char, so the scan cannot lose a match to
+          # a decode error the way UTF-8 would.
+          function occurrences($path, $needle) {
+            $text = [System.Text.Encoding]::GetEncoding('iso-8859-1').GetString([System.IO.File]::ReadAllBytes($path))
+            $n = 0
+            $i = 0
+            while (($i = $text.IndexOf($needle, $i, [StringComparison]::Ordinal)) -ge 0) {
+              $n++
+              $i += $needle.Length
+            }
+            return $n
+          }
+
+          $t_api = occurrences "$bindir\trace-agent.exe" 'datadog-agent/pkg/trace/api.'
+          $t_cmd = occurrences "$bindir\trace-agent.exe" 'datadog-agent/cmd/trace-agent'
+          $c_api = occurrences "$bindir\datadog-agent.exe" 'datadog-agent/pkg/trace/api.'
+
+          Write-Output "trace-agent  pkg/trace/api symbols : $t_api"
+          Write-Output "trace-agent  cmd/trace-agent       : $t_cmd"
+          Write-Output "core agent   pkg/trace/api symbols : $c_api  (expected 0)"
+
+          $rc = 0
+          if ($t_api -le 0) {
+            Write-Output '::error::trace-agent.exe contains no pkg/trace/api symbols; it cannot serve the receiver.'
+            $rc = 1
+          }
+          if ($t_cmd -le 0) {
+            Write-Output '::error::trace-agent.exe contains no cmd/trace-agent symbols.'
+            $rc = 1
+          }
+          exit $rc
+
       # A real receiver, on the real port, accepting a real v0.4 payload.
       # Everything above proves a file exists and loads; only this proves a span
       # would be received.
-      - name: Verify the APM receiver accepts a trace
+      - name: Verify the APM receiver accepts a trace (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
@@ -294,6 +339,121 @@ jobs:
           [ "$code" = "200" ] || { echo "::error::receiver rejected a valid v0.4 payload (HTTP $code)."; exit 1; }
 
           echo "OK: the trace-agent bound 8126, advertised /v0.4/traces, and accepted a span."
+
+      # Windows shipped a trace-agent.exe nothing had ever asked for a span. Keep
+      # this in step with the copy in build-release.yml; the only deliberate
+      # differences are where the binary path comes from and the hostname each
+      # workflow tags its run with.
+      - name: Verify the APM receiver accepts a trace (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # A refused connection is the expected state until the listener is up. If
+          # PowerShell ever makes a native command's exit code terminating, the
+          # retry loop below turns into a hard failure on its first iteration.
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          $platform = node -e "console.log(require('./dist/platform.js').Platform.current().getName())"
+          $bin = Join-Path $PWD "build/$platform/bin/trace-agent.exe"
+          $work = Join-Path $env:RUNNER_TEMP 'apm-receiver-check'
+          Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "$work\conf.d", "$work\run" | Out-Null
+          # Contents are irrelevant to startup; existence is not. Without this the
+          # process exits immediately with "unable to load Datadog config file".
+          New-Item -ItemType File -Force -Path "$work\datadog.yaml" | Out-Null
+
+          $env:DD_API_KEY = 'dummy'
+          $env:DD_HOSTNAME = 'ci-build-verify'
+          $env:DD_CONFD_PATH = "$work\conf.d"
+          $env:DD_RUN_PATH = "$work\run"
+          $env:DD_AUTH_TOKEN_FILE_PATH = "$work\auth_token"
+          $env:DD_IPC_CERT_FILE_PATH = "$work\ipc_cert.pem"
+          $env:DD_LOG_FILE = "$work\trace-agent.log"
+          $env:DD_BIND_HOST = '127.0.0.1'
+          $env:DD_APM_ENABLED = 'true'
+          $env:DD_APM_RECEIVER_PORT = '8126'
+          $env:DD_REMOTE_CONFIGURATION_ENABLED = 'false'
+          # Dead local port: the receiver accepts payloads and then fails to
+          # forward them, keeping the run entirely on the runner.
+          $env:DD_APM_DD_URL = 'http://127.0.0.1:1'
+
+          $out = "$work\console.out.log"
+          $err = "$work\console.err.log"
+          $proc = $null
+          $rc = 0
+
+          try {
+            # --foreground because `run` hands itself to the Windows service control
+            # manager whenever servicemain.RunningAsWindowsService() says yes, and a
+            # CI step is the wrong place to discover that detection was wrong.
+            $proc = Start-Process -FilePath $bin -ArgumentList 'run', '--foreground', '-c', "$work\datadog.yaml" `
+              -NoNewWindow -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+            Write-Output "trace-agent running as pid $($proc.Id) out of $work"
+
+            # 60 * 0.5s = 30s ceiling, but bail the moment the process dies so a
+            # startup failure reports in a second instead of after the timeout.
+            # curl.exe rather than Invoke-WebRequest: it reports a refused
+            # connection and a non-2xx as exit codes, where Invoke-WebRequest throws
+            # and every branch below would need a try/catch to read a status line.
+            $ready = $false
+            foreach ($attempt in 1..60) {
+              curl.exe -fs --max-time 2 http://127.0.0.1:8126/info -o "$work\info.json"
+              if ($LASTEXITCODE -eq 0) {
+                $ready = $true
+                break
+              }
+              if ($proc.HasExited) {
+                throw "trace-agent exited with code $($proc.ExitCode) before it bound 127.0.0.1:8126."
+              }
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $ready) {
+              throw 'trace-agent never answered http://127.0.0.1:8126/info within 30s.'
+            }
+
+            Write-Output '--- /info ---'
+            $info = Get-Content -Raw "$work\info.json"
+            Write-Output $info
+            # Parse rather than match: the claim is that the receiver ADVERTISES the
+            # endpoint dd-trace posts to, not that the string is somewhere in the body.
+            $endpoints = ($info | ConvertFrom-Json).endpoints
+            if ($endpoints -notcontains '/v0.4/traces') {
+              throw "/info does not advertise /v0.4/traces (endpoints: $($endpoints -join ', '))"
+            }
+
+            # A real single-span v0.4 payload: array of traces, each an array of
+            # spans. Sent from a file so PowerShell's native-argument quoting never
+            # sees the JSON.
+            $payload = '[[{"trace_id":1,"span_id":2,"name":"ci.smoke","resource":"ci","service":"build-verify","type":"custom","start":1,"duration":1000000}]]'
+            Set-Content -Path "$work\payload.json" -Value $payload -Encoding ascii -NoNewline
+            $code = curl.exe -sS -o "$work\put.out" -w '%{http_code}' --max-time 10 `
+              -X PUT -H 'Content-Type: application/json' --data "@$work\payload.json" `
+              http://127.0.0.1:8126/v0.4/traces
+            Write-Output "PUT /v0.4/traces -> HTTP $code, body: $(Get-Content -Raw "$work\put.out")"
+            if ("$code" -ne '200') {
+              throw "PUT /v0.4/traces returned HTTP $code, expected 200."
+            }
+
+            Write-Output 'OK: trace-agent.exe bound 127.0.0.1:8126, advertised /v0.4/traces, and accepted a span.'
+          } catch {
+            Write-Output "::error::$($_.Exception.Message)"
+            Write-Output '--- trace-agent stdout ---'
+            Get-Content -Raw $out -ErrorAction SilentlyContinue
+            Write-Output '--- trace-agent stderr ---'
+            Get-Content -Raw $err -ErrorAction SilentlyContinue
+            Write-Output '--- trace-agent log file ---'
+            Get-Content -Raw "$work\trace-agent.log" -ErrorAction SilentlyContinue
+            $rc = 1
+          } finally {
+            # A trace-agent left running holds the job open until the 60 minute cap.
+            if ($proc -and -not $proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            }
+            Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+          }
+
+          exit $rc
 
       # harper is not a devDependency, but `npm ci` already installed the locked
       # 5.2.1: @harperfast/integration-testing names it as a required peer and
