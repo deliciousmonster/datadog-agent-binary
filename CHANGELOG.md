@@ -59,7 +59,7 @@ what makes a stale copy fail loudly instead of silently building on the wrong co
 ### Changed: TypeScript 7
 
 `typescript` 5.9 → 7.0, `prettier` 3.6 → 3.9, `lint-staged` 16 → 17. All dev-only; the
-shipped runtime dependencies are still `commander` and `tar`.
+one shipped runtime dependency is still `commander`.
 
 TypeScript 7 no longer auto-includes every package under `node_modules/@types`, so
 `tsconfig.json` now names `"types": ["node"]`. Without it the entire Node global surface
