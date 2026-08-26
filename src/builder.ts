@@ -102,6 +102,15 @@ export class AgentBuilder {
 		}
 	}
 
+	/** Same contract as `.go-version`: absent means the tag has no opinion. */
+	protected async readPythonVersionPin(): Promise<string | undefined> {
+		try {
+			return await readFile(path.join(this.config.sourceDir, '.python-version'), 'utf8');
+		} catch {
+			return undefined;
+		}
+	}
+
 	/**
 	 * Upstream pins the toolchain it tests against in `.go-version`. Nothing here used to
 	 * read it, so three build paths drifted to three different compilers: CI hardcoded
@@ -303,6 +312,49 @@ export class AgentBuilder {
 	}
 
 	/**
+	 * pipx creates each venv with the interpreter pipx itself was installed under, and
+	 * PATH does not change that. The ubuntu-22.04 runner installs pipx under the image's
+	 * Python 3.10 while dda requires 3.12, so `pipx install dda` rejects every published
+	 * version and actions/setup-python has no effect on it. Hand pipx an interpreter
+	 * explicitly, but only once it is known to satisfy the pin upstream ships in
+	 * `.python-version`; otherwise pipx's own default is the better guess.
+	 */
+	protected async pipxPythonFlag(): Promise<string> {
+		const pinned = (await this.readPythonVersionPin())?.trim();
+		if (!pinned) {
+			return '';
+		}
+		const atLeast = (version: string) => {
+			const [major, minor = 0] = version.split('.').map(Number);
+			const [pinnedMajor, pinnedMinor = 0] = pinned.split('.').map(Number);
+			return major > pinnedMajor || (major === pinnedMajor && minor >= pinnedMinor);
+		};
+		for (const candidate of ['python3', 'python']) {
+			let reported: string;
+			try {
+				reported = await this.executeCommand(
+					`${candidate} -c "import sys;print('%d.%d' % sys.version_info[:2], sys.executable)"`
+				);
+			} catch {
+				continue;
+			}
+			const [version, executable] = reported.trim().split(/ (.+)/);
+			if (!executable || !atLeast(version)) {
+				continue;
+			}
+			// dda install commands are spawned without a shell and split on spaces, so a
+			// path with one in it would arrive as two arguments.
+			if (executable.includes(' ')) {
+				logger.warn(`Cannot pass ${executable} to pipx: the path contains a space`);
+				continue;
+			}
+			return ` --python ${executable}`;
+		}
+		logger.warn(`No Python ${pinned} or newer on PATH; letting pipx choose its own interpreter for dda`);
+		return '';
+	}
+
+	/**
 	 * dda must land in an isolated environment, never a user-site install. It locates its
 	 * own data files at `sysconfig.get_path("data")/…/dda-data`, which resolves to the
 	 * interpreter *prefix*; `pip install --user` writes them to the *user* scheme instead,
@@ -334,8 +386,10 @@ export class AgentBuilder {
 			} catch {
 				continue;
 			}
-			logger.debug(`Installing dda with: ${install}`);
-			await this.executeCommand(install);
+			// uv provisions an interpreter of its own; pipx inherits one it cannot change.
+			const command = install.startsWith('pipx') ? `${install}${await this.pipxPythonFlag()}` : install;
+			logger.debug(`Installing dda with: ${command}`);
+			await this.executeCommand(command);
 			return;
 		}
 
