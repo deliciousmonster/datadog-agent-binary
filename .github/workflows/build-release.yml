@@ -319,6 +319,73 @@ jobs:
           if (Test-Path $hidden) { Move-Item $hidden $src }
           exit $rc
 
+      # Symbol-level proof that the trace binary is a trace-agent and not a second
+      # copy of the core agent. `version` cannot tell those apart: a misdispatched
+      # binary prints a version and exits 0 with no receiver in it. pkg/trace/api
+      # is the package that binds the port.
+      #
+      # One step covers all four legs. Go writes each function's full package path
+      # into the binary the same way for ELF, Mach-O and PE, so a byte scan reads
+      # every format and needs no `strings` on PATH. On the 7.82.1 build: 804 hits
+      # in the macos-arm64 trace-agent, 1330 in trace-agent.exe, and 0 in either
+      # core agent.
+      #
+      # The same step runs in build-release.yml and build-verify.yml, byte for
+      # byte. Drift between those two files is a defect class this repo keeps
+      # hitting, so change both or neither.
+      - name: Assert the trace binary contains the APM receiver
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e '
+            const { readFileSync } = require("node:fs");
+            const { Platform } = require("./dist/platform.js");
+
+            // Scan raw bytes, never decoded text. The needle is ASCII, so latin1
+            // encodes it one byte per character and Buffer.indexOf compares against
+            // the file exactly as Go wrote it; decoding a binary to a string first
+            // is what would lose a match to a replacement character.
+            const count = (buf, needle) => {
+              const pin = Buffer.from(needle, "latin1");
+              let n = 0;
+              for (let i = buf.indexOf(pin); i !== -1; i = buf.indexOf(pin, i + pin.length)) n++;
+              return n;
+            };
+
+            const platform = Platform.current();
+            const binary = (kind) => `build/${platform.getName()}/bin/${platform.getBinary(kind).outputName}`;
+            const receiver = "datadog-agent/pkg/trace/api.";
+            const entry = "datadog-agent/cmd/trace-agent";
+
+            const tracePath = binary("trace");
+            const corePath = binary("core");
+            const traceReceiver = count(readFileSync(tracePath), receiver);
+            const traceEntry = count(readFileSync(tracePath), entry);
+            const coreReceiver = count(readFileSync(corePath), receiver);
+
+            console.log(`pkg/trace/api   in ${tracePath} : ${traceReceiver}`);
+            console.log(`cmd/trace-agent in ${tracePath} : ${traceEntry}`);
+            console.log(`pkg/trace/api   in ${corePath} : ${coreReceiver}  (expected 0)`);
+
+            if (traceReceiver === 0) {
+              console.log(`::error::${tracePath} contains no pkg/trace/api symbols; it cannot serve the receiver.`);
+              process.exitCode = 1;
+            }
+            if (traceEntry === 0) {
+              console.log(`::error::${tracePath} contains no cmd/trace-agent symbols.`);
+              process.exitCode = 1;
+            }
+            // Zero in the core agent is what makes the counts above evidence rather
+            // than noise: the same scan finds nothing in a Go binary with no receiver
+            // in it. A nonzero count means the two binaries stopped being distinct,
+            // either because one was copied over the other or because upstream linked
+            // the receiver into the core agent.
+            if (coreReceiver !== 0) {
+              console.log(`::error::${corePath} contains ${coreReceiver} pkg/trace/api symbols, expected 0.`);
+              process.exitCode = 1;
+            }
+          '
+
       # `version` only proves the file loads. This starts the trace-agent, waits
       # for it to bind 127.0.0.1:8126, and submits a trace payload the way dd-trace
       # does. The original defect shipped a package where nothing ever listened on
@@ -421,8 +488,12 @@ jobs:
           print(f"/info advertises /v0.4/traces (trace-agent version {info.get('version')})")
           PY
 
+          # A real single-span v0.4 payload: array of traces, each an array of
+          # spans. An empty array is accepted by a receiver that never decodes a
+          # span, so it proves nothing the open port had not already proven.
+          payload='[[{"trace_id":1,"span_id":2,"name":"ci.smoke","resource":"ci","service":"build-release","type":"custom","start":1,"duration":1000000}]]'
           code=$(curl -sS -o "$work/put.out" -w '%{http_code}' --max-time 10 \
-            -X PUT -H 'Content-Type: application/json' --data '[]' \
+            -X PUT -H 'Content-Type: application/json' --data "$payload" \
             http://127.0.0.1:8126/v0.4/traces)
           echo "PUT /v0.4/traces -> HTTP $code, body: $(cat "$work/put.out")"
           if [ "$code" != "200" ]; then
@@ -431,7 +502,7 @@ jobs:
             exit 1
           fi
 
-          echo "OK: trace-agent bound 127.0.0.1:8126 and accepted a trace payload."
+          echo "OK: trace-agent bound 127.0.0.1:8126, advertised /v0.4/traces, and accepted a span."
 
       # windows-x86_64 shipped a trace-agent.exe nothing had ever asked for a span.
       # Keep this in step with the copy in build-verify.yml; the only deliberate
