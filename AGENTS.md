@@ -234,7 +234,17 @@ npm run build-agent        # both binaries for this platform (needs Go, Python, 
 | `build-verify.yml` | nightly, manual | builds both binaries and proves the receiver works, without publishing |
 | `matrix-drift.yml` | weekly | registry versus declared |
 | `validate-caller-workflows.yml` | every PR, push to `main` | checks any `claude-*` / `gemini-*` caller workflows for shadow jobs and unpinned refs |
-| `check-upstream.yml` | disabled | do not re-enable without making it write `.datadog-agent-version` |
+| `check-upstream.yml` | deleted | asked GitHub for the newest upstream release; `node dist/cli.js version` does that now |
+
+`check-upstream.yml` was deleted rather than left disabled. It carried a live `workflow_dispatch`
+and ended in `npm version "v$LATEST_RELEASE"` then `git push origin "v$LATEST_RELEASE"`, so one
+dispatch on a repo that has `REPO_TOKEN` pushes a stable tag seven minors above anything released
+here (`next-prerelease.js` goes from `7.75.6-next.2` to `7.82.4-next.0`) on a commit whose `version`
+lifecycle script has already rewritten `optionalDependencies` to four platform packages that will
+never exist at that release. The `tested` job blocks the publish; nothing blocks the tag. Anything
+that replaces it has to write `.datadog-agent-version` in the same commit as the tag, or it labels
+a package with one agent release and builds it from another, which is how `7.75.5` came to contain
+agent `7.79.2`. Cadence when it ran: `cron "0 10 * * *"`.
 
 `build-verify.yml` has no push trigger by design, since a release run already builds all four platforms
 and asserts the receiver. The nightly covers what nothing else does: the upstream pin and the Datadog
