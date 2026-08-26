@@ -18,6 +18,28 @@ cat node_modules/@deliciousmonster/datadog-agent-binary/.datadog-agent-version
 
 ## Agent 7.82.1 (package 1.0.0, unreleased)
 
+### Added: `conf.d/`, without which the agent collected no host metric
+
+The package shipped binaries and one conf.d entry, the Harper log source. Every core check
+is compiled into the core agent, but the collector schedules only what `conf.d` names, so
+the agent ran none of them. Against 7.82.1 with the old tree, `configcheck` printed nothing
+and `check cpu` answered `no valid check found`.
+
+Nothing looked wrong from either end. `datadog.agent.running` is appended by the aggregator
+on every flush rather than collected from a check, so the forwarder kept posting `202
+Accepted` on `/api/intake/metrics/v3/series` for payloads holding no `system.*` series at
+all.
+
+`conf.d/` now carries a `<check>.d/conf.yaml.default` for `cpu`, `memory`, `uptime`, `load`,
+`io`, `disk`, `file_handle` and `network`, and `example/dd-supervisor.js` copies them into
+the runtime tree beside the log source. `.default` is upstream's own extension: the file
+provider reads it as a check to run by default, and drops it whenever a plain `conf.yaml`
+for the same check sits beside it, which is where an operator's settings go.
+
+`ntp` is left out although upstream enables it. It reaches a public NTP pool every fifteen
+minutes and reports `CRITICAL` when that egress is blocked, which is the normal case in a
+container, about a clock the container cannot set.
+
 ### Changed: the package version line restarts at 1.0.0
 
 The npm version moves on packaging changes and says nothing about the agent inside.
