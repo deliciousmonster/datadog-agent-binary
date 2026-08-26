@@ -15,8 +15,10 @@ import net from 'node:net';
 import { findFreePort } from '../support/find-free-port.js';
 import { importDist, withEnv } from '../support/harness.js';
 
-const { receiverPort, isRunSubcommand, isTraceReceiverHealthy, onExit } = (await importDist('agent-launcher.js'))
-	.internalsForTesting;
+const { describeSpawnFailure, receiverPort, isRunSubcommand, isTraceReceiverHealthy, waitForReceiver, onExit } = (
+	await importDist('agent-launcher.js')
+).internalsForTesting;
+const { Platform } = await importDist('platform.js');
 
 /** The one variable every test here turns. */
 const withReceiverPort = (value, run) => withEnv('DD_APM_RECEIVER_PORT', value, run);
@@ -49,6 +51,19 @@ function withReceiver({ status = 200, body, raw, path = '/info' } = {}, run) {
 		}),
 		run
 	);
+}
+
+/** `fn` with console.warn captured, which is where the launcher's logger writes. */
+async function captureWarnings(fn) {
+	const warnings = [];
+	const realWarn = console.warn;
+	console.warn = (...args) => warnings.push(args.join(' '));
+	try {
+		await fn();
+	} finally {
+		console.warn = realWarn;
+	}
+	return warnings;
 }
 
 /**
@@ -89,12 +104,55 @@ test('receiverPort() honours DD_APM_RECEIVER_PORT', () =>
 		assert.equal(receiverPort(), 9126);
 	}));
 
-test('receiverPort() falls back on an unusable override instead of binding it', async () => {
-	// listen(NaN) and listen(0) both "succeed", on a port no tracer will dial.
-	for (const bad of ['banana', '0', '-1']) {
-		await withReceiverPort(bad, () => {
-			assert.equal(receiverPort(), 8126, `override "${bad}"`);
-		});
+test('an unusable DD_APM_RECEIVER_PORT falls back to 8126, and says so', async () => {
+	// The fallback itself is right: 8126 is what dd-trace dials. Taking it in
+	// silence is not, because the agent reads the same variable and resolves it
+	// differently, so the launcher ends up probing a port nothing will bind.
+	for (const bad of ['banana', '-1', '70000', '0abc']) {
+		const warnings = await captureWarnings(() =>
+			withReceiverPort(bad, () => {
+				assert.equal(receiverPort(), 8126, `override "${bad}"`);
+			})
+		);
+		assert.equal(warnings.length, 1, `override "${bad}" was rewritten with no warning`);
+		assert.ok(warnings[0].includes(bad), `the warning must quote the rejected value; got: ${warnings[0]}`);
+	}
+});
+
+test('DD_APM_RECEIVER_PORT=0 is a configuration, not a typo', async () => {
+	// Upstream reads 0 as "serve no HTTP receiver" (the UDS-only setup). Folding it
+	// into the 8126 fallback is what produces the alive-but-not-bound case: the
+	// launcher probes 8126, the agent binds nothing, every signal says started.
+	const warnings = await captureWarnings(() =>
+		withReceiverPort('0', () => {
+			assert.equal(receiverPort(), 0);
+		})
+	);
+	assert.deepEqual(warnings, [], 'an explicit 0 must not be reported as a bad value');
+});
+
+test('a wrong-architecture binary is diagnosed as one', () => {
+	// ENOEXEC arrives as "Failed to execute", which reads like a bad argument and
+	// sends people to the config. npm's os/cpu gate covers the install; nothing
+	// covers a build leg that filled one platform's bin/ from another's runner.
+	const message = describeSpawnFailure({ code: 'ENOEXEC' }, '/pkg/bin/trace-agent');
+	assert.ok(message.includes('/pkg/bin/trace-agent'));
+	assert.ok(
+		message.includes(Platform.current().getName()),
+		`the message must name the architecture that was expected; got: ${message}`
+	);
+});
+
+test('a binary without its exec bit is diagnosed as one', () => {
+	const message = describeSpawnFailure({ code: 'EACCES' }, '/pkg/bin/trace-agent');
+	assert.match(message, /chmod \+x/, 'the message must carry the fix, not just the errno');
+});
+
+test('NEGATIVE: an unrelated spawn failure gets no invented diagnosis', () => {
+	// A guess dressed as a diagnosis is worse than the errno: it describes a world
+	// that is not the one that failed.
+	for (const error of [{ code: 'ENOENT' }, new Error('boom'), undefined, null]) {
+		assert.equal(describeSpawnFailure(error, '/pkg/bin/trace-agent'), null, JSON.stringify(error));
 	}
 });
 
@@ -108,6 +166,21 @@ test('short-lived queries are not mistaken for the receiver', () => {
 	// already-running check; misclassifying it exits 0 without running anything.
 	assert.equal(isRunSubcommand(['version']), false);
 	assert.equal(isRunSubcommand(['status']), false);
+	// Help exits after printing. Classified as the receiver it would be held open
+	// waiting for a bind that is never coming, and then fail the invocation.
+	assert.equal(isRunSubcommand(['-h']), false);
+	assert.equal(isRunSubcommand(['--help']), false);
+});
+
+test('a flag value is not read as the subcommand', () => {
+	// `-c <path> run` is the shape the shim's own e2e test uses. Reading <path> as
+	// the subcommand makes every receiver check here skip itself, silently, on the
+	// one invocation that binds the socket.
+	assert.equal(isRunSubcommand(['-c', '/etc/datadog.yaml', 'run']), true);
+	assert.equal(isRunSubcommand(['--pidfile', '/run/trace.pid', 'run']), true);
+	assert.equal(isRunSubcommand(['-c=/etc/datadog.yaml', 'run']), true);
+	// The value is skipped, not blindly consumed: a query after one stays a query.
+	assert.equal(isRunSubcommand(['-c', '/etc/datadog.yaml', 'version']), false);
 });
 
 test('isTraceReceiverHealthy() is false when nothing listens', async () => {
@@ -162,8 +235,76 @@ test('a listener that accepts and never answers times out to unhealthy', async (
 	});
 });
 
-test('onExit() treats a signal as a clean stop', async () => {
-	assert.equal(await exitCodeFrom(() => onExit('core', 'datadog-agent', null, 'SIGTERM')), 0);
+test('waitForReceiver() gives up on a port nothing binds, and says so through the latch', async () => {
+	const watch = { port: await findFreePort(), bound: false };
+	assert.equal(await waitForReceiver(watch, 500), false);
+	assert.equal(watch.bound, false, 'the latch onExit() reads must stay false');
+});
+
+test('waitForReceiver() is not satisfied by a listener that is not a receiver', () =>
+	// A stray port-forward or a health-check stub answers; neither takes a span.
+	withReceiver({ body: { endpoints: ['/health'] } }, async (port) => {
+		const watch = { port, bound: false };
+		assert.equal(await waitForReceiver(watch, 500), false);
+		assert.equal(watch.bound, false);
+	}));
+
+test('waitForReceiver() keeps polling while the agent is still coming up', async () => {
+	// A single probe at spawn time finds nothing and would call a cold start a
+	// failure, which is the one way this check could refuse a working launch.
+	const port = await findFreePort();
+	const watch = { port, bound: false };
+	const server = http.createServer((request, response) => {
+		response.writeHead(request.url === '/info' ? 200 : 404, { 'content-type': 'application/json' });
+		response.end(JSON.stringify({ endpoints: ['/v0.4/traces'] }));
+	});
+	const late = setTimeout(() => server.listen(port, '127.0.0.1'), 600);
+	try {
+		assert.equal(await waitForReceiver(watch, 10000), true);
+		assert.equal(watch.bound, true);
+	} finally {
+		clearTimeout(late);
+		await new Promise((resolve) => server.close(resolve));
+	}
+});
+
+test('NEGATIVE: a trace-agent that exits 0 having never bound is a failed launch', async () => {
+	// The founding defect with green output. Measured against the shipped 7.82.1
+	// binary, `trace-agent run` with apm_config.enabled false exits 0 and binds
+	// nothing, so the exit code alone cannot carry this claim.
+	const port = await findFreePort();
+	assert.equal(
+		await exitCodeFrom(() => onExit('trace', 'datadog-trace-agent', 0, null, { port, bound: false })),
+		1,
+		'a run that never served the receiver must not report success'
+	);
+});
+
+test('a receiver that served and then stopped exits 0', async () => {
+	// The other direction, and the one that matters more: a check that refuses a
+	// launch which worked is worse than no check.
+	const port = await findFreePort();
+	assert.equal(await exitCodeFrom(() => onExit('trace', 'datadog-trace-agent', 0, null, { port, bound: true })), 0);
+});
+
+test('onExit() treats a requested stop as a clean stop', async () => {
+	for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+		assert.equal(await exitCodeFrom(() => onExit('core', 'datadog-agent', null, signal)), 0, signal);
+	}
+});
+
+test('NEGATIVE: a crash or an OOM kill does not exit 0', async () => {
+	// The OOM killer takes the trace-agent and the wrapper reports success, so a
+	// container restart policy, a shell `&&`, or a systemd unit sees a clean stop.
+	// SIGKILL is 9 wherever Node reports it, so the 128 + signum convention is pinned
+	// on that one. The rest are only required to be non-zero: Windows numbers SIGABRT
+	// 22 rather than 6 and does not define SIGBUS at all, and asserting the arithmetic
+	// against os.constants would be asserting the implementation against itself.
+	assert.equal(await exitCodeFrom(() => onExit('trace', 'datadog-trace-agent', null, 'SIGKILL')), 137);
+	for (const signal of ['SIGSEGV', 'SIGABRT', 'SIGBUS']) {
+		const code = await exitCodeFrom(() => onExit('trace', 'datadog-trace-agent', null, signal));
+		assert.notEqual(code, 0, `${signal} was reported as a clean stop`);
+	}
 });
 
 test('onExit() passes a clean exit through', async () => {

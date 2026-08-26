@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import child_process from 'node:child_process';
+import http from 'node:http';
 import { EventEmitter } from 'node:events';
 import { syncBuiltinESMExports } from 'node:module';
 
@@ -29,6 +30,37 @@ const isWindows = process.platform === 'win32';
 const SHIM_SKIP = isWindows && 'stub executable is not runnable as a .exe on Windows';
 
 const STUB_MARKER = 'STUB_DATADOG_AGENT_OK';
+
+/**
+ * Whether the trace stub binds a receiver, and where. Deliberately not
+ * DD_APM_RECEIVER_PORT: the launcher reads that one, and a stub keyed on the same
+ * variable could never stand in for an agent that starts and binds nothing, which is
+ * the case this file has to be able to produce.
+ */
+const STUB_RECEIVER_PORT = 'STUB_TRACE_RECEIVER_PORT';
+
+/**
+ * What the trace stub does when asked to `run`. It serves one /info and then exits,
+ * which is what lets the shim under test terminate; `connection: close` makes that
+ * deterministic, because server.close() fires only once the client's socket has ended.
+ */
+const TRACE_RECEIVER_STUB = `
+const stubPort = Number(process.env[${JSON.stringify(STUB_RECEIVER_PORT)}] || 0);
+if (stubPort && process.argv.slice(2).includes('run')) {
+	const http = require('http');
+	const server = http.createServer((request, response) => {
+		response.writeHead(request.url === '/info' ? 200 : 404, {
+			'content-type': 'application/json',
+			connection: 'close',
+		});
+		response.end(JSON.stringify({ endpoints: ['/v0.3/traces', '/v0.4/traces'] }));
+		server.close(() => process.exit(0));
+	});
+	server.listen(stubPort, '127.0.0.1');
+} else {
+	process.exit(0);
+}
+`;
 
 /** Populated by before(): absolute paths inside the sandbox. */
 let sandbox;
@@ -79,7 +111,7 @@ function createStubPlatformPackage(packageDir) {
 			`#!/usr/bin/env node\n` +
 				`process.stdout.write(${JSON.stringify(STUB_MARKER)} + ' ' + ` +
 				`${JSON.stringify(binary.kind)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\n` +
-				`process.exit(0);\n`
+				(binary.kind === 'trace' ? TRACE_RECEIVER_STUB : `process.exit(0);\n`)
 		);
 		fs.chmodSync(binaryPath, 0o755);
 		resolved[binary.kind] = binaryPath;
@@ -234,11 +266,14 @@ test('end-to-end: the datadog-agent shim resolves and executes the core agent', 
 test('end-to-end: the trace-agent shim resolves and executes the trace-agent', { skip: SHIM_SKIP }, async () => {
 	// A port nothing is listening on: the launcher treats an already-bound
 	// receiver as a successful no-op and exits 0 without spawning, which would
-	// make this assertion pass vacuously on a machine already running APM.
+	// make this assertion pass vacuously on a machine already running APM. The
+	// stub binds it after it is spawned, which is what the launcher waits for, so
+	// this is also the whole loop: resolve, spawn, observe a receiver, exit 0.
 	const port = await findFreePort();
 	const { code, stdout, stderr } = await runShim('trace-agent', ['-c', traceConfigPath, 'run'], {
 		...process.env,
 		DD_APM_RECEIVER_PORT: String(port),
+		[STUB_RECEIVER_PORT]: String(port),
 	});
 	assert.equal(code, 0, `shim should exit 0 (stderr: ${stderr})`);
 	assert.match(
@@ -247,6 +282,43 @@ test('end-to-end: the trace-agent shim resolves and executes the trace-agent', {
 		'the trace stub should have run; the core stub running here would mean both ' + 'shims launch the same binary'
 	);
 	assert.match(stdout, /run/, 'user args should be forwarded to the trace-agent');
+});
+
+test('NEGATIVE: end-to-end, a trace-agent that never binds exits the shim non-zero', { skip: SHIM_SKIP }, async () => {
+	// The founding defect, reproduced through the shipped shim: the binary
+	// resolves, the spawn succeeds, the process says "started", and nothing ever
+	// serves 8126. Without the stub receiver port the stub echoes and exits 0,
+	// which is what upstream does when apm_config.enabled is false.
+	const port = await findFreePort();
+	const { code, stderr, stdout } = await runShim('trace-agent', ['-c', traceConfigPath, 'run'], {
+		...process.env,
+		DD_APM_RECEIVER_PORT: String(port),
+	});
+	assert.match(stdout, new RegExp(`${STUB_MARKER} trace`), 'the trace stub must still have been spawned');
+	assert.notEqual(code, 0, 'a launch that produced no receiver must not report success');
+	assert.match(stderr, new RegExp(`127\\.0\\.0\\.1:${port}`), 'the failure must name the port that stayed unbound');
+});
+
+test('end-to-end: a binary without its exec bit is reported as that, not as a bad argument', async (t) => {
+	if (isWindows) {
+		t.skip('POSIX mode bits do not gate execution on Windows');
+		return;
+	}
+	if (typeof process.getuid === 'function' && process.getuid() === 0) {
+		t.skip('root ignores the mode bits this test relies on');
+		return;
+	}
+	// spawn reports EACCES asynchronously, so the launcher prints "Failed to
+	// execute" and the operator goes looking at the config. The mode bit is a
+	// property of the file npm unpacked, and the message has to say so.
+	fs.chmodSync(sandboxBinaries.core, 0o644);
+	try {
+		const { code, stderr } = await runShim('datadog-agent', ['version']);
+		assert.notEqual(code, 0, 'an unexecutable binary must not exit 0');
+		assert.match(stderr, /chmod \+x/, `the failure must carry the fix; got: ${stderr}`);
+	} finally {
+		fs.chmodSync(sandboxBinaries.core, 0o755);
+	}
 });
 
 /**
@@ -258,13 +330,18 @@ test('end-to-end: the trace-agent shim resolves and executes the trace-agent', {
  * builtin's export at link time; mutating the CJS module object alone would leave
  * that binding pointing at the real spawn. syncBuiltinESMExports() re-points the
  * ESM bindings at the patched (and later the restored) function.
+ *
+ * `onSpawn` runs at the moment of the stubbed spawn, which is the only place a
+ * trace test can bring a receiver up: doing it earlier makes the launcher's
+ * pre-spawn probe treat APM as already handled and skip the spawn entirely.
  */
-async function withStubbedSpawn(fakeChild, run) {
+async function withStubbedSpawn(fakeChild, run, onSpawn) {
 	const realSpawn = child_process.spawn;
 	const realExit = process.exit;
 	const calls = [];
 	child_process.spawn = (command, args, options) => {
 		calls.push({ command, args, options });
+		onSpawn?.();
 		return fakeChild;
 	};
 	syncBuiltinESMExports();
@@ -279,6 +356,14 @@ async function withStubbedSpawn(fakeChild, run) {
 		process.exit = realExit;
 	}
 	return calls;
+}
+
+/** An unstarted /info server answering the way a live trace-agent answers. */
+function stubReceiver() {
+	return http.createServer((request, response) => {
+		response.writeHead(request.url === '/info' ? 200 : 404, { 'content-type': 'application/json' });
+		response.end(JSON.stringify({ endpoints: ['/v0.4/traces'] }));
+	});
 }
 
 /** Minimal stand-in for a real ChildProcess. `spawnargs` is what marks it as one. */
@@ -303,16 +388,23 @@ test("launchAgent spawns with Harper's required `name`, distinct per binary", as
 			'Harper throws on a spawn with no `name`, and uses it as the PID-lock filename'
 		);
 
-		const traceCalls = await withStubbedSpawn(fakeChildProcess(), () =>
-			launchAgent('trace', ['-c', traceConfigPath, 'run'])
-		);
-		assert.equal(traceCalls.length, 1);
-		assert.equal(traceCalls[0].command, sandboxBinaries.trace);
-		assert.equal(
-			traceCalls[0].options.name,
-			'datadog-trace-agent',
-			"the two processes must take different PID locks, or Harper's dedupe lets " + 'only one of them run per node'
-		);
+		const receiver = stubReceiver();
+		try {
+			const traceCalls = await withStubbedSpawn(
+				fakeChildProcess(),
+				() => launchAgent('trace', ['-c', traceConfigPath, 'run']),
+				() => receiver.listen(port, '127.0.0.1')
+			);
+			assert.equal(traceCalls.length, 1);
+			assert.equal(traceCalls[0].command, sandboxBinaries.trace);
+			assert.equal(
+				traceCalls[0].options.name,
+				'datadog-trace-agent',
+				"the two processes must take different PID locks, or Harper's dedupe lets " + 'only one of them run per node'
+			);
+		} finally {
+			await new Promise((resolve) => receiver.close(resolve));
+		}
 	});
 });
 

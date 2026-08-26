@@ -37,8 +37,44 @@ import { BinaryManager } from '@deliciousmonster/datadog-agent-binary';
  */
 const log = typeof logger === 'undefined' ? console : logger;
 
-/** Default APM receiver port. dd-trace dials the same one with no configuration. */
-const RECEIVER_PORT = Number(process.env.DD_APM_RECEIVER_PORT || 8126);
+/** `apm_config.receiver_port` default. dd-trace dials the same one with no configuration. */
+const DEFAULT_RECEIVER_PORT = 8126;
+
+/**
+ * The port to write into `apm_config.receiver_port` and to probe afterwards.
+ *
+ * Parsed rather than coerced. `Number("8126 ")` is fine but `Number("banana")` is NaN,
+ * and NaN reaches the generated datadog.yaml as `receiver_port: NaN`, which the agent
+ * cannot read. 0 is kept as itself: upstream reads it as "serve no HTTP receiver", so
+ * rewriting it to 8126 would contradict the operator and make every probe below
+ * interrogate a port nothing was told to bind.
+ */
+function resolveReceiverPort() {
+	const raw = process.env.DD_APM_RECEIVER_PORT;
+	if (!raw) return DEFAULT_RECEIVER_PORT;
+	// The raw string, not the parsed value: parseInt("0abc") is also 0, and that is a
+	// typo rather than a request to turn the receiver off.
+	if (raw.trim() === '0') return 0;
+	const parsed = Number.parseInt(raw, 10);
+	if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) return parsed;
+	log.warn(
+		`Datadog supervisor: DD_APM_RECEIVER_PORT="${raw}" is not a port in 1-65535. ` +
+			`Using ${DEFAULT_RECEIVER_PORT}, the port dd-trace dials, but the agents read the ` +
+			`same variable and will not resolve it the same way. Fix or unset it.`
+	);
+	return DEFAULT_RECEIVER_PORT;
+}
+
+const RECEIVER_PORT = resolveReceiverPort();
+
+/**
+ * How long the trace-agent gets to answer /info before the supervisor reports the
+ * receiver as absent. Generous on purpose: a deadline that fires during a slow cold start
+ * would describe a working node as broken, and this number is only ever read by a human.
+ */
+const RECEIVER_BIND_TIMEOUT_MS = 30_000;
+
+const RECEIVER_POLL_INTERVAL_MS = 250;
 
 /** A command no machine has and no operator would allowlist. Only used to probe `spawn`. */
 const PROBE_COMMAND = 'harper-datadog-spawn-probe-must-not-exist';
@@ -326,6 +362,81 @@ function preflightBinary(title, binaryPath) {
 	accessSync(binaryPath, constants.X_OK);
 }
 
+/**
+ * True if a real trace-agent is serving this port.
+ *
+ * A bare TCP connect proves nothing: any stray socket or health-check stub accepts one,
+ * and reading that as "APM is up" is the failure this component exists to make visible.
+ * /info is served only by the trace-agent, and it lists the endpoints it accepts.
+ */
+async function isReceiverHealthy(port) {
+	try {
+		const response = await fetch(`http://127.0.0.1:${port}/info`, { signal: AbortSignal.timeout(1000) });
+		if (!response.ok) return false;
+		const body = await response.json();
+		return (
+			Array.isArray(body.endpoints) &&
+			body.endpoints.some((endpoint) => typeof endpoint === 'string' && endpoint.includes('/traces'))
+		);
+	} catch {
+		return false;
+	}
+}
+
+/** Poll until a receiver answers, the agent dies, or the deadline passes. */
+async function waitForReceiver(state, port, timeoutMs = RECEIVER_BIND_TIMEOUT_MS) {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		if (await isReceiverHealthy(port)) return true;
+		// Nothing binds after the process is gone, and its exit handler has already said
+		// what happened; waiting out the deadline would only delay the report.
+		if (state.exited || Date.now() >= deadline) return false;
+		await new Promise((resolve) => setTimeout(resolve, RECEIVER_POLL_INTERVAL_MS));
+	}
+}
+
+/**
+ * The one claim in this status that can be checked instead of assumed.
+ *
+ * Everything else here reports that `spawn` did not throw, which is exactly what the
+ * core-agent-only release reported while every span was dropped. Measured against the
+ * shipped 7.82.1 binary, `trace-agent run` with apm_config.enabled false exits 0 having
+ * bound nothing, so neither "started" nor the exit code carries this.
+ */
+async function verifyReceiver(status, paths) {
+	const trace = status.agents.find((agent) => agent.kind === 'trace');
+	if (!trace?.started) return;
+
+	if (status.receiverPort === 0) {
+		trace.receiverBound = false;
+		log.warn(
+			`Datadog supervisor: apm_config.receiver_port is 0, which turns the trace-agent's ` +
+				`HTTP receiver off. dd-trace's default target goes unserved, so spans reach ` +
+				`Datadog only over a Unix socket.`
+		);
+		return;
+	}
+
+	trace.receiverBound = await waitForReceiver(trace, status.receiverPort);
+	if (trace.receiverBound) {
+		log.info(
+			`Datadog supervisor: the trace-agent is serving the APM receiver on ` +
+				`127.0.0.1:${status.receiverPort}; dd-trace has somewhere to send spans.`
+		);
+		return;
+	}
+
+	log.error(
+		`Datadog supervisor: the trace-agent (pid ${trace.pid}) was started but nothing ` +
+			`answered /info on 127.0.0.1:${status.receiverPort} within ` +
+			`${RECEIVER_BIND_TIMEOUT_MS / 1000}s. dd-trace has nowhere to send spans and reports ` +
+			`a successful flush either way, so an empty APM page is the only symptom this ` +
+			`produces on its own. Read ${paths.traceLog}, and check that DD_APM_ENABLED is not ` +
+			`false in Harper's environment: it overrides the apm_config.enabled written into ` +
+			`${paths.configFile}.`
+	);
+}
+
 /** Preflight and start one already-resolved agent. Never throws; returns what happened. */
 function launchOne(descriptor, binaryPath, paths, version) {
 	const state = {
@@ -408,8 +519,18 @@ function launchOne(descriptor, binaryPath, paths, version) {
 	);
 
 	child.on('exit', (code, signal) => {
+		// Read by waitForReceiver(), which has nothing left to wait for once the process
+		// it was watching is gone.
+		state.exited = true;
 		if (signal) {
-			log.warn(`Datadog supervisor: the ${descriptor.title} was terminated by ${signal}.`);
+			const stopped = `Datadog supervisor: the ${descriptor.title} was terminated by ${signal}.`;
+			// SIGTERM/SIGINT/SIGHUP are someone asking it to stop. SIGKILL is usually the OOM
+			// killer and the rest are crashes; reporting those at warn buries them.
+			if (signal === 'SIGTERM' || signal === 'SIGINT' || signal === 'SIGHUP') {
+				log.warn(stopped);
+			} else {
+				log.error(`${stopped} That is a crash or an OOM kill rather than a shutdown.`);
+			}
 			return;
 		}
 		if (code === 0) {
@@ -458,13 +579,26 @@ function prepareRuntime(componentDir) {
 	const logPath = resolveHarperLogPath();
 	let logsYaml = '';
 	if (logPath) {
-		logsYaml = renderLogsConfig(componentDir, logPath, service);
-		writeFileAtomic(join(paths.confd, 'harperdb.d', 'conf.yaml'), logsYaml);
-		if (!existsSync(logPath)) {
+		try {
+			logsYaml = renderLogsConfig(componentDir, logPath, service);
+			writeFileAtomic(join(paths.confd, 'harperdb.d', 'conf.yaml'), logsYaml);
+			if (!existsSync(logPath)) {
+				log.warn(
+					`Datadog supervisor: Harper's log file ${logPath} does not exist yet. The agent ` +
+						`will tail it once it appears, but if it never does, logging.file is off or ` +
+						`logging.path points somewhere else.`
+				);
+			}
+		} catch (error) {
+			// Log collection is optional; the trace-agent is not. This block used to throw
+			// out of prepareRuntime, and the catch around it stopped BOTH spawns, so a
+			// renamed conf.d template took APM down with it. Reset rather than keep a
+			// half-rendered string: the fingerprint has to describe what was written.
+			logsYaml = '';
 			log.warn(
-				`Datadog supervisor: Harper's log file ${logPath} does not exist yet. The agent ` +
-					`will tail it once it appears, but if it never does, logging.file is off or ` +
-					`logging.path points somewhere else.`
+				`Datadog supervisor: no log source was written (${error.message}). The template ` +
+					`is conf.d/harperdb.d/conf.yaml under the component directory, and it has to be ` +
+					`readable by the Harper user. Traces are unaffected.`
 			);
 		}
 	} else {
@@ -553,6 +687,8 @@ export function startDatadogAgents(componentDir) {
 			for (const [index, descriptor] of AGENTS.entries()) {
 				status.agents.push(launchOne(descriptor, binaries[index], runtime.paths, version));
 			}
+
+			await verifyReceiver(status, runtime.paths);
 		} catch (error) {
 			status.error = error.message;
 			log.error(`Datadog supervisor: startup failed: ${error.message}`);

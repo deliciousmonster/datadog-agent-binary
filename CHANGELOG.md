@@ -56,6 +56,38 @@ the same class of silent drift as the floating agent version. `AgentBuilder` now
 a literal because `setup-go` runs before the agent source is cloned; the guard above is
 what makes a stale copy fail loudly instead of silently building on the wrong compiler.
 
+### Changed: a trace launch that never binds the receiver now fails (breaking)
+
+`trace-agent run` used to report success whenever the process started. Nothing checked
+afterwards, so an agent that started and bound nothing produced
+`child process started (pid=N)`, then silence, then every span dropped. That is the defect
+this package exists to fix, with green output.
+
+Measured against the shipped 7.82.1 binary: `DD_APM_ENABLED=false` makes `trace-agent run`
+exit 0 having bound nothing, and an invalid `DD_APM_RECEIVER_PORT` leaves it alive and
+unbound. Both are now caught.
+
+The launcher polls the receiver's `/info` for up to 30 seconds after the spawn. If it never
+answers, the failure names the port and the config path, the agent this launch started is
+stopped, and the exit code is 1. A trace-agent that exits 0 without ever having answered is
+also a failure, because the exit code alone cannot tell that from a clean shutdown after an
+hour of serving spans. It does not touch the core agent, and a `version` or `--help`
+invocation is classified as a query rather than a launch.
+
+Related, and in the same failure class:
+
+- `DD_APM_RECEIVER_PORT` is validated. A value that is not a port in 1-65535 still falls
+  back to 8126, and now says so; `0` is passed through, because upstream reads it as "serve
+  no HTTP receiver" and rewriting it points every probe at a port nothing was told to bind.
+- A crash or an OOM kill exits `128 + signum` rather than 0. `SIGTERM`, `SIGINT` and
+  `SIGHUP` are still a clean stop.
+- `ENOEXEC` and `EACCES` from the spawn name the architecture or the missing exec bit
+  instead of arriving as a bare "failed to execute".
+
+`example/dd-supervisor.js` reports `receiverBound` per agent, so `/DatadogStatus/` answers
+whether APM is served rather than whether `spawn` threw. A failure to render the optional
+logs template no longer stops both agents from launching.
+
 ### Changed: TypeScript 7
 
 `typescript` 5.9 → 7.0, `prettier` 3.6 → 3.9, `lint-staged` 16 → 17. All dev-only, and

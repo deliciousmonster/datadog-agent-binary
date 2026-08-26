@@ -92,6 +92,7 @@ type AgentRow = {
 	binaryPath: string;
 	pid?: number;
 	adopted?: boolean;
+	receiverBound?: boolean;
 	error?: string;
 };
 
@@ -200,11 +201,17 @@ function copyDependencyClosure(names: string[], destModulesDir: string): void {
  *   BinaryManager's production resolution path - the platform package accessor -
  *   the one under test, while the suite chooses what actually gets spawned.
  */
-function assembleFixtureApp(workspace: Workspace, binaries: { core: string; trace: string }): string {
+function assembleFixtureApp(
+	workspace: Workspace,
+	binaries: { core: string; trace: string },
+	{ omitLogsTemplate = false } = {}
+): string {
 	const appDir = join(workspace.dir, APP_NAME);
 	cpSync(FIXTURE_PATH, appDir, { recursive: true });
 	cpSync(join(EXAMPLE_DIR, 'dd-supervisor.js'), join(appDir, 'dd-supervisor.js'));
-	cpSync(join(EXAMPLE_DIR, 'conf.d'), join(appDir, 'conf.d'), { recursive: true });
+	// Omitted, not corrupted: an absent template is what an operator who renamed or
+	// never created conf.d/harperdb.d/conf.yaml actually has.
+	if (!omitLogsTemplate) cpSync(join(EXAMPLE_DIR, 'conf.d'), join(appDir, 'conf.d'), { recursive: true });
 
 	const modulesDir = join(appDir, 'node_modules');
 	const packageDir = join(modulesDir, ...PACKAGE_MANIFEST.name.split('/'));
@@ -272,17 +279,24 @@ function supervisorEnv(workspace: Workspace): Record<string, string> {
  * measuring), so wait for the count of finished threads to stop changing.
  */
 function waitForProbeResults(resultsFile: string, { settleMs = 2000 } = {}): Promise<ProbeRow[]> {
+	// The supervisor holds its status promise open while it waits for the APM
+	// receiver to answer, so a thread takes the receiver deadline plus its own start
+	// time to report. The default 60s here used to be ample and no longer is.
 	let lastCount = -1;
 	let stableSince = Date.now();
-	return pollJsonlRows<ProbeRow>(resultsFile, (rows) => {
-		const finished = threadsThatProbed(rows);
-		if (finished !== lastCount) {
-			lastCount = finished;
-			stableSince = Date.now();
-			return false;
-		}
-		return finished > 0 && Date.now() - stableSince >= settleMs;
-	});
+	return pollJsonlRows<ProbeRow>(
+		resultsFile,
+		(rows) => {
+			const finished = threadsThatProbed(rows);
+			if (finished !== lastCount) {
+				lastCount = finished;
+				stableSince = Date.now();
+				return false;
+			}
+			return finished > 0 && Date.now() - stableSince >= settleMs;
+		},
+		{ timeoutMs: 180000 }
+	);
 }
 
 function supervisorStatuses(rows: ProbeRow[]): Array<{ threadId: number; status: SupervisorStatus }> {
@@ -404,11 +418,15 @@ function harperContext(suiteContext: unknown): ContextWithHarper {
  */
 async function startSupervisorRun(
 	ctx: ContextWithHarper,
-	plan: (workspace: Workspace) => { binaries: { core: string; trace: string }; alsoAllowed?: string[] }
+	plan: (workspace: Workspace) => {
+		binaries: { core: string; trace: string };
+		alsoAllowed?: string[];
+		omitLogsTemplate?: boolean;
+	}
 ): Promise<{ workspace: Workspace; rows: ProbeRow[] }> {
 	const workspace = createWorkspace();
-	const { binaries, alsoAllowed = [] } = plan(workspace);
-	await setupHarperWithFixture(ctx, assembleFixtureApp(workspace, binaries), {
+	const { binaries, alsoAllowed = [], omitLogsTemplate = false } = plan(workspace);
+	await setupHarperWithFixture(ctx, assembleFixtureApp(workspace, binaries, { omitLogsTemplate }), {
 		harperBinPath: harperBinPath!,
 		config: {
 			threads: { count: REQUESTED_THREAD_COUNT },
@@ -528,6 +546,22 @@ suite('the shipped example supervisor under Harper v5 spawn enforcement', { skip
 			assert.equal(status.error, undefined, `thread ${threadId}: supervisor startup failed: ${status.error}`);
 		}
 		assertAgentsLaunched(rows, () => workspace.longLivedCommand);
+	});
+
+	test('NEGATIVE: a trace-agent that binds nothing is reported as unbound, not as started', () => {
+		// The stub stays alive and never opens a socket, which is the shape the
+		// founding defect took: resolvable, spawned, running, and serving no spans.
+		// `started: true` is true of it, and on its own it is the wrong answer.
+		for (const { threadId, status } of supervisorStatuses(rows)) {
+			const trace = agentRow(status, TRACE_AGENT_NAME);
+			assert.equal(trace?.started, true, `thread ${threadId}: the trace-agent stub did not start`);
+			assert.equal(
+				trace?.receiverBound,
+				false,
+				`thread ${threadId}: nothing bound 127.0.0.1:${status.receiverPort}, so the ` +
+					`status must say so rather than stopping at "started"`
+			);
+		}
 	});
 
 	test('SINGLETON: N worker threads produce one process and one PID file per name', (t) => {
@@ -737,6 +771,57 @@ suite(
 		});
 	}
 );
+
+suite('the example supervisor with the optional logs template missing', { skip: SKIP_REASON }, (suiteContext) => {
+	const ctx = harperContext(suiteContext);
+	let workspace: Workspace;
+	let rows: ProbeRow[];
+
+	before(async () => {
+		({ workspace, rows } = await startSupervisorRun(ctx, (ws) => ({
+			binaries: { core: ws.longLivedCommand, trace: ws.longLivedCommand },
+			omitLogsTemplate: true,
+		})));
+	});
+
+	after(() => teardown(ctx, workspace, rows));
+
+	test('NEGATIVE: an unreadable logs template does not stop the trace-agent', () => {
+		// Log collection is optional by the module's own account: the branch where no
+		// log path could be resolved says "Traces are unaffected." Reading the template
+		// happens first inside the same try, so a missing one used to set status.error
+		// and launch neither agent.
+		const statuses = supervisorStatuses(rows);
+		assert.ok(statuses.length > 0, 'the component never reported a status');
+		for (const { threadId, status } of statuses) {
+			assert.equal(
+				status.error,
+				undefined,
+				`thread ${threadId}: startup failed on an optional feature: ${status.error}`
+			);
+			assert.equal(
+				status.agents.length,
+				AGENT_NAMES.length,
+				`thread ${threadId}: ${status.agents.length} agents were attempted; a logs ` +
+					`template failure must not reach the spawns`
+			);
+		}
+		assertAgentsLaunched(rows, () => workspace.longLivedCommand);
+	});
+
+	test('datadog.yaml is still written, and no logs source is', () => {
+		const env = supervisorEnv(workspace);
+		assert.ok(
+			existsSync(join(env.DD_HARPER_RUNTIME_DIR, 'datadog.yaml')),
+			'the trace-agent is fatal without a config file that exists'
+		);
+		assert.equal(
+			existsSync(join(env.DD_HARPER_RUNTIME_DIR, 'conf.d', 'harperdb.d', 'conf.yaml')),
+			false,
+			'nothing should have been rendered from a template that was not there'
+		);
+	});
+});
 
 /** Resolve both agent binaries the way a Harper application would. */
 async function resolveAgentBinaries(): Promise<{ core: string; trace: string } | { error: string }> {
