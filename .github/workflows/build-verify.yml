@@ -140,6 +140,25 @@ jobs:
               Root |
             Format-Table -AutoSize
 
+      # Measured on ubuntu-22.04: the root volume is 73 GiB with 12 GiB free when the
+      # build starts, there is no second volume to move to, and none of the paths
+      # below is loaded by this build. Removing them takes ~2 minutes of rm and
+      # returns ~18 GiB.
+      - name: Reclaim disk space (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          avail() { df --output=avail -k / | tail -1; }
+          before="$(avail)"
+          for path in /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost; do
+            [ -e "$path" ] || continue
+            sudo rm -rf "$path" || echo "could not remove $path, continuing"
+          done
+          after="$(avail)"
+          echo "Reclaimed $(( (after - before) / 1024 )) MiB on /"
+          df -h /
+
       - name: Build both agent binaries
         shell: bash
         run: |
