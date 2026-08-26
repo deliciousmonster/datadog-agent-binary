@@ -140,3 +140,12 @@ test('no MSYS2 bash anywhere fails loudly instead of writing a path that is wron
 		})
 	);
 });
+
+test('a Windows target turns off the PDB linker flag, which nothing here ships', async () => {
+	await withTempDir('win-pdb-', (dir) =>
+		withHome(dir, async () => {
+			assert.equal(builderWith({ sourceDir: dir }).getEnvironmentVariables().DD_GO_PDB, '0');
+			assert.ok(!('DD_GO_PDB' in builderWith({ os: 'linux', sourceDir: dir }).getEnvironmentVariables()));
+		})
+	);
+});

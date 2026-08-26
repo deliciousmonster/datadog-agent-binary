@@ -312,7 +312,21 @@ export class AgentBuilder {
 			CGO_ENABLED: '1',
 			...(this.cacheDir ? { XDG_CACHE_HOME: this.cacheDir } : {}),
 			...(this.tempDir ? { TEMP: this.tempDir, TMP: this.tempDir } : {}),
+			...this.pdbEnv(),
 		};
+	}
+
+	/**
+	 * 7.82.1's `go_build` splices `-Wl,--pdb=<bin>.pdb` into extldflags for every Windows
+	 * target unless DD_GO_PDB=0, and with CGO_ENABLED=1 that flag reaches the host's ld
+	 * for real. Nothing here ships a PDB, so the flag can only cost: a link failure if the
+	 * ld on PATH predates `--pdb`, and on a Windows host two extra bazel invocations per
+	 * binary, since the same branch calls `bazel cquery @winlibs_mingw64//:gcc` to find a
+	 * hermetic MinGW. Turning it off is upstream's own documented escape hatch and returns
+	 * the link to what earlier tags did.
+	 */
+	protected pdbEnv(): Record<string, string> {
+		return this.config.platform.getOS() === 'windows' ? { DD_GO_PDB: '0' } : {};
 	}
 
 	/**
