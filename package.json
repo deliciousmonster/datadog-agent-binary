@@ -46,9 +46,6 @@
 	],
 	"author": "",
 	"license": "Apache-2.0",
-	"dependencies": {
-		"commander": "^15.0.0"
-	},
 	"devDependencies": {
 		"@harperfast/code-guidelines": "^0.1.2",
 		"@harperfast/integration-testing": "^0.7.1",
@@ -57,7 +54,6 @@
 		"lint-staged": "^17.3.0",
 		"oxlint": "1.78.0",
 		"prettier": "3.9.6",
-		"tar": "^7.5.22",
 		"typescript": "^7.0.2"
 	},
 	"files": [

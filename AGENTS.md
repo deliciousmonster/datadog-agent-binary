@@ -179,6 +179,19 @@ because `node --test` exits 0 when it matches nothing.
 Prefer negative assertions. "Spawn without a name throws" proves the runtime enforces the rule; "spawn
 with a name works" also passes on a runtime with no enforcement at all.
 
+**`npm ci --omit=peer` if you are not running the integration suite.** `@harperfast/integration-testing`
+names `harper` as a required peer, and npm installs it: 901 of the 984 packages in the tree, 610 MB of
+the 688 MB, and 10 s of the 12 s a warm `npm ci` takes. Omitting peers leaves 83 packages and 78 MB, and
+`typecheck`, `typecheck:test`, `test`, `lint`, and `format:check` all still pass. `test:integration`
+then skips every case with the reason rather than failing, which is the same behaviour a contributor on
+an unsupported platform already gets. Run a plain `npm ci` before touching anything under
+`test/integration/`.
+
+Twelve of the thirteen advisories `npm audit` reports sit in that peer tree; the thirteenth is
+`picomatch@2.3.1`, reached through `@harperfast/code-guidelines` and its `typescript-eslint`, which this
+repository installs for a five-line prettier config and never lints with. None of it reaches a consumer:
+the published package declares no `dependencies` at all.
+
 ## Conventions
 
 - Tabs, single quotes, 120 columns, semicolons, from `@harperfast/code-guidelines/prettier` via

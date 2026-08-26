@@ -172,8 +172,8 @@ test('BinaryManager resolves the trace-agent from the same platform package', as
 });
 
 test('ensureBinary() rejects a version string in the kind slot with an actionable message', async () => {
-	// ensureBinary(version) was the old one-argument signature; commander types
-	// its options as `any`, so a stale call site typechecks and fails at runtime.
+	// ensureBinary(version) was the old one-argument signature. The CLI's own call site
+	// is typechecked, but a JavaScript consumer's is not, so the guard stays.
 	await assert.rejects(() => new BinaryManager().ensureBinary('7.75.5'), /first argument.*binary kind/s);
 });
 
