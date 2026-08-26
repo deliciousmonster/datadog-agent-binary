@@ -3,8 +3,6 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { DownloadConfig } from './types.js';
 import { errorMessage, logger } from './logger.js';
-import { OS_BUILDS } from './builder.js';
-import { Platform } from './platform.js';
 
 const DATADOG_AGENT_REPO = 'https://github.com/DataDog/datadog-agent';
 const GITHUB_API_BASE = 'https://api.github.com/repos/DataDog/datadog-agent';
@@ -176,8 +174,8 @@ export class DatadogAgentDownloader {
 		// exits 128 ("Failed to resolve 'HEAD' as a valid ref"), inside a swallowing catch, so
 		// the `git describe` the build's ldflags read found nothing regardless. Nothing it
 		// covered is uncovered now: a tag that does not exist upstream throws from
-		// assertRefExists() before this runs, git is a hard requirement in OS_BUILDS.requires
-		// on every platform, and a fetch over the same network as the failed clone fares no
+		// assertRefExists() before this runs, an absent git fails the clone into the named
+		// error below, and a fetch over the same network as the failed clone fares no
 		// better. It also cost consumers six packages (tar and five transitives).
 		let described: string;
 
@@ -224,28 +222,5 @@ export class DatadogAgentDownloader {
 				`Building from this tree would produce a binary labelled with one version ` +
 				`and built from another. Refusing to continue.`
 		);
-	}
-
-	async checkBuildDependencies(platform: Platform): Promise<void> {
-		logger.info(`Checking build dependencies for ${platform.getName()}...`);
-
-		const platformRequirements = OS_BUILDS[platform.getOS()]?.requires ?? [];
-		const missing: string[] = [];
-
-		logger.debug(`checkBuildDependencies PATH: ${process.env.PATH}`);
-		for (const tool of platformRequirements) {
-			try {
-				execSync(`which ${tool}`, { stdio: 'ignore' });
-			} catch {
-				missing.push(tool);
-			}
-		}
-
-		if (missing.length > 0) {
-			logger.warn(`Missing build dependencies: ${missing.join(', ')}`);
-			logger.warn('Please install missing dependencies before building');
-		} else {
-			logger.info('All build dependencies satisfied');
-		}
 	}
 }

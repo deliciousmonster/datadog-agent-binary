@@ -74,6 +74,20 @@ version we advertise. The types track the floor, not the newest release.
 `lint-staged` 17 requires Node `>=22.22.1`, above our `^22.18.0` floor. That constrains
 contributors only, never consumers, since it never enters the published tarball.
 
+### Removed: `install -v <version>` and `BinaryManager`'s `version` argument (breaking)
+
+Neither ever selected anything. The argument reached exactly one place, a second
+candidate at `build/<version>-<platform>/<name>` in the build-from-source fallback, and
+no builder, script, or workflow has ever written that layout: `cli.js build` compiles
+into `build/<platform>/bin`, and that is what the packaging script and both build
+workflows read back out. On the path that does resolve, the packaged platform package,
+the version was ignored outright, so `datadog-agent-build install -v 7.79.1` advertised a
+selection it could not perform.
+
+`.datadog-agent-version` is the pin, and it is the only one. `ensureBinary(kind?)` and
+`ensureTraceAgentBinary()` now take no version; passing one is ignored in JavaScript and
+a compile error in TypeScript. `install -v` exits non-zero as an unknown option.
+
 ### Removed: `commander`, the last runtime dependency
 
 `dependencies` is now empty. `src/cli.ts` parses with `node:util` `parseArgs`, stable on
@@ -91,8 +105,7 @@ error: too many arguments for 'install'. …            → error: Unexpected ar
 The typed `BuildOptions` and `InstallOptions` interfaces are gone with it. They existed
 because commander hands `.action()` an `any`, and a hand-written mirror of the flag table
 is a second place to forget an edit. `parseArgs` derives the value types from the option
-table itself, so `ensureBinary(version, kind)` with the arguments transposed is still
-TS2345 and now cannot drift.
+table itself, so a flag's type cannot drift away from the call site that reads it.
 
 ### Removed: `--build-args`, `BuildOptions.buildArgs`, `BuildConfig.buildArgs` (breaking)
 
@@ -113,7 +126,7 @@ is what the CLI already used.
 
 The commander upgrade turns excess arguments into a non-zero exit on every subcommand.
 `datadog-agent-build install 7.79.2` used to ignore the argument and install the current
-platform; it now fails and tells you so. `install` takes `-v <version>`.
+platform; it now fails and tells you so.
 
 ### Changed: the package is ESM-only (breaking)
 
@@ -162,9 +175,8 @@ New surface:
 - **Accessor** `getTraceAgentBinaryPath()`, alongside `getBinaryPath()`. Platform
   packages also export a `binaries` map of kind to filename.
 - **Command** `datadog-trace-agent`, which resolves and runs it.
-- **API** `BinaryManager.ensureTraceAgentBinary(version?)`. `ensureBinary()` now takes
-  the kind first and the version second; with no arguments it still resolves the core
-  agent.
+- **API** `BinaryManager.ensureTraceAgentBinary()`. `ensureBinary()` takes the binary
+  kind; with no arguments it still resolves the core agent.
 - **Harper spawn name** `datadog-trace-agent`, distinct from the core agent's
   `datadog-agent`. Harper's dedupe is a PID-file lock keyed on that name, so two names
   give one core agent and one trace-agent per node rather than one process total.

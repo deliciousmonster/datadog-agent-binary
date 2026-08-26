@@ -1,8 +1,7 @@
-import { mkdir, stat, symlink } from 'node:fs/promises';
 import * as path from 'node:path';
 import { DatadogAgentDownloader } from './downloader.js';
 import { createBuilder } from './builder.js';
-import { errorMessage, logger } from './logger.js';
+import { logger } from './logger.js';
 import { BuildConfig, BuildResult } from './types.js';
 import { Platform } from './platform.js';
 
@@ -31,7 +30,6 @@ export class DatadogAgentBuilder {
 
 		const platformBuildDir = path.join(process.cwd(), 'build', platformName);
 		const sourceDir = path.join(platformBuildDir, 'src');
-		const platformGoPath = path.join(platformBuildDir, 'go');
 
 		logger.info(`Building Datadog Agent ${version} for ${platformName}`);
 
@@ -39,10 +37,6 @@ export class DatadogAgentBuilder {
 			version,
 			extractTo: sourceDir,
 		});
-
-		await this.setupGoPathStructure(platformGoPath, sourceDir);
-
-		await this.downloader.checkBuildDependencies(platform);
 
 		const config: BuildConfig = {
 			platform,
@@ -52,27 +46,6 @@ export class DatadogAgentBuilder {
 		};
 
 		return createBuilder(config).build();
-	}
-
-	private async setupGoPathStructure(goPath: string, sourceDir: string): Promise<void> {
-		const goSrcDir = path.join(goPath, 'src', 'github.com', 'DataDog');
-		await mkdir(goSrcDir, { recursive: true });
-
-		const symlinkPath = path.join(goSrcDir, 'datadog-agent');
-		const relativePath = path.relative(goSrcDir, sourceDir);
-
-		try {
-			await stat(symlinkPath);
-			logger.debug(`GOPATH symlink already exists: ${symlinkPath}`);
-		} catch {
-			try {
-				await symlink(relativePath, symlinkPath, 'dir');
-				logger.debug(`Created GOPATH symlink: ${symlinkPath} -> ${relativePath}`);
-			} catch (error) {
-				logger.error(`Failed to create symlink: ${errorMessage(error)}`);
-				throw error;
-			}
-		}
 	}
 
 	buildForCurrentPlatform(options: BuildOptions = {}): Promise<BuildResult> {
