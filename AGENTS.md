@@ -21,8 +21,8 @@ component.
 Earlier releases shipped the core agent alone. Nothing bound 8126, so `dd-trace` connected, got
 `ECONNREFUSED`, and dropped every span. Neither side treats that as an error: the core agent parses
 the APM config keys it cannot serve and renders an APM status section drawn by shims, and `dd-trace`
-classifies a refused connection as a startup race and stays quiet for tens of seconds. Every signal
-points at configuration, and configuration cannot fix it.
+classifies a refused connection as a startup race and stays quiet for tens of seconds. Every available
+signal points at configuration, which is not what is wrong.
 
 Upstream has no bundling flag. `tasks/agent.py::build()` takes no `bundle` parameter and
 `tasks/build_tags.py` lists `trace-agent` as its own target, so the trace-agent exists only if
@@ -85,8 +85,8 @@ forever.
 **Both spawn paths need allowlisting.** Harper matches `applications.allowedSpawnCommands` as an exact
 string compare against `command.split(' ')[0]`, so a bare name, a relative path, or a path containing a
 space can never match, and the list is read once at module load. Allowlisting only the core agent
-reproduces the original symptom exactly: metrics and logs flow, the trace-agent spawn is rejected,
-traces vanish.
+reproduces the original symptom, since metrics and logs keep flowing while the rejected trace-agent
+spawn takes every span with it.
 
 **`dd-trace` needs both preload keys.** `threads.preloadRequire: dd-trace/init` is what initializes the
 tracer, since `register.js` under `--import` initializes nothing in a worker, and
@@ -105,9 +105,10 @@ matrix` is the check.
 
 **The Linux legs are pinned to Ubuntu 22.04 for glibc, not for anything else.** Both binaries link
 glibc dynamically (the trace-agent's `netcgo` build tag rules out a static build) and glibc only works
-upward, so moving those legs to `ubuntu-latest` raises the floor above the runtime images this package
-loads on and the binary fails at exec with a missing `GLIBC_2.3x`. `build-release.yml` verifies the
-floor after each build.
+upward, so the build runner sets the floor for every host that runs the result. 22.04 ships glibc 2.35,
+under the 2.36 of the oldest image these binaries load on; `ubuntu-latest` would emit
+`GLIBC_2.38`/`2.39` references that image cannot satisfy. `build-release.yml` checks the floor after
+each build, so raising it fails there rather than at a consumer's exec.
 
 **The trace-agent needs an existing `datadog.yaml` and a writable config directory.** A missing file is
 an immediate fatal "unable to load Datadog config file"; an unwritable directory is a 30 second hang
@@ -219,7 +220,7 @@ npm run build-agent        # both binaries for this platform (needs Go, Python, 
 | `build-release.yml` | `v*` tags, manual | build, gate, publish, verify |
 | `build-verify.yml` | nightly, manual | builds both binaries and proves the receiver works, without publishing |
 | `matrix-drift.yml` | weekly | registry versus declared |
-| `validate-caller-workflows.yml` | every PR, push to `main` | the org's shared checker for AI caller workflows |
+| `validate-caller-workflows.yml` | every PR, push to `main` | checks any `claude-*` / `gemini-*` caller workflows for shadow jobs and unpinned refs |
 | `check-upstream.yml` | disabled | do not re-enable without making it write `.datadog-agent-version` |
 
 `build-verify.yml` has no push trigger by design, since a release run already builds all four platforms
