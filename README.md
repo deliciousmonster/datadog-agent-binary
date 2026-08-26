@@ -225,11 +225,13 @@ TypeScript 7 no longer auto-includes `node_modules/@types`, so `tsconfig.json` n
 
 ### Branches
 
-`dev` is the default branch and where every change lands. `main` is a release trigger and nothing else: a push to it that touches anything outside `**/*.md` and `example/` cuts a `-next.N` tag and publishes to npm, with nobody asked to confirm. Open pull requests against `dev`. Merge into `main` only when a release is intended, and use `[skip release]` in the commit subject when it is not.
+`main` is the default branch and the release branch; `dev` is where work integrates. A change branches off `dev`, opens a pull request into `dev`, and reaches `main` in a later pull request from `dev`. `main` is the repository default, so `gh pr create` aims there unless you pass `--base dev`.
+
+A merge to `main` does not publish. Only a `v*` tag does, and nothing cuts one automatically: **Cut Prerelease** reports the version it would have cut and stops unless the `RELEASE_ENABLED` variable and a `REPO_TOKEN` PAT are both present, and neither is.
 
 ## Releasing
 
-The git tag is the only input to the publish pipeline. It sets the npm version, and whether it parses as a semver prerelease decides the dist-tag, so a mistyped tag is a bad default install for every consumer rather than a typo. Nothing hand-types it: **Cut Prerelease** computes the number and pushes the tag, and it runs by itself on every qualifying push to `main`.
+The git tag is the only input to the publish pipeline. It sets the npm version, and whether it parses as a semver prerelease decides the dist-tag, so a mistyped tag is a bad default install for every consumer rather than a typo. Push the tag deliberately; **Cut Prerelease** can compute and push it instead, but only once `RELEASE_ENABLED` is `true` and a `REPO_TOKEN` PAT exists, because a tag pushed with `GITHUB_TOKEN` starts no workflow.
 
 The package version is its own line and carries no agent version. The bundled agent is pinned in `.datadog-agent-version`, which ships inside the tarball, so a consumer reads which agent they got instead of inferring it from the package number.
 
