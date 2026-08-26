@@ -95,7 +95,7 @@ test('off CI nothing is created and no XDG_CACHE_HOME is exported', async () => 
 	);
 });
 
-test('the build sequence reaches the cache directory before dda is installed', async () => {
+test('every build precondition runs before dda is installed', async () => {
 	const order = [];
 	const build = new (class extends AgentBuilder {
 		async checkGoVersion() {}
@@ -106,6 +106,9 @@ test('the build sequence reaches the cache directory before dda is installed', a
 		async ensureEmbeddedPath() {
 			order.push('dev');
 		}
+		async ensureWindowsPreconditions() {
+			order.push('windows');
+		}
 		async ensureDdaInstalled() {
 			order.push('dda');
 		}
@@ -115,5 +118,5 @@ test('the build sequence reaches the cache directory before dda is installed', a
 	})({ platform: new Platform('linux', 'x86_64'), sourceDir: '/nonexistent', outputDir: '/nonexistent/out' });
 
 	await build.buildCommon();
-	assert.deepEqual(order, ['cache', 'dev', 'dda']);
+	assert.deepEqual(order, ['cache', 'dev', 'windows', 'dda']);
 });

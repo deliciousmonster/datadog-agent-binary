@@ -1,5 +1,5 @@
 import { execSync, spawn } from 'node:child_process';
-import { chmod, copyFile, mkdir, readFile, stat } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { AgentBinaryDescriptor, AgentBinaryKind, BuildConfig, BuildResult, OS } from './types.js';
@@ -31,6 +31,7 @@ export function createBuilder(config: BuildConfig): AgentBuilder {
 export class AgentBuilder {
 	protected config: BuildConfig;
 	protected cacheDir?: string;
+	protected tempDir?: string;
 
 	constructor(config: BuildConfig) {
 		this.config = config;
@@ -150,6 +151,7 @@ export class AgentBuilder {
 		await this.checkGoVersion();
 		await this.ensureCacheDirectory();
 		await this.ensureEmbeddedPath();
+		await this.ensureWindowsPreconditions();
 
 		logger.info('Checking for dda installation...');
 		await this.ensureDdaInstalled();
@@ -309,6 +311,7 @@ export class AgentBuilder {
 			GOOS: this.osBuild().goos,
 			CGO_ENABLED: '1',
 			...(this.cacheDir ? { XDG_CACHE_HOME: this.cacheDir } : {}),
+			...(this.tempDir ? { TEMP: this.tempDir, TMP: this.tempDir } : {}),
 		};
 	}
 
@@ -328,6 +331,103 @@ export class AgentBuilder {
 		this.cacheDir = configured ? path.resolve(configured) : path.join(os.homedir(), '.cache');
 		await mkdir(this.cacheDir, { recursive: true });
 		logger.debug(`Using XDG_CACHE_HOME ${this.cacheDir}`);
+	}
+
+	/**
+	 * Two host assumptions upstream's Windows build makes that a GitHub runner does not
+	 * satisfy. Both gate bazel before anything compiles.
+	 *
+	 * Guarded on the OS being built FOR, not `process.platform`. `Platform.current()` is
+	 * the only thing that ever assembles a BuildConfig (src/index.ts), so target and host
+	 * are the same machine, and every other host check in this file already reads
+	 * `getOS()`. Guarding on the target is also what keeps this reachable from a hermetic
+	 * test on any OS.
+	 */
+	protected async ensureWindowsPreconditions(): Promise<void> {
+		if (this.config.platform.getOS() !== 'windows') {
+			return;
+		}
+		await this.writeBazelShellOverride();
+		await this.relocateTempForShortNames();
+	}
+
+	/**
+	 * Where MSYS2 actually lands. Upstream's `.bazelrc` names chocolatey's path; the
+	 * GitHub Windows image installs to the first entry instead. `BAZEL_SH` comes first
+	 * when it is set, since that is the name upstream already gives this setting.
+	 */
+	protected windowsShellCandidates(): string[] {
+		const drive = (process.env.SystemDrive || 'C:').replace(/[\\/]+$/, '');
+		const candidates = [`${drive}/msys64/usr/bin/bash.exe`, `${drive}/tools/msys64/usr/bin/bash.exe`];
+		const configured = process.env.BAZEL_SH?.trim();
+		return configured ? [configured, ...candidates] : candidates;
+	}
+
+	/**
+	 * `.bazelrc` at 7.82.1 pins both `--repo_env=BAZEL_SH` and `--shell_executable` to
+	 * `C:/tools/msys64/usr/bin/bash.exe`, active on every Windows run through
+	 * `common --enable_platform_specific_config`. GitHub's image puts MSYS2 at
+	 * `C:\msys64`, and the miss only surfaces once the analysis graph needs a shell
+	 * action, tens of minutes into a build. `try-import %workspace%/user.bazelrc` is the
+	 * last line of `.bazelrc` and the file is gitignored upstream, so the override needs
+	 * nothing of theirs patched and the source tree stays clean for `git describe`.
+	 *
+	 * Repeated `--repo_env` keys resolve last-wins, which is why the flag is worth
+	 * repeating rather than exporting `BAZEL_SH` into the environment:
+	 * `--experimental_strict_repo_env` (also set upstream) hides the ambient value from
+	 * repository rules entirely.
+	 */
+	protected async writeBazelShellOverride(): Promise<void> {
+		// Backslashes are what an inherited BAZEL_SH is likely to carry, and bazel reads
+		// them as escapes in an rc file.
+		const shell = (await this.resolveWindowsShell()).replace(/\\/g, '/');
+		const file = path.join(this.config.sourceDir, 'user.bazelrc');
+		await writeFile(
+			file,
+			'# Written by @deliciousmonster/datadog-agent-binary. .bazelrc points both of these\n' +
+				'# at C:/tools/msys64, which the GitHub Windows image does not have.\n' +
+				`common:windows --repo_env=BAZEL_SH=${shell}\n` +
+				`common:windows --shell_executable=${shell}\n`,
+			'utf8'
+		);
+		logger.debug(`Pointed bazel's Windows shell at ${shell} via ${file}`);
+	}
+
+	protected async resolveWindowsShell(): Promise<string> {
+		const candidates = this.windowsShellCandidates();
+		for (const candidate of candidates) {
+			try {
+				await stat(candidate);
+			} catch {
+				continue;
+			}
+			return candidate;
+		}
+		throw new Error(
+			`No MSYS2 bash found for bazel. Looked at: ${candidates.join(', ')}. ` +
+				'Install MSYS2, or set BAZEL_SH to an existing bash.exe. Without one, bazel falls ' +
+				'back to the C:/tools/msys64 path hardcoded in upstream .bazelrc and dies on the ' +
+				'first shell action.'
+		);
+	}
+
+	/**
+	 * `tools/bazel.bat` at 7.82.1 creates `%TEMP%\123456789.1234` and exits 2 when Windows
+	 * gives that file no 8.3 short name, before bazel starts. NTFS enables short-name
+	 * creation on the system volume and disables it on every other volume by default, and
+	 * GitHub puts the workspace and RUNNER_TEMP on `D:`, so the drive %TEMP% happens to
+	 * sit on decides whether a Windows build starts at all.
+	 *
+	 * The user profile is on the system volume, so pointing TEMP back at its own Temp is
+	 * preferred over `fsutil 8dot3name set <drive> 0`, which needs elevation and
+	 * permanently changes a volume's naming policy on a machine this package does not own.
+	 * It is also just the Windows default for that user, so on a host whose TEMP was never
+	 * moved it changes nothing.
+	 */
+	protected async relocateTempForShortNames(): Promise<void> {
+		this.tempDir = path.join(os.homedir(), 'AppData', 'Local', 'Temp');
+		await mkdir(this.tempDir, { recursive: true });
+		logger.debug(`Using TEMP ${this.tempDir} so bazel's 8.3 short-name check passes`);
 	}
 
 	protected async ensureOutputDirectory(): Promise<void> {
