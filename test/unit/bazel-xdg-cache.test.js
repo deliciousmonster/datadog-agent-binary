@@ -115,6 +115,7 @@ test('every build precondition runs before dda is installed', async () => {
 		async executeCommand() {
 			return '';
 		}
+		async streamCommand() {}
 	})({ platform: new Platform('linux', 'x86_64'), sourceDir: '/nonexistent', outputDir: '/nonexistent/out' });
 
 	await build.buildCommon();

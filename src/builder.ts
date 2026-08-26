@@ -166,7 +166,7 @@ export class AgentBuilder {
 		await this.ensureDdaInstalled();
 
 		logger.info('Installing Go tools...');
-		await this.executeCommand('dda --no-interactive inv install-tools');
+		await this.streamCommand('dda --no-interactive inv install-tools');
 
 		// One invoke task per binary. Upstream has no bundling flag: `agent.build`
 		// produces the core agent and nothing else, so the trace-agent exists only
@@ -180,7 +180,7 @@ export class AgentBuilder {
 			// No trailing space: the command is split on " " and spawned without a
 			// shell, so an empty argv entry reaches invoke as an unknown positional.
 			const suffix = buildArgs ? ` ${buildArgs}` : '';
-			await this.executeCommand(`dda --no-interactive inv ${binary.buildTask}${suffix}`);
+			await this.streamCommand(`dda --no-interactive inv ${binary.buildTask}${suffix}`);
 		}
 	}
 
@@ -197,24 +197,13 @@ export class AgentBuilder {
 	protected async executeCommand(command: string, cwd?: string): Promise<string> {
 		logger.debug(`Executing: ${command}`);
 
-		const workingDir = cwd || this.config.sourceDir;
-		const env = {
-			...process.env,
-			...this.getEnvironmentVariables(),
-		};
-
-		// dda builds run for tens of minutes; stream them instead of buffering.
-		if (command.includes('dda')) {
-			return this.executeCommandWithRollingOutput(command, workingDir, env);
-		}
-
 		try {
 			return execSync(command, {
-				cwd: workingDir,
+				cwd: cwd || this.config.sourceDir,
 				encoding: 'utf8',
 				stdio: ['inherit', 'pipe', 'pipe'],
 				timeout: 1200000,
-				env,
+				env: { ...process.env, ...this.getEnvironmentVariables() },
 			});
 		} catch (error) {
 			// execSync failures carry the child's exit status and captured output on the
@@ -239,73 +228,43 @@ export class AgentBuilder {
 		}
 	}
 
-	private async executeCommandWithRollingOutput(command: string, cwd: string, env: NodeJS.ProcessEnv): Promise<string> {
+	/**
+	 * The invoke build tasks run for tens of minutes, so their output has to reach the log
+	 * as it happens. `inherit` rather than pipes read line by line: nothing accumulates in
+	 * this process, and whether fd 1 is a terminal is left to the child instead of being
+	 * answered here by drawing cursor escapes into a log that has no cursor.
+	 *
+	 * Returns nothing on purpose. `inherit` captures nothing, and a `Promise<string>` would
+	 * hand a caller a convincing empty string. It is also why streaming is picked per call
+	 * site rather than by matching the command text, which is how a later `dda inv --list`
+	 * would have come to parse ''.
+	 *
+	 * No timeout. Both workflows that reach here cap the job at 60 minutes, so a
+	 * process-level number under that fails a slow-but-healthy build and one over it never
+	 * fires. An idle-output watchdog would need the pipes this deliberately gives up.
+	 */
+	protected async streamCommand(command: string): Promise<void> {
+		logger.debug(`Streaming: ${command}`);
+
+		const [cmd, ...args] = command.split(' ');
+		const child = spawn(cmd, args, {
+			cwd: this.config.sourceDir,
+			env: { ...process.env, ...this.getEnvironmentVariables() },
+			stdio: 'inherit',
+		});
+
 		return new Promise((resolve, reject) => {
-			const [cmd, ...args] = command.split(' ');
-			const child = spawn(cmd, args, {
-				cwd,
-				env,
-				stdio: ['inherit', 'pipe', 'pipe'],
-			});
-
-			let stdout = '';
-			let stderr = '';
-			const rollingLines: string[] = [];
-			const maxLines = 6;
-			let rollingDisplayActive = false;
-
-			const updateRollingDisplay = () => {
-				if (rollingDisplayActive) {
-					for (let i = 0; i < Math.min(rollingLines.length, maxLines); i++) {
-						process.stdout.write('\x1b[1A\x1b[2K');
-					}
-				} else {
-					rollingDisplayActive = true;
-				}
-
-				for (const line of rollingLines.slice(-maxLines)) {
-					process.stdout.write(line + '\n');
-				}
-			};
-
-			const collect = (isStderr: boolean) => (data: Buffer) => {
-				const output = data.toString();
-				if (isStderr) {
-					stderr += output;
-				} else {
-					stdout += output;
-				}
-
-				for (const line of output.split('\n')) {
-					if (line.trim()) {
-						rollingLines.push((isStderr ? '[stderr] ' : '') + line.trim());
-						updateRollingDisplay();
-					}
-				}
-			};
-
-			child.stdout?.on('data', collect(false));
-			child.stderr?.on('data', collect(true));
-
-			child.on('close', (code) => {
-				process.stdout.write('\n');
-
+			child.on('error', (error) => reject(new Error(`Could not run ${command}: ${error.message}`, { cause: error })));
+			child.on('close', (code, signal) => {
 				if (code === 0) {
-					resolve(stdout);
+					resolve();
+				} else if (signal) {
+					// `code` is null for a killed child, and the Go linker is the usual OOM
+					// target on a runner, so the signal is the whole diagnosis.
+					reject(new Error(`Command killed by ${signal}: ${command}`));
 				} else {
-					logger.error(`Command failed: ${command}`);
-					logger.error(`Exit code: ${code}`);
-					if (stderr) {
-						logger.error(`Stderr:\n${stderr}`);
-					}
-					reject(new Error(`Command failed with exit code ${code}`));
+					reject(new Error(`Command failed with exit code ${code}: ${command}`));
 				}
-			});
-
-			child.on('error', (error) => {
-				logger.error(`Command failed: ${command}`);
-				logger.error(`Error: ${error.message}`);
-				reject(error);
 			});
 		});
 	}
