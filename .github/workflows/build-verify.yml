@@ -159,15 +159,12 @@ jobs:
           echo "Reclaimed $(( (after - before) / 1024 )) MiB on /"
           df -h /
 
+      # The run line matches build-release.yml's Build step, and the missing
+      # `shell:` is why: the Windows leg here used to build under Git Bash while
+      # the leg that publishes builds under pwsh, so this workflow proved a path
+      # nothing ships. See build-release.yml for why the flag stays conditional.
       - name: Build both agent binaries
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -n "${{ github.event.inputs.datadog_version }}" ]; then
-            node dist/cli.js build --datadog-version "${{ github.event.inputs.datadog_version }}"
-          else
-            node dist/cli.js build
-          fi
+        run: node dist/cli.js build ${{ github.event.inputs.datadog_version && format('--datadog-version ''{0}''', github.event.inputs.datadog_version) || '' }}
 
       # The check that would have caught the original defect: the package shipped
       # the core agent alone, nothing bound 8126, dd-trace got ECONNREFUSED, and

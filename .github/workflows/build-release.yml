@@ -250,32 +250,19 @@ jobs:
       # platform.getBinaries() and runs `dda inv <buildTask>` per descriptor. Each
       # descriptor names its own override env var, so core and trace-agent flags
       # cannot be aimed at the wrong target.
-      - name: Build ${{ matrix.platform }} (Unix)
-        if: runner.os != 'Windows'
+      #
+      # The flag is assembled by the Actions expression rather than by a shell
+      # conditional, so one line runs under bash and pwsh alike and the Windows leg
+      # keeps the default shell upstream's bazel guide asks for. Keeping it
+      # conditional is load-bearing: resolveVersion() in src/downloader.ts uses `??`,
+      # which does not catch '', so an unconditional `--datadog-version ''` reaches
+      # assertRefExists('') and 404s the default path.
+      - name: Build ${{ matrix.platform }}
         env:
           DEBUG: true
           DD_AGENT_BUILD_ARGS: ${{ github.event.inputs.agent_build_args }}
           DD_TRACE_AGENT_BUILD_ARGS: ${{ github.event.inputs.trace_agent_build_args }}
-        run: |
-          if [ -n "${{ github.event.inputs.datadog_version }}" ]; then
-            node dist/cli.js build --datadog-version ${{ github.event.inputs.datadog_version }}
-          else
-            node dist/cli.js build
-          fi
-
-      - name: Build ${{ matrix.platform }} (Windows)
-        if: runner.os == 'Windows'
-        env:
-          DEBUG: true
-          DD_AGENT_BUILD_ARGS: ${{ github.event.inputs.agent_build_args }}
-          DD_TRACE_AGENT_BUILD_ARGS: ${{ github.event.inputs.trace_agent_build_args }}
-        run: |
-          if ("${{ github.event.inputs.datadog_version }}" -ne "") {
-            node dist/cli.js build --datadog-version ${{ github.event.inputs.datadog_version }}
-          } else {
-            node dist/cli.js build
-          }
-        shell: pwsh
+        run: node dist/cli.js build ${{ github.event.inputs.datadog_version && format('--datadog-version ''{0}''', github.event.inputs.datadog_version) || '' }}
 
       # Prove every binary we ship runs as a standalone file BEFORE we ship it. The
       # build tree is hidden first so a binary that still links a library by its
