@@ -1,6 +1,6 @@
 # Datadog Agent Binary
 
-[![Datadog Agent Binaries](https://github.com/HarperFast/datadog-agent-binary/actions/workflows/build-release.yml/badge.svg)](https://github.com/HarperFast/datadog-agent-binary/actions/workflows/build-release.yml)
+[![Datadog Agent Binaries](https://github.com/deliciousmonster/datadog-agent-binary/actions/workflows/build-release.yml/badge.svg)](https://github.com/deliciousmonster/datadog-agent-binary/actions/workflows/build-release.yml)
 
 Distributes the pre-compiled [Datadog Agent](https://github.com/DataDog/datadog-agent) as an npm package, so the agent is installed and versioned as a normal Node dependency instead of through a system package manager or a container sidecar. Intended for running the agent alongside a Node application, including inside Harper v5.
 
