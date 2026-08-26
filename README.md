@@ -184,16 +184,20 @@ One run produces both binaries. The builder iterates the platform's binary descr
 
 | Binary | Task | Flags |
 | --- | --- | --- |
-| Core agent | `dda --no-interactive inv agent.build` | `--build-exclude=systemd,python` |
+| Core agent | `dda --no-interactive inv agent.build` | `--build-exclude=systemd,python --exclude-rtloader --no-enable-bazel` |
 | Trace-agent | `dda --no-interactive inv trace-agent.build` | none |
 
-**The trace-agent takes no `--build-exclude`, and passing the core agent's would be wrong rather than redundant.** `TRACE_AGENT_TAGS` contains neither `python` nor `systemd`, and `tasks/trace_agent.py::build()` has no `embedded_path`, `rtloader_root`, or `exclude_rtloader` parameter. It is a plain `go_build`. Override either binary's flags with `DD_AGENT_BUILD_ARGS` or `DD_TRACE_AGENT_BUILD_ARGS`.
+**`--build-exclude` strips Go build tags and nothing more.** `tasks/agent.py` gates the embedded-rtloader install on a separate `exclude_rtloader` parameter, so every build before this one ran that install and then discarded its output. At 7.82.1 the install runs under bazel by default and extracts an LLVM toolchain the Linux code path never invokes, which exhausted the runner's disk before a Go file compiled. `--no-enable-bazel` is belt and braces: if a later tag reaches the install through another branch, it lands on the cmake path this project already provisions. Upstream uses the same pair in `packaging/aix/stages/04-agent.sh`.
+
+Nothing a user can reach changes in the shipped core agent. `--build-exclude=python` already stripped the `python` build tag, so `pkg/collector/python` was never compiled in and the published binary already had no embedded CPython and no Python checks. The one artifact-level difference is that `get_build_flags` no longer bakes a build-tree RPATH into the binary: `get_rtloader_paths` returns nothing over the empty `dev/` the builder creates in place of the rtloader install's output. That is derived from the upstream source, not read off the ELF.
+
+**The trace-agent descriptor takes none of these.** `TRACE_AGENT_TAGS` contains neither `python` nor `systemd`, and `tasks/trace_agent.py::build()` has no `embedded_path`, `rtloader_root`, or `exclude_rtloader` parameter. It is a plain `go_build`, and upstream's AIX packaging invokes it bare right after `agent.build --no-enable-bazel --exclude-rtloader`. Override either binary's flags with `DD_AGENT_BUILD_ARGS` or `DD_TRACE_AGENT_BUILD_ARGS`.
 
 Upstream writes `<sourceDir>/bin/agent/agent` and `<sourceDir>/bin/trace-agent/trace-agent`; the builder copies them out as `datadog-agent` and `trace-agent`. A missing binary fails the build, naming the expected path and the task that produces it, rather than packaging a partial result.
 
 ### Requirements
 
-Node `^22.18.0 || >=24.0.0`, Python 3.12+, CMake, Git, and a C toolchain: GCC on Linux, Xcode Command Line Tools on macOS, MinGW-w64 GCC on Windows. CMake is core-agent-only; it builds rtloader, which the trace-agent does not link. Both binaries link glibc dynamically on Linux (the trace-agent's `netcgo` tag rules out a static build), and CI checks both against the floor.
+Node `^22.18.0 || >=24.0.0`, Python 3.12+, CMake, Git, and a C toolchain: GCC on Linux, Xcode Command Line Tools on macOS, MinGW-w64 GCC on Windows. CMake is off the default build path now that `--exclude-rtloader` skips the install that used it; CI still provisions it so `--no-enable-bazel` has somewhere to land if a later tag reaches the rtloader install another way. Both binaries link glibc dynamically on Linux (the trace-agent's `netcgo` tag rules out a static build), and CI checks both against the floor.
 
 **Go must match the source's `.go-version`** (7.82.x pins 1.26.5). The builder reads that file and refuses a *minor* mismatch, because Go's runtime and crypto defaults move between minors; a patch gap only warns. Without this check the three build paths drift independently — that is how source pinning Go 1.25.10 came to ship a `go1.26.4` binary.
 
