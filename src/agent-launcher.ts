@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
@@ -22,6 +22,16 @@ const DEFAULT_RECEIVER_PORT = 8126;
 
 /** `apm_config.receiver_port: 0` is upstream's spelling for "serve no HTTP receiver". */
 const RECEIVER_DISABLED = 0;
+
+/**
+ * How long a freshly spawned trace-agent gets to answer /info before the launch is called
+ * a failure. Generous on purpose: the receiver check in .github/workflows/build-verify.yml
+ * already treats 30s as the cold-start bound, and a deadline that fires early would refuse
+ * a launch that was about to work.
+ */
+const RECEIVER_BIND_TIMEOUT_MS = 30_000;
+
+const RECEIVER_POLL_INTERVAL_MS = 250;
 
 /** Raised by preflight checks, to distinguish "misconfigured" from "binary not found". */
 export class LaunchPreflightError extends Error {}
@@ -228,6 +238,16 @@ function receiverPort(): number {
 }
 
 /**
+ * Global flags that consume the argument after them, per `trace-agent --help`. Without
+ * this set, `-c <path> run` reads <path> as the subcommand, and every receiver check
+ * keyed on `run` skips itself while saying nothing.
+ */
+const VALUE_FLAGS = new Set([...CONFIG_FLAGS, '-l', '--cpu-profile', '-m', '--mem-profile', '-p', '--pidfile']);
+
+/** Flags that make the process print something and exit instead of serving. */
+const QUERY_FLAGS = new Set(['-h', '--help']);
+
+/**
  * True if `args` invoke the trace-agent's long-running receiver.
  *
  * The receiver starts for a bare invocation or an explicit `run`. Everything else
@@ -235,8 +255,14 @@ function receiverPort(): number {
  * up, so the already-running check must not swallow it.
  */
 function isRunSubcommand(args: string[]): boolean {
-	const firstPositional = args.find((arg) => !arg.startsWith('-'));
-	return firstPositional === undefined || firstPositional === 'run';
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (!arg.startsWith('-')) return arg === 'run';
+		if (QUERY_FLAGS.has(arg)) return false;
+		// `--flag=value` carries its own value; `--flag value` eats the next argument.
+		if (!arg.includes('=') && VALUE_FLAGS.has(arg)) i++;
+	}
+	return true;
 }
 
 /**
@@ -286,6 +312,72 @@ function isPortBound(port: number, timeoutMs = 250): Promise<boolean> {
 }
 
 /**
+ * Whether the receiver this launch is responsible for has ever been seen answering.
+ * Written by waitForReceiver() and read by onExit(), because a trace-agent that exits 0
+ * having never bound is indistinguishable, from the exit code alone, from one that served
+ * spans for an hour and was then asked to stop.
+ */
+interface ReceiverWatch {
+	port: number;
+	bound: boolean;
+}
+
+/** Poll until a real receiver answers on the watched port, or the deadline passes. */
+async function waitForReceiver(watch: ReceiverWatch, timeoutMs = RECEIVER_BIND_TIMEOUT_MS): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		if (await isTraceReceiverHealthy(watch.port)) {
+			watch.bound = true;
+			return true;
+		}
+		if (Date.now() >= deadline) return false;
+		await new Promise((resolve) => setTimeout(resolve, RECEIVER_POLL_INTERVAL_MS));
+	}
+}
+
+/**
+ * Hold the launch open until the receiver answers, and fail it loudly if it never does.
+ *
+ * The probe above runs before the spawn, to decide whether to start at all. Nothing used
+ * to check afterwards, so a trace-agent that started and never bound was reported as a
+ * success: `child process started (pid=N)`, then silence, then every span dropped. That
+ * is the original defect with green output. Measured against the shipped 7.82.1 binary,
+ * `trace-agent run` with DD_APM_ENABLED=false exits 0 having bound nothing.
+ *
+ * The assertion is on the observed socket, never on the config, so a configuration this
+ * launcher does not understand cannot be refused as long as a receiver comes up.
+ */
+async function requireReceiverBound(
+	watch: ReceiverWatch,
+	child: ChildProcess,
+	context: { processName: string; args: string[]; binaryPath: string; ownsChild: boolean }
+): Promise<void> {
+	if (await waitForReceiver(watch)) {
+		logger.info(`${context.processName} is serving the APM receiver on 127.0.0.1:${watch.port}.`);
+		return;
+	}
+
+	const { configPath, explicit } = resolveConfigPath(context.args, context.binaryPath);
+	logger.error(
+		`${context.processName} is running (pid=${child.pid}) but nothing answered the ` +
+			`trace-agent /info endpoint on 127.0.0.1:${watch.port} within ` +
+			`${RECEIVER_BIND_TIMEOUT_MS / 1000}s, so dd-trace has nowhere to send spans. It ` +
+			`reports a successful flush either way, which is why an empty APM view is the only ` +
+			`symptom this produces on its own. Config ` +
+			`${explicit ? 'passed on the command line' : 'derived from the binary location'}: ` +
+			`${configPath}. Check apm_config.enabled there, DD_APM_ENABLED=${
+				process.env.DD_APM_ENABLED ?? '(unset)'
+			} which overrides it, and then the agent's own log.`
+	);
+
+	// Only the thread that started it. Exiting otherwise leaves an agent alive that serves
+	// nothing while holding the PID lock that keeps the next one from starting; killing a
+	// process another thread owns is not this launch's call to make.
+	if (context.ownsChild) child.kill('SIGTERM');
+	process.exit(1);
+}
+
+/**
  * Resolve one agent binary and run it, forwarding `args` and this process's env.
  *
  * @param kind which binary to launch; `core` is the metrics/logs agent, `trace` is the
@@ -318,6 +410,10 @@ export async function launchAgent(
 		// always be loud.
 		const binaryPath = await new BinaryManager().ensureBinary(kind);
 		resolvedBinaryPath = binaryPath;
+
+		// Set only for the invocations this launch is responsible for binding, so the
+		// post-spawn assertion below can never reach a `version` query or the core agent.
+		let watch: ReceiverWatch | undefined;
 
 		if (kind === 'trace') {
 			// After resolution, not before: with no explicit -c the trace-agent derives its
@@ -355,6 +451,7 @@ export async function launchAgent(
 							`with EADDRINUSE rather than silently pretending APM is working.`
 					);
 				}
+				if (port !== RECEIVER_DISABLED) watch = { port, bound: false };
 			}
 		}
 
@@ -392,29 +489,36 @@ export async function launchAgent(
 		// of a ChildProcess: an EventEmitter carrying pid, kill(), unref(), and an 'exit'
 		// event, with no stdio and no spawnargs. Its 1Hz liveness interval is not unref'd,
 		// so a thread that joined an existing process never goes idle unless it unrefs.
-		if (!Array.isArray((child as unknown as { spawnargs?: string[] }).spawnargs)) {
+		const adopted = !Array.isArray((child as unknown as { spawnargs?: string[] }).spawnargs);
+		if (adopted) {
 			logger.info(
 				`${processName} is already running on this node (pid=${child.pid}); this ` +
 					`thread joined the existing process instead of starting a second one.`
 			);
 			child.unref();
-			return;
+		} else {
+			logger.info(`${processName} child process started (pid=${child.pid})`);
+
+			// Attached before the wait below, so a child that dies while the receiver is
+			// still coming up is reported by onExit rather than by the bind deadline.
+			child.on('exit', (code, signal) => {
+				void onExit(kind, processName, code, signal, watch);
+			});
+
+			child.on('error', (error: Error) => {
+				// Asynchronous spawn failures only: ENOENT, EACCES, and similar. Harper's
+				// allowlist rejection is not one of these; createSpawn throws synchronously
+				// before any child exists, so that case lands in the catch below.
+				logger.error(`Failed to execute ${processName}: ${error.message}`);
+				logger.error(`Binary path: ${binaryPath}`);
+				process.exit(1);
+			});
 		}
 
-		logger.info(`${processName} child process started (pid=${child.pid})`);
-
-		child.on('exit', (code, signal) => {
-			void onExit(kind, processName, code, signal);
-		});
-
-		child.on('error', (error: Error) => {
-			// Asynchronous spawn failures only: ENOENT, EACCES, and similar. Harper's
-			// allowlist rejection is not one of these; createSpawn throws synchronously
-			// before any child exists, so that case lands in the catch below.
-			logger.error(`Failed to execute ${processName}: ${error.message}`);
-			logger.error(`Binary path: ${binaryPath}`);
-			process.exit(1);
-		});
+		// "Started" is not the claim worth making about a trace-agent; "bound" is.
+		if (watch) {
+			await requireReceiverBound(watch, child, { processName, args, binaryPath, ownsChild: !adopted });
+		}
 	} catch (error) {
 		const message = errorMessage(error);
 		logger.error(`Failed to run ${processName}: ${message}`);
@@ -445,14 +549,15 @@ async function onExit(
 	kind: AgentBinaryKind,
 	processName: string,
 	code: number | null,
-	signal: NodeJS.Signals | null
+	signal: NodeJS.Signals | null,
+	watch?: ReceiverWatch
 ): Promise<void> {
 	if (signal) {
 		logger.warn(`${processName} terminated by signal ${signal}`);
 		process.exit(0);
 	}
 
-	const port = receiverPort();
+	const port = watch?.port ?? receiverPort();
 
 	// A trace-agent that exits rc=1 because the receiver port was already taken is benign:
 	// the port is served, so APM works. But rc=1 is also what a misconfigured agent
@@ -466,6 +571,17 @@ async function onExit(
 				`the port (EADDRINUSE). Treating this as already-running.`
 		);
 		process.exit(0);
+	}
+
+	if (watch && !watch.bound) {
+		logger.error(
+			`${processName} exited with code ${code} without ever answering /info on ` +
+				`127.0.0.1:${port}, so it never served the APM receiver and every span dd-trace ` +
+				`produced while it ran was dropped. Measured against 7.82.1, a trace-agent whose ` +
+				`apm_config.enabled is false exits 0 on exactly this path, which is why the exit ` +
+				`code alone cannot be read as a successful launch here.`
+		);
+		process.exit(code || 1);
 	}
 
 	if (code) {
@@ -486,5 +602,6 @@ export const internalsForTesting = {
 	receiverPort,
 	isRunSubcommand,
 	isTraceReceiverHealthy,
+	waitForReceiver,
 	onExit,
 };

@@ -15,8 +15,9 @@ import net from 'node:net';
 import { findFreePort } from '../support/find-free-port.js';
 import { importDist, withEnv } from '../support/harness.js';
 
-const { receiverPort, isRunSubcommand, isTraceReceiverHealthy, onExit } = (await importDist('agent-launcher.js'))
-	.internalsForTesting;
+const { receiverPort, isRunSubcommand, isTraceReceiverHealthy, waitForReceiver, onExit } = (
+	await importDist('agent-launcher.js')
+).internalsForTesting;
 
 /** The one variable every test here turns. */
 const withReceiverPort = (value, run) => withEnv('DD_APM_RECEIVER_PORT', value, run);
@@ -139,6 +140,21 @@ test('short-lived queries are not mistaken for the receiver', () => {
 	// already-running check; misclassifying it exits 0 without running anything.
 	assert.equal(isRunSubcommand(['version']), false);
 	assert.equal(isRunSubcommand(['status']), false);
+	// Help exits after printing. Classified as the receiver it would be held open
+	// waiting for a bind that is never coming, and then fail the invocation.
+	assert.equal(isRunSubcommand(['-h']), false);
+	assert.equal(isRunSubcommand(['--help']), false);
+});
+
+test('a flag value is not read as the subcommand', () => {
+	// `-c <path> run` is the shape the shim's own e2e test uses. Reading <path> as
+	// the subcommand makes every receiver check here skip itself, silently, on the
+	// one invocation that binds the socket.
+	assert.equal(isRunSubcommand(['-c', '/etc/datadog.yaml', 'run']), true);
+	assert.equal(isRunSubcommand(['--pidfile', '/run/trace.pid', 'run']), true);
+	assert.equal(isRunSubcommand(['-c=/etc/datadog.yaml', 'run']), true);
+	// The value is skipped, not blindly consumed: a query after one stays a query.
+	assert.equal(isRunSubcommand(['-c', '/etc/datadog.yaml', 'version']), false);
 });
 
 test('isTraceReceiverHealthy() is false when nothing listens', async () => {
@@ -191,6 +207,58 @@ test('a listener that accepts and never answers times out to unhealthy', async (
 			for (const socket of sockets) socket.destroy();
 		}
 	});
+});
+
+test('waitForReceiver() gives up on a port nothing binds, and says so through the latch', async () => {
+	const watch = { port: await findFreePort(), bound: false };
+	assert.equal(await waitForReceiver(watch, 500), false);
+	assert.equal(watch.bound, false, 'the latch onExit() reads must stay false');
+});
+
+test('waitForReceiver() is not satisfied by a listener that is not a receiver', () =>
+	// A stray port-forward or a health-check stub answers; neither takes a span.
+	withReceiver({ body: { endpoints: ['/health'] } }, async (port) => {
+		const watch = { port, bound: false };
+		assert.equal(await waitForReceiver(watch, 500), false);
+		assert.equal(watch.bound, false);
+	}));
+
+test('waitForReceiver() keeps polling while the agent is still coming up', async () => {
+	// A single probe at spawn time finds nothing and would call a cold start a
+	// failure, which is the one way this check could refuse a working launch.
+	const port = await findFreePort();
+	const watch = { port, bound: false };
+	const server = http.createServer((request, response) => {
+		response.writeHead(request.url === '/info' ? 200 : 404, { 'content-type': 'application/json' });
+		response.end(JSON.stringify({ endpoints: ['/v0.4/traces'] }));
+	});
+	const late = setTimeout(() => server.listen(port, '127.0.0.1'), 600);
+	try {
+		assert.equal(await waitForReceiver(watch, 10000), true);
+		assert.equal(watch.bound, true);
+	} finally {
+		clearTimeout(late);
+		await new Promise((resolve) => server.close(resolve));
+	}
+});
+
+test('NEGATIVE: a trace-agent that exits 0 having never bound is a failed launch', async () => {
+	// The founding defect with green output. Measured against the shipped 7.82.1
+	// binary, `trace-agent run` with apm_config.enabled false exits 0 and binds
+	// nothing, so the exit code alone cannot carry this claim.
+	const port = await findFreePort();
+	assert.equal(
+		await exitCodeFrom(() => onExit('trace', 'datadog-trace-agent', 0, null, { port, bound: false })),
+		1,
+		'a run that never served the receiver must not report success'
+	);
+});
+
+test('a receiver that served and then stopped exits 0', async () => {
+	// The other direction, and the one that matters more: a check that refuses a
+	// launch which worked is worse than no check.
+	const port = await findFreePort();
+	assert.equal(await exitCodeFrom(() => onExit('trace', 'datadog-trace-agent', 0, null, { port, bound: true })), 0);
 });
 
 test('onExit() treats a signal as a clean stop', async () => {
