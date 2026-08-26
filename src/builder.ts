@@ -6,16 +6,14 @@ import { AgentBinaryDescriptor, AgentBinaryKind, BuildConfig, BuildResult, OS } 
 import { errorMessage, logger } from './logger.js';
 
 /**
- * Everything that varies between the three build hosts: the log label, the `GOOS` the
- * toolchain cross-compiles for, and the tools that must be on PATH. Data rather than a
- * subclass per OS, because a subclass whose whole body is one string is a place for the
- * two to drift; `requires` lives here for the same reason, having previously been a
- * second OS-keyed table inside the downloader.
+ * What varies between the three build hosts: the log label, and the `GOOS` the toolchain
+ * cross-compiles for. Data rather than a subclass per OS, because a subclass whose whole
+ * body is one string is a place for the two to drift.
  */
-export const OS_BUILDS: Record<OS, { label: string; goos: string; requires: string[] }> = {
-	linux: { label: 'Linux', goos: 'linux', requires: ['go', 'make', 'gcc', 'git'] },
-	macos: { label: 'macOS', goos: 'darwin', requires: ['go', 'make', 'gcc', 'git', 'xcode-select'] },
-	windows: { label: 'Windows', goos: 'windows', requires: ['go', 'make', 'gcc', 'git'] },
+const OS_BUILDS: Record<OS, { label: string; goos: string }> = {
+	linux: { label: 'Linux', goos: 'linux' },
+	macos: { label: 'macOS', goos: 'darwin' },
+	windows: { label: 'Windows', goos: 'windows' },
 };
 
 export function createBuilder(config: BuildConfig): AgentBuilder {
@@ -130,6 +128,10 @@ export class AgentBuilder {
 	 * move between minors; a patch gap only warns, since upstream floats those.
 	 */
 	protected async checkGoVersion(): Promise<void> {
+		// Probed before the pin is read, so a host with no Go fails here on every tag
+		// rather than five minutes later inside `dda inv install-tools`. Nothing else
+		// checks for a toolchain now that the `which` sweep is gone.
+		const reported = await this.executeCommand('go version');
 		const pinned = (await this.readGoVersionPin())?.trim();
 		if (!pinned) {
 			// warn, not debug: every tag this package builds ships the file, so reaching
@@ -137,7 +139,7 @@ export class AgentBuilder {
 			logger.warn('Source ships no .go-version; building with whatever Go is on PATH');
 			return;
 		}
-		const local = /go(\d+\.\d+(?:\.\d+)?)/.exec(await this.executeCommand('go version'))?.[1];
+		const local = /go(\d+\.\d+(?:\.\d+)?)/.exec(reported)?.[1];
 		if (!local) {
 			logger.warn(`Could not parse the local Go version; source pins ${pinned}`);
 			return;

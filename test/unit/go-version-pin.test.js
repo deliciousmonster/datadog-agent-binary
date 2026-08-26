@@ -77,6 +77,21 @@ function builderOver(sourceDir) {
 	})({ sourceDir });
 }
 
+test('a host with no Go fails here, pin or no pin, since nothing else looks for a toolchain', async () => {
+	const builder = new (class extends AgentBuilder {
+		async readGoVersionPin() {
+			return undefined;
+		}
+		async executeCommand(command) {
+			throw new Error(`Command failed: ${command}`);
+		}
+	})({ sourceDir: '/nonexistent' });
+
+	// Returning early on an absent pin would skip the only `go` probe left in the
+	// build, and the miss would resurface five minutes on inside `inv install-tools`.
+	await assert.rejects(() => builder.checkGoVersion(), /go version/);
+});
+
 test('a source tree with no .go-version has no opinion, which is what old tags look like', () =>
 	withTempDir('go-pin-absent-', (sourceDir) => builderOver(sourceDir).checkGoVersion()));
 
