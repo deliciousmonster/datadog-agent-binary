@@ -14,7 +14,8 @@
 
 logs:
   - type: file
-    # Substituted from DD_HARPER_LOG_PATH, or <ROOTPATH>/log/hdb.log.
+    # Substituted from <root>/log/hdb.log, where <root> is ROOTPATH or the rootPath
+    # Harper recorded in its boot properties.
     path: "__HDB_LOG_PATH__"
     # Substituted from DD_SERVICE. Must match the tracer's service name for logs and APM
     # traces to correlate; dd-trace reads the same DD_SERVICE.

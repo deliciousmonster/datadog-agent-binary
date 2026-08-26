@@ -51,11 +51,10 @@ threads:
   preload: dd-trace/register.js
 
 logging:
-  # The Datadog log source tails this file, so it has to exist and the component has to know
-  # its path. Pin it here and export the same value as DD_HARPER_LOG_PATH, or set ROOTPATH and
-  # let both derive <ROOTPATH>/log/hdb.log.
+  # The Datadog log source tails <rootPath>/log/hdb.log, which is where Harper's default
+  # `logging.root` puts it. Setting `root` or `path` here moves the log without moving the
+  # source, which leaves the source tailing a file that never appears.
   file: true
-  path: /REPLACE/WITH/ABSOLUTE/PATH/TO/harper/log/hdb.log
 
   # The supervisor forwards each agent's stdout and stderr into this log at info and warn. At
   # Harper's default level of `warn` the agents' startup lines are dropped.
