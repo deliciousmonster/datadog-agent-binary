@@ -18,8 +18,9 @@ on:
 
 env:
   # Must satisfy the go.mod `go` directive of the agent release pinned in
-  # .datadog-agent-version; 7.79.x needs Go 1.25.x. Bump this when the pin moves
-  # across a Go requirement.
+  # .datadog-agent-version. Bump it when the pin moves across a Go minor;
+  # ensureGoVersion() in src/builder.ts refuses a mismatched build, since setup-go
+  # runs before the source is cloned and cannot read its .go-version.
   GO_VERSION: '1.26.5'
   # The Datadog Agent version this package BUNDLES is NOT set here. It lives in
   # .datadog-agent-version, which src/downloader.ts reads when no --datadog-version

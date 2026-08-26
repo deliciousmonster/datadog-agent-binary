@@ -45,7 +45,6 @@ no version-specific code.
 The host-check configurations are not here. They carry no component-specific value, so they ship
 in the package's own `conf.d/` and the supervisor copies them into the runtime tree from there.
 
-
 ## 1. Install
 
 `package.json` depends on the parent checkout (`file:..`), so:

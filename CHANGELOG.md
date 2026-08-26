@@ -78,6 +78,20 @@ the same class of silent drift as the floating agent version. `AgentBuilder` now
 a literal because `setup-go` runs before the agent source is cloned; the guard above is
 what makes a stale copy fail loudly instead of silently building on the wrong compiler.
 
+### Changed: the build streams its output instead of drawing a window over it
+
+`datadog-agent-build build` rendered the two long invoke tasks as a six-line rolling window,
+written with `\x1b[1A\x1b[2K` and no `isTTY` check. In a log with no cursor that left the
+escapes in place, re-emitted every line up to six times, and erased one line more than it had
+printed, so the window walked upward into the build's own header. It also folded the child's
+stderr into stdout behind a `[stderr] ` prefix, and held every byte of a forty-minute build in
+two growing strings.
+
+Both tasks now inherit this process's stdio. Nothing accumulates here and the two streams stay
+apart, at the cost of whatever colour and progress rendering the child chooses on a terminal. A
+task killed by a signal now names the signal rather than reporting `exit code null`, which is
+what an OOM-killed Go linker looked like.
+
 ### Changed: a trace launch that never binds the receiver now fails (breaking)
 
 `trace-agent run` used to report success whenever the process started. Nothing checked
@@ -112,8 +126,10 @@ logs template no longer stops both agents from launching.
 
 ### Changed: TypeScript 7
 
-`typescript` 5.9 → 7.0, `prettier` 3.6 → 3.9, `lint-staged` 16 → 17. All dev-only, and
-after the entry below there is no runtime dependency left for them to sit beside.
+`typescript` 5.9 → 7.0, `prettier` 3.6 → 3.9, `lint-staged` 16 → 17, and `tar` out of
+`devDependencies` entirely, eight packages with it: the tarball fallback that imported it was
+deleted long ago and nothing replaced the import. All dev-only, and after the entry below there
+is no runtime dependency left for them to sit beside.
 
 TypeScript 7 no longer auto-includes every package under `node_modules/@types`, so
 `tsconfig.json` now names `"types": ["node"]`. Without it the entire Node global surface
@@ -127,6 +143,20 @@ version we advertise. The types track the floor, not the newest release.
 
 `lint-staged` 17 requires Node `>=22.22.1`, above our `^22.18.0` floor. That constrains
 contributors only, never consumers, since it never enters the published tarball.
+
+### Removed: `DD_HARPER_RUNTIME_DIR` and `DD_HARPER_LOG_PATH` (breaking)
+
+Two variables this project invented so it could be told what Harper already records.
+`example/dd-supervisor.js` derives both from Harper's own root path instead: `ROOTPATH` when
+the image exports it, otherwise the `rootPath` in the settings file that
+`~/.harperdb/hdb_boot_properties.file` names. The runtime directory is `<root>/datadog` and the
+collected log is `<root>/log/hdb.log`. Exporting either variable now does nothing.
+
+The example's Harper config loses its `logging.path` line with them. The log source looks at
+`<rootPath>/log/hdb.log` and nowhere else, so `logging.root` or `logging.path` pointing the log
+somewhere else takes it out of collection. Every step of the derivation degrades rather than
+throws: with no root path anywhere the runtime directory falls back to `~/.harper-datadog` and
+log collection is skipped with a line saying so, leaving traces unaffected.
 
 ### Removed: `install -v <version>` and `BinaryManager`'s `version` argument (breaking)
 
@@ -156,10 +186,12 @@ error: unknown option '--nope'                        → error: Unknown option 
 error: too many arguments for 'install'. …            → error: Unexpected argument '7.79.2'. …
 ```
 
-The typed `BuildOptions` and `InstallOptions` interfaces are gone with it. They existed
-because commander hands `.action()` an `any`, and a hand-written mirror of the flag table
-is a second place to forget an edit. `parseArgs` derives the value types from the option
-table itself, so a flag's type cannot drift away from the call site that reads it.
+The CLI's own `BuildOptions` and `InstallOptions` interfaces are gone with it. They existed
+because commander hands `.action()` an `any`, and a hand-written mirror of the flag table is
+a second place to forget an edit; `parseArgs` derives the value types from the option table
+itself, so a flag's type cannot drift away from the call site that reads it. The exported
+`BuildOptions` in `src/index.ts` is a different type and is unaffected, minus its
+`buildArgs` property (below).
 
 ### Removed: `--build-args`, `BuildOptions.buildArgs`, `BuildConfig.buildArgs` (breaking)
 
@@ -171,6 +203,14 @@ binaries is the failure the per-binary descriptors exist to prevent. Passing
 passing `buildArgs` to `buildForCurrentPlatform()` gets a compile error rather than a
 silently dropped property. Use the env vars.
 
+### Removed: two build preconditions that could not fail
+
+`setupGoPathStructure()` created `src`, `bin` and `pkg` under a GOPATH that Go has created
+itself since modules landed, and `checkBuildDependencies()` ran `which` over a tool list that
+had drifted from what the build actually invokes: it looked for `make`, which nothing calls,
+and let a missing Go through with a warning. `ensureGoVersion()` now probes the compiler on
+every tag and refuses a mismatch, which is the check that one was pretending to be.
+
 ### Removed: `DatadogAgentBuilder.getLatestVersion()` (breaking)
 
 A passthrough with no caller. `DatadogAgentDownloader.getLatestVersion()` is public and
@@ -178,9 +218,8 @@ is what the CLI already used.
 
 ### Changed: unknown positional arguments are now an error (breaking)
 
-The commander upgrade turns excess arguments into a non-zero exit on every subcommand.
-`datadog-agent-build install 7.79.2` used to ignore the argument and install the current
-platform; it now fails and tells you so.
+Excess arguments exit non-zero on every subcommand. `datadog-agent-build install 7.79.2` used
+to ignore the argument and install the current platform; it now fails and tells you so.
 
 ### Changed: the package is ESM-only (breaking)
 
@@ -238,7 +277,9 @@ New surface:
   `--build-exclude` flags; `DD_TRACE_AGENT_BUILD_ARGS` overrides them, mirroring
   `DD_AGENT_BUILD_ARGS`.
 - **Packaging** is all-or-nothing. A platform whose build is missing either binary is
-  skipped rather than published with a partial `bin/`.
+  skipped rather than published with a partial `bin/`, and `npm run matrix` holds every
+  binary to a 1 MB floor, so a `bin/` full of empty files fails the pre-publish gate
+  instead of counting as two binaries present.
 - **CI** smoke-tests both binaries standalone, checks both against the glibc floor, and
   starts the trace-agent to confirm `/info` advertises `/v0.4/traces` and that a posted
   trace payload is accepted.

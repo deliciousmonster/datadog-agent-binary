@@ -35,7 +35,7 @@ strings -a bin/trace-agent  | grep -c 'datadog-agent/pkg/trace/api\.'   # > 0
 ```
 
 A change that makes it possible to build, package, or publish without the trace-agent is wrong. The
-descriptor model, the pre-publish matrix gate, and the symbol assertion in `build-verify.yml` all
+descriptor model, the pre-publish matrix gate, and the symbol assertion in both build workflows all
 exist for that single reason.
 
 ## The descriptor model
@@ -55,6 +55,7 @@ src/binary-manager.ts               resolves a binary from the platform package 
 src/agent-launcher.ts               shared launcher behind bin/datadog-agent and bin/trace-agent
 scripts/create-platform-packages.js builds npm/<platform>/ with both binaries and their accessors
 scripts/publish-matrix.js           verifies the matrix, staged or published
+conf.d/                             core-check configurations, shipped in the tarball
 example/                            a Harper component showing the correct spawn pattern
 ```
 
@@ -110,13 +111,23 @@ under the 2.36 of the oldest image these binaries load on; `ubuntu-latest` would
 `GLIBC_2.38`/`2.39` references that image cannot satisfy. `build-release.yml` checks the floor after
 each build, so raising it fails there rather than at a consumer's exec.
 
+**A core check runs only if `conf.d` names it.** Every check is compiled into the core agent and the
+collector schedules none of them on its own: against an empty `conf.d`, `configcheck` prints nothing
+and `check cpu` answers `no valid check found`. Nothing reports the gap, because
+`datadog.agent.running` is appended by the aggregator on every flush rather than collected, so the
+forwarder keeps posting `202 Accepted` for payloads carrying no `system.*` series. `conf.d/` holds a
+`<check>.d/conf.yaml.default` per check and ships in `files[]`, and `example/dd-supervisor.js`
+resolves it through the installed package rather than through the component, so a component that
+renames its own `conf.d` cannot take host metrics down with it.
+
 **The trace-agent needs an existing `datadog.yaml` and a writable config directory.** A missing file is
 an immediate fatal "unable to load Datadog config file"; an unwritable directory is a 30 second hang
 followed by an auth-token error. The file only has to exist, and zero bytes is enough. It does not read
 the core agent's `/etc/datadog-agent/datadog.yaml`, defaulting instead to
 `<installRoot>/etc/datadog.yaml` derived from the binary, which under `node_modules` holds no config.
 `preflightTraceAgentConfig()` in `src/agent-launcher.ts` turns both failures into a message before the
-process starts.
+process starts, and no trace launch is reported as successful until the receiver answers `/info`,
+because the process can start, bind nothing, and exit 0.
 
 **The npm version and the bundled agent version are independent.** A package once published as `7.75.5`
 contained agent `7.79.2`, and `7.75.5` was not an upstream tag at all. `.datadog-agent-version` is the
@@ -127,8 +138,12 @@ The package version moves on packaging changes and says nothing about what is in
 ## Build preconditions
 
 `src/builder.ts` handles these before anything compiles. They exist because upstream's build assumes a
-host that a clean runner is not.
+host that a clean runner is not. All six are `ensure*` methods called from `buildCommon()` in one
+list, so a seventh is added in one place and the ordering test in `test/unit/bazel-xdg-cache.test.js`
+sees it.
 
+- **macOS needs the Xcode command line tools.** `CGO_ENABLED` is 1 on every target, so without them
+  the build dies inside cgo rather than at a missing-tool message. `xcode-select -p` is the probe.
 - **Go must match the source's `.go-version`.** A minor mismatch is refused, because Go's runtime and
   crypto defaults move between minors; a patch gap only warns, since upstream floats those. Without the
   check, CI, a laptop, and the source pin drift to three different compilers.
@@ -203,6 +218,9 @@ the published package declares no `dependencies` at all.
 - `@types/node` tracks the 22 line on purpose. It has to match the `engines` floor, or code calling an
   API absent from Node 22.18 compiles clean and breaks for a consumer on the version the package
   advertises.
+- `dependencies` is empty and stays empty. The CLI parses with `node:util` `parseArgs`, and the
+  tarball adds the two platform binaries to a consumer's tree and nothing else. A runtime dependency
+  is a decision, not a convenience.
 - Do not rename exports or change signatures without checking `scripts/` and `test/`. Several read them
   by name.
 - Comments explain why, never what. The bar: would a competent engineer be surprised, or make the wrong

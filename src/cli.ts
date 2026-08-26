@@ -183,8 +183,8 @@ async function main(): Promise<void> {
 
 	if (command === undefined || command === '-h' || command === '--help' || command === 'help') {
 		console.log(HELP['']);
-		// Commander exits 1 when invoked with no command at all, and 0 for an explicit
-		// help request. Scripts branch on that, so keep it.
+		// No command is a usage error and exits 1; an explicit help request exits 0. Scripts
+		// branch on that difference, so the two cannot collapse into one code.
 		process.exit(command === undefined ? 1 : 0);
 	}
 
