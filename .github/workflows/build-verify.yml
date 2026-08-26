@@ -196,74 +196,68 @@ jobs:
       # copy of the core agent. `version` cannot tell those apart: a misdispatched
       # binary prints a version and exits 0 with no receiver in it. pkg/trace/api
       # is the package that binds the port.
-      - name: Assert the trace binary contains the APM receiver (Linux)
-        if: runner.os == 'Linux'
+      #
+      # One step covers all four legs. Go writes each function's full package path
+      # into the binary the same way for ELF, Mach-O and PE, so a byte scan reads
+      # every format and needs no `strings` on PATH. On the 7.82.1 build: 804 hits
+      # in the macos-arm64 trace-agent, 1330 in trace-agent.exe, and 0 in either
+      # core agent.
+      #
+      # The same step runs in build-release.yml and build-verify.yml, byte for
+      # byte. Drift between those two files is a defect class this repo keeps
+      # hitting, so change both or neither.
+      - name: Assert the trace binary contains the APM receiver
         shell: bash
         run: |
           set -euo pipefail
-          platform="$(node -e "console.log(require('./dist/platform.js').Platform.current().getName())")"
-          trace="build/$platform/bin/trace-agent"
-          core="build/$platform/bin/datadog-agent"
+          node -e '
+            const { readFileSync } = require("node:fs");
+            const { Platform } = require("./dist/platform.js");
 
-          count() { strings -a "$1" | grep -c "$2" || true; }
+            // Scan raw bytes, never decoded text. The needle is ASCII, so latin1
+            // encodes it one byte per character and Buffer.indexOf compares against
+            // the file exactly as Go wrote it; decoding a binary to a string first
+            // is what would lose a match to a replacement character.
+            const count = (buf, needle) => {
+              const pin = Buffer.from(needle, "latin1");
+              let n = 0;
+              for (let i = buf.indexOf(pin); i !== -1; i = buf.indexOf(pin, i + pin.length)) n++;
+              return n;
+            };
 
-          t_api=$(count "$trace" 'datadog-agent/pkg/trace/api\.')
-          t_cmd=$(count "$trace" 'datadog-agent/cmd/trace-agent')
-          c_api=$(count "$core"  'datadog-agent/pkg/trace/api\.')
+            const platform = Platform.current();
+            const binary = (kind) => `build/${platform.getName()}/bin/${platform.getBinary(kind).outputName}`;
+            const receiver = "datadog-agent/pkg/trace/api.";
+            const entry = "datadog-agent/cmd/trace-agent";
 
-          echo "trace-agent  pkg/trace/api symbols : $t_api"
-          echo "trace-agent  cmd/trace-agent       : $t_cmd"
-          echo "core agent   pkg/trace/api symbols : $c_api  (expected 0)"
+            const tracePath = binary("trace");
+            const corePath = binary("core");
+            const traceReceiver = count(readFileSync(tracePath), receiver);
+            const traceEntry = count(readFileSync(tracePath), entry);
+            const coreReceiver = count(readFileSync(corePath), receiver);
 
-          rc=0
-          [ "$t_api" -gt 0 ] || { echo "::error::trace-agent contains no pkg/trace/api symbols; it cannot serve the receiver."; rc=1; }
-          [ "$t_cmd" -gt 0 ] || { echo "::error::trace-agent contains no cmd/trace-agent symbols."; rc=1; }
-          exit "$rc"
+            console.log(`pkg/trace/api   in ${tracePath} : ${traceReceiver}`);
+            console.log(`cmd/trace-agent in ${tracePath} : ${traceEntry}`);
+            console.log(`pkg/trace/api   in ${corePath} : ${coreReceiver}  (expected 0)`);
 
-      # Same assertion, no `strings` on the runner. Go writes each function's full
-      # package path into the PE the same way it writes it into an ELF, so an
-      # ordinary byte scan finds it: on the 7.82.1 artifacts trace-agent.exe holds
-      # 1330 occurrences and datadog-agent.exe holds 0, against 797 / 0 for the
-      # linux-x86_64 pair from the same build.
-      - name: Assert the trace binary contains the APM receiver (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $platform = node -e "console.log(require('./dist/platform.js').Platform.current().getName())"
-          $bindir = "build/$platform/bin"
-
-          # Latin-1 maps every byte to one char, so the scan cannot lose a match to
-          # a decode error the way UTF-8 would.
-          function occurrences($path, $needle) {
-            $text = [System.Text.Encoding]::GetEncoding('iso-8859-1').GetString([System.IO.File]::ReadAllBytes($path))
-            $n = 0
-            $i = 0
-            while (($i = $text.IndexOf($needle, $i, [StringComparison]::Ordinal)) -ge 0) {
-              $n++
-              $i += $needle.Length
+            if (traceReceiver === 0) {
+              console.log(`::error::${tracePath} contains no pkg/trace/api symbols; it cannot serve the receiver.`);
+              process.exitCode = 1;
             }
-            return $n
-          }
-
-          $t_api = occurrences "$bindir\trace-agent.exe" 'datadog-agent/pkg/trace/api.'
-          $t_cmd = occurrences "$bindir\trace-agent.exe" 'datadog-agent/cmd/trace-agent'
-          $c_api = occurrences "$bindir\datadog-agent.exe" 'datadog-agent/pkg/trace/api.'
-
-          Write-Output "trace-agent  pkg/trace/api symbols : $t_api"
-          Write-Output "trace-agent  cmd/trace-agent       : $t_cmd"
-          Write-Output "core agent   pkg/trace/api symbols : $c_api  (expected 0)"
-
-          $rc = 0
-          if ($t_api -le 0) {
-            Write-Output '::error::trace-agent.exe contains no pkg/trace/api symbols; it cannot serve the receiver.'
-            $rc = 1
-          }
-          if ($t_cmd -le 0) {
-            Write-Output '::error::trace-agent.exe contains no cmd/trace-agent symbols.'
-            $rc = 1
-          }
-          exit $rc
+            if (traceEntry === 0) {
+              console.log(`::error::${tracePath} contains no cmd/trace-agent symbols.`);
+              process.exitCode = 1;
+            }
+            // Zero in the core agent is what makes the counts above evidence rather
+            // than noise: the same scan finds nothing in a Go binary with no receiver
+            // in it. A nonzero count means the two binaries stopped being distinct,
+            // either because one was copied over the other or because upstream linked
+            // the receiver into the core agent.
+            if (coreReceiver !== 0) {
+              console.log(`::error::${corePath} contains ${coreReceiver} pkg/trace/api symbols, expected 0.`);
+              process.exitCode = 1;
+            }
+          '
 
       # A real receiver, on the real port, accepting a real v0.4 payload.
       # Everything above proves a file exists and loads; only this proves a span
