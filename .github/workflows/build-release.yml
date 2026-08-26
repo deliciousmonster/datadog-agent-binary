@@ -187,6 +187,26 @@ jobs:
         shell: bash
         run: cat .datadog-agent-version
 
+      # Permanent, not a debugging leftover. A build that runs out of disk fails deep
+      # inside bazel analysis as an extraction IOException on a repository fetch,
+      # which reads like a toolchain fault. These numbers are what tell the two apart.
+      # Keep in step with build-verify.yml.
+      - name: Report free disk space (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: df -h
+
+      - name: Report free disk space (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-PSDrive -PSProvider FileSystem |
+            Select-Object Name,
+              @{ n = 'Used(GB)'; e = { [math]::Round($_.Used / 1GB, 1) } },
+              @{ n = 'Free(GB)'; e = { [math]::Round($_.Free / 1GB, 1) } },
+              Root |
+            Format-Table -AutoSize
+
       # One build step produces BOTH binaries: src/builder.ts iterates
       # platform.getBinaries() and runs `dda inv <buildTask>` per descriptor. Each
       # descriptor names its own override env var, so core and trace-agent flags
