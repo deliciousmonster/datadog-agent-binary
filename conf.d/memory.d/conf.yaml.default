@@ -1,0 +1,10 @@
+# system.mem.* and system.swap.*.
+#
+# collect_memory_pressure adds the /proc/vmstat allocstall and pgscan counters on Linux. Left
+# off, as upstream leaves it: they are kernel-reclaim internals, and the pressure they describe
+# shows up in system.mem.usable first.
+
+init_config:
+
+instances:
+  - {}

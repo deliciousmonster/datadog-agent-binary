@@ -1,0 +1,12 @@
+# system.io.* - per-device read/write rates, await, and utilization.
+#
+# Every value is a rate, so the first run of a fresh agent emits nothing: the check needs two
+# samples. That silence is normal and lasts one interval.
+#
+# device_exclude_re is worth setting on a host with many LVM logical volumes or transient
+# loopback devices. Left unset, as upstream leaves it.
+
+init_config:
+
+instances:
+  - {}

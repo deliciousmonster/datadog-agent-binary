@@ -1,0 +1,11 @@
+# system.fs.file_handles.used and .max.
+#
+# Shipped on macOS as well, unlike upstream's package, which deletes file_handle.d there. The
+# check has a darwin implementation (file_handles_bsd.go, built for freebsd || darwin) and it
+# runs: only the packaging omits it. Running out of descriptors is a real way for a database
+# node to fail, and it fails the same way on a developer's Mac.
+
+init_config:
+
+instances:
+  - {}

@@ -1,0 +1,6 @@
+# system.uptime. One gauge, no options.
+
+init_config:
+
+instances:
+  - {}

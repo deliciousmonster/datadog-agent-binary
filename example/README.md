@@ -42,6 +42,10 @@ no version-specific code.
 | `harper-config.example.yaml` | Keys to merge into the node's `harperdb-config.yaml`. |
 | `conf.d/harperdb.d/conf.yaml` | Datadog log source template for `hdb.log`. |
 
+The host-check configurations are not here. They carry no component-specific value, so they ship
+in the package's own `conf.d/` and the supervisor copies them into the runtime tree from there.
+
+
 ## 1. Install
 
 `package.json` depends on the parent checkout (`file:..`), so:
@@ -272,6 +276,11 @@ worker thread collects their output). `traces received` climbing is the end-to-e
   `datadog.yaml` and that `<runtime dir>/conf.d/harperdb.d/conf.yaml` was written.
 - **Correlation** needs the log source's `service` to match `DD_SERVICE`. Both are set from
   `DD_SERVICE` here for that reason.
+- **Host metrics**: a metrics summary filtered on `system.cpu` should list something. Nothing
+  there while `datadog` lists a hundred-odd metrics means the runtime `conf.d` has no check
+  configuration in it: `datadog.agent.running` comes from the aggregator on every flush, not
+  from a check, so the pipeline reports success while carrying nothing about the host.
+  `datadog-agent status -c <runtime dir>` names every check that ran.
 
 A missing `DD_API_KEY` produces no error anywhere: the receiver accepts spans, batches them,
 and discards them when the intake rejects the payload, and `dd-trace` sees a successful
