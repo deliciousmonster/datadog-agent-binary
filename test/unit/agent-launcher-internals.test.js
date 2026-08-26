@@ -51,6 +51,19 @@ function withReceiver({ status = 200, body, raw, path = '/info' } = {}, run) {
 	);
 }
 
+/** `fn` with console.warn captured, which is where the launcher's logger writes. */
+async function captureWarnings(fn) {
+	const warnings = [];
+	const realWarn = console.warn;
+	console.warn = (...args) => warnings.push(args.join(' '));
+	try {
+		await fn();
+	} finally {
+		console.warn = realWarn;
+	}
+	return warnings;
+}
+
 /**
  * Run `onExit` with `process.exit` replaced by a throw, and return the exit
  * code. The throw matters: a real exit never returns, and a stub that returns
@@ -89,13 +102,31 @@ test('receiverPort() honours DD_APM_RECEIVER_PORT', () =>
 		assert.equal(receiverPort(), 9126);
 	}));
 
-test('receiverPort() falls back on an unusable override instead of binding it', async () => {
-	// listen(NaN) and listen(0) both "succeed", on a port no tracer will dial.
-	for (const bad of ['banana', '0', '-1']) {
-		await withReceiverPort(bad, () => {
-			assert.equal(receiverPort(), 8126, `override "${bad}"`);
-		});
+test('an unusable DD_APM_RECEIVER_PORT falls back to 8126, and says so', async () => {
+	// The fallback itself is right: 8126 is what dd-trace dials. Taking it in
+	// silence is not, because the agent reads the same variable and resolves it
+	// differently, so the launcher ends up probing a port nothing will bind.
+	for (const bad of ['banana', '-1', '70000', '0abc']) {
+		const warnings = await captureWarnings(() =>
+			withReceiverPort(bad, () => {
+				assert.equal(receiverPort(), 8126, `override "${bad}"`);
+			})
+		);
+		assert.equal(warnings.length, 1, `override "${bad}" was rewritten with no warning`);
+		assert.ok(warnings[0].includes(bad), `the warning must quote the rejected value; got: ${warnings[0]}`);
 	}
+});
+
+test('DD_APM_RECEIVER_PORT=0 is a configuration, not a typo', async () => {
+	// Upstream reads 0 as "serve no HTTP receiver" (the UDS-only setup). Folding it
+	// into the 8126 fallback is what produces the alive-but-not-bound case: the
+	// launcher probes 8126, the agent binds nothing, every signal says started.
+	const warnings = await captureWarnings(() =>
+		withReceiverPort('0', () => {
+			assert.equal(receiverPort(), 0);
+		})
+	);
+	assert.deepEqual(warnings, [], 'an explicit 0 must not be reported as a bad value');
 });
 
 test('isRunSubcommand() treats a bare invocation and `run` as the receiver', () => {

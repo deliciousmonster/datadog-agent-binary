@@ -20,6 +20,9 @@ import { AgentBinaryKind } from './types.js';
 /** `apm_config.receiver_port` default. dd-trace targets the same port by default. */
 const DEFAULT_RECEIVER_PORT = 8126;
 
+/** `apm_config.receiver_port: 0` is upstream's spelling for "serve no HTTP receiver". */
+const RECEIVER_DISABLED = 0;
+
 /** Raised by preflight checks, to distinguish "misconfigured" from "binary not found". */
 export class LaunchPreflightError extends Error {}
 
@@ -198,11 +201,30 @@ export function preflightTraceAgentConfig(args: string[], binaryPath?: string): 
 	logger.debug(`trace-agent config preflight passed: ${configPath} exists, ${configDir} is writable`);
 }
 
-/** Receiver port the trace-agent will bind, matching `apm_config.receiver_port`. */
+/**
+ * Receiver port the trace-agent will bind, matching `apm_config.receiver_port`.
+ *
+ * `0` is returned as itself. Upstream reads it as "serve no HTTP receiver" (the UDS-only
+ * setup), so rewriting it to 8126 would make every probe here interrogate a port the
+ * agent was told not to bind. Every other unparseable value is a typo, and the fallback
+ * is announced rather than taken in silence: the agent reads the same variable and will
+ * not agree with the guess, which is how a launcher comes to probe one port while the
+ * receiver binds another.
+ */
 function receiverPort(): number {
 	const raw = process.env.DD_APM_RECEIVER_PORT;
-	const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
-	return parsed > 0 ? parsed : DEFAULT_RECEIVER_PORT;
+	if (!raw) return DEFAULT_RECEIVER_PORT;
+	// The raw string, not the parsed value: parseInt("0abc") is also 0, and that is a
+	// typo rather than a request to turn the receiver off.
+	if (raw.trim() === '0') return RECEIVER_DISABLED;
+	const parsed = Number.parseInt(raw, 10);
+	if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) return parsed;
+	logger.warn(
+		`DD_APM_RECEIVER_PORT="${raw}" is not a port in 1-65535. Falling back to ` +
+			`${DEFAULT_RECEIVER_PORT}, the port dd-trace dials, but the agent reads the same ` +
+			`variable and will not resolve it the same way. Fix or unset it.`
+	);
+	return DEFAULT_RECEIVER_PORT;
 }
 
 /**
@@ -306,15 +328,23 @@ export async function launchAgent(
 			// working while one is already up.
 			if (isRunSubcommand(args)) {
 				const port = receiverPort();
-				if (await isTraceReceiverHealthy(port)) {
+				if (port === RECEIVER_DISABLED) {
+					// Deliberate, so it is not refused. It is still the state where dd-trace's
+					// default target goes unserved, which nothing else here would report.
+					logger.warn(
+						`DD_APM_RECEIVER_PORT=0 turns the trace-agent's HTTP receiver off, so ` +
+							`nothing will listen on 127.0.0.1:${DEFAULT_RECEIVER_PORT} and dd-trace will ` +
+							`drop every span unless it has been pointed at a Unix socket. Starting ` +
+							`the agent and skipping the receiver checks.`
+					);
+				} else if (await isTraceReceiverHealthy(port)) {
 					logger.info(
 						`A trace-agent receiver is already listening on 127.0.0.1:${port} and ` +
 							`answered /info; not starting a second one. dd-trace will reach the ` +
 							`running receiver, so this is a successful no-op, not a failure.`
 					);
 					process.exit(0);
-				}
-				if (await isPortBound(port)) {
+				} else if (await isPortBound(port)) {
 					// Something holds the port but does not speak the trace protocol. Starting
 					// anyway yields a real EADDRINUSE instead of reporting success next to a
 					// stray socket.
@@ -422,16 +452,18 @@ async function onExit(
 		process.exit(0);
 	}
 
+	const port = receiverPort();
+
 	// A trace-agent that exits rc=1 because the receiver port was already taken is benign:
 	// the port is served, so APM works. But rc=1 is also what a misconfigured agent
 	// returns, and a bare port check cannot tell the two apart, so an unrelated listener
 	// would turn every startup failure into a reported success. Require a healthy /info
 	// response, which only a real trace-agent serves.
-	if (kind === 'trace' && code === 1 && (await isTraceReceiverHealthy(receiverPort()))) {
+	if (kind === 'trace' && code === 1 && port !== RECEIVER_DISABLED && (await isTraceReceiverHealthy(port))) {
 		logger.info(
 			`${processName} exited immediately while a healthy trace-agent receiver ` +
-				`answered on 127.0.0.1:${receiverPort()}, which means another instance ` +
-				`already owns the port (EADDRINUSE). Treating this as already-running.`
+				`answered on 127.0.0.1:${port}, which means another instance already owns ` +
+				`the port (EADDRINUSE). Treating this as already-running.`
 		);
 		process.exit(0);
 	}

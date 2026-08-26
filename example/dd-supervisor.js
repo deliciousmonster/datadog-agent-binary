@@ -37,8 +37,35 @@ import { BinaryManager } from '@deliciousmonster/datadog-agent-binary';
  */
 const log = typeof logger === 'undefined' ? console : logger;
 
-/** Default APM receiver port. dd-trace dials the same one with no configuration. */
-const RECEIVER_PORT = Number(process.env.DD_APM_RECEIVER_PORT || 8126);
+/** `apm_config.receiver_port` default. dd-trace dials the same one with no configuration. */
+const DEFAULT_RECEIVER_PORT = 8126;
+
+/**
+ * The port to write into `apm_config.receiver_port` and to probe afterwards.
+ *
+ * Parsed rather than coerced. `Number("8126 ")` is fine but `Number("banana")` is NaN,
+ * and NaN reaches the generated datadog.yaml as `receiver_port: NaN`, which the agent
+ * cannot read. 0 is kept as itself: upstream reads it as "serve no HTTP receiver", so
+ * rewriting it to 8126 would contradict the operator and make every probe below
+ * interrogate a port nothing was told to bind.
+ */
+function resolveReceiverPort() {
+	const raw = process.env.DD_APM_RECEIVER_PORT;
+	if (!raw) return DEFAULT_RECEIVER_PORT;
+	// The raw string, not the parsed value: parseInt("0abc") is also 0, and that is a
+	// typo rather than a request to turn the receiver off.
+	if (raw.trim() === '0') return 0;
+	const parsed = Number.parseInt(raw, 10);
+	if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) return parsed;
+	log.warn(
+		`Datadog supervisor: DD_APM_RECEIVER_PORT="${raw}" is not a port in 1-65535. ` +
+			`Using ${DEFAULT_RECEIVER_PORT}, the port dd-trace dials, but the agents read the ` +
+			`same variable and will not resolve it the same way. Fix or unset it.`
+	);
+	return DEFAULT_RECEIVER_PORT;
+}
+
+const RECEIVER_PORT = resolveReceiverPort();
 
 /** A command no machine has and no operator would allowlist. Only used to probe `spawn`. */
 const PROBE_COMMAND = 'harper-datadog-spawn-probe-must-not-exist';
