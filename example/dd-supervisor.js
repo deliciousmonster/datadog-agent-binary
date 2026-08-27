@@ -193,8 +193,18 @@ function agentProbeUrls() {
  *
  * `blocklist` is dd-trace's own mechanism and it suppresses rather than merely detaches: the
  * client plugin sets `span._spanContext._trace.record = false` for a blocked URI
- * (datadog-plugin-http/src/client.js), so nothing is sent. Scoped under `client`, which the
- * composite plugin hands only to the client half, leaving inbound HTTP instrumentation alone.
+ * (datadog-plugin-http/src/client.js), so nothing is sent.
+ *
+ * BOTH plugins, and this is the part that is easy to get half-right. The receiver probe uses
+ * global `fetch` and the expvar read uses `node:https`, and dd-trace instruments those with
+ * two different plugin ids: `fetch` is its own plugin extending the http client
+ * (datadog-plugin-fetch), so `tracer.use('http', ...)` does not reach it. Registering only
+ * `http` silences the expvar read and leaves the polling probe - the one that produces the
+ * errors - fully traced. The two build the same URI string, so one list serves both.
+ *
+ * The shapes differ. `http` is a composite of a server and a client plugin, so the config has
+ * to sit under `client` or the server half takes it too and inbound request traces are
+ * dropped. `fetch` is the client plugin itself, so its config is flat.
  *
  * Nothing is hidden by this. A receiver that never answers is an error line in hdb.log naming
  * the log to read, `receiverBound: false` on /DatadogStatus/, and a `delivery.verdict` of
@@ -204,7 +214,9 @@ function agentProbeUrls() {
  *   import it, so that a native load of this module cannot pull in a second copy.
  */
 export function untraceAgentProbes(tracer) {
-	tracer.use('http', { client: { blocklist: agentProbeUrls() } });
+	const blocklist = agentProbeUrls();
+	tracer.use('http', { client: { blocklist } });
+	tracer.use('fetch', { blocklist });
 }
 
 /**

@@ -272,14 +272,10 @@ test('the generated datadog.yaml pins the port the delivery signal reads', () =>
  * the cases below tie each entry to the URL the supervisor actually polls rather than to a
  * copy of it.
  */
-function registeredFilter() {
-	let captured;
-	untraceAgentProbes({
-		use(plugin, config) {
-			captured = { plugin, config };
-		},
-	});
-	return captured;
+function registeredFilters() {
+	const calls = [];
+	untraceAgentProbes({ use: (plugin, config) => calls.push({ plugin, config }) });
+	return new Map(calls.map((call) => [call.plugin, call.config]));
 }
 
 test("NEGATIVE: the supervisor's own probes are excluded from the application's traces", async () => {
@@ -288,16 +284,25 @@ test("NEGATIVE: the supervisor's own probes are excluded from the application's 
 	// waitForReceiver polls /info every 250ms until the trace-agent binds, so each refusal on
 	// the way is an errored client span. A service that reads as unhealthy while working is
 	// the failure mode this package exists to remove.
-	const captured = registeredFilter();
-	assert.equal(captured?.plugin, 'http', 'the filter must be registered on the http plugin');
+	const registered = registeredFilters();
 
-	const blocklist = captured.config?.client?.blocklist;
+	// Both, and this is the half that is easy to miss. The receiver probe uses global `fetch`
+	// and the expvar read uses node:https, and dd-trace instruments those under two plugin
+	// ids: `fetch` is its own plugin extending the http client, so `tracer.use('http', ...)`
+	// does not reach it. Registering only `http` leaves the polling probe - the one that
+	// produced the errors - fully traced.
+	assert.deepEqual([...registered.keys()].sort(), ['fetch', 'http'], 'both client plugins must be configured');
+
+	const blocklist = registered.get('http')?.client?.blocklist;
 	assert.ok(
 		Array.isArray(blocklist),
-		"the blocklist must sit under `client`. dd-trace's composite plugin hands " +
+		"the http blocklist must sit under `client`. dd-trace's composite plugin hands " +
 			'`{...config, ...config.client}` to the client half only, so a top-level blocklist ' +
 			'would also reach the server plugin and drop inbound request traces.'
 	);
+	// `fetch` is the client plugin itself, not a composite, so its config is flat.
+	assert.deepEqual(registered.get('fetch')?.blocklist, blocklist, 'the fetch plugin must block the same URIs');
+	assert.equal(registered.get('fetch')?.client, undefined, 'the fetch plugin takes a flat config, not a nested one');
 
 	// Taken from the reader itself rather than written out again: if the port or the path
 	// moves, the entry has to move with it, and asserting against a literal would not notice.
@@ -314,7 +319,7 @@ test('POSITIVE: the blocklist names only the probes, not the application', () =>
 	// A blocklist that swallowed the application's own outbound calls would be a worse bug
 	// than the one it fixes, and an invisible one. Entries are matched with `===`, so the
 	// guard is that there are exactly two of them and both are agent endpoints.
-	const blocklist = registeredFilter().config.client.blocklist;
+	const blocklist = registeredFilters().get('http').client.blocklist;
 	assert.equal(blocklist.length, 2, `expected exactly the two agent probes, got ${JSON.stringify(blocklist)}`);
 	for (const entry of blocklist) {
 		assert.match(entry, /^https?:\/\/127\.0\.0\.1:\d+\//, `${entry} is not a loopback agent endpoint`);
