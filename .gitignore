@@ -1,12 +1,17 @@
-# Dependencies
+# Dependencies. Each pattern is listed twice: git matches a trailing slash against
+# directories only, and a worktree commonly satisfies these by symlinking them at a
+# shared copy, which the slashed form leaves untracked and stageable by `git add -A`.
 node_modules/
+node_modules
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
 # Build outputs
 dist/
+dist
 build/
+build
 release/
 npm/
 *.tgz
