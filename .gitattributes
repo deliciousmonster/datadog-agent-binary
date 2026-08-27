@@ -3,11 +3,12 @@
 # (endOfLine: "lf") flags every file.
 * text=auto eol=lf
 
-# Shell scripts and the Node bin shim must stay LF to run.
+# Shell scripts and the Node bin shims must stay LF to run. Both launchers, not just
+# the core agent's: an extensionless CRLF script fails at the shebang.
 *.sh text eol=lf
-bin/datadog-agent text eol=lf
+bin/* text eol=lf
 
-# Binary assets — never normalize.
+# Binary assets: never normalize.
 *.png binary
 *.jpg binary
 *.jpeg binary

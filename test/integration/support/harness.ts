@@ -12,6 +12,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import type { ContextWithHarper } from '@harperfast/integration-testing';
 
 const require = createRequire(import.meta.url);
 
@@ -93,6 +94,15 @@ export async function darwinLoopbackSkipReason(): Promise<string | false> {
  */
 export function makeTempDir(prefix: string): string {
 	return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+}
+
+/**
+ * node:test hands a suite callback a bare SuiteContext; setupHarperWithFixture() populates
+ * .harper on that same object in before(). The cast records that promotion; annotating the
+ * suite parameter itself is a TS2345 under strict function-type contravariance.
+ */
+export function harperContext(suiteContext: unknown): ContextWithHarper {
+	return suiteContext as ContextWithHarper;
 }
 
 /** Rows of a probe-results file holding one JSON record per line. */

@@ -1,9 +1,13 @@
-node_modules/
-dist/
-build/
-go/
-source/
-release/
+# Prettier reads .gitignore as well, so build outputs need no entry here. What
+# belongs below is only what git tracks and prettier must not reformat.
+
+# Prose is hand-wrapped around its own paragraphs; prettier reflows every one.
 *.md
+
+# npm owns this file and rewrites it on install. It is checked in as prettier
+# last left it, so dropping the entry passes today and fails after any install.
 package-lock.json
+
+# Agent check configuration, laid out the way upstream's own conf.d files are so
+# the two can be diffed.
 conf.d/

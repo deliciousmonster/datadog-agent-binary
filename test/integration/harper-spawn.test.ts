@@ -43,6 +43,7 @@ import {
 import {
 	darwinLoopbackSkipReason,
 	errorMessage,
+	harperContext,
 	makeTempDir,
 	PACKAGE_MANIFEST,
 	pollJsonlRows,
@@ -402,16 +403,6 @@ async function teardown(
 	}
 	await teardownHarper(ctx);
 	if (workspace) rmSync(workspace.dir, { recursive: true, force: true });
-}
-
-/**
- * node:test hands a suite callback a bare SuiteContext; setupHarperWithFixture()
- * populates .harper on that same object in before(). The cast records that
- * promotion; annotating the suite parameter itself is a TS2345 under strict
- * function-type contravariance.
- */
-function harperContext(suiteContext: unknown): ContextWithHarper {
-	return suiteContext as ContextWithHarper;
 }
 
 /**

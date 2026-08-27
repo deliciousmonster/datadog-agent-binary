@@ -13,9 +13,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { REPO_ROOT } from '../support/harness.js';
 
 const require = createRequire(import.meta.url);
-const ENTRY_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'index.js');
+const ENTRY_PATH = path.join(REPO_ROOT, 'dist', 'index.js');
 
 test('require() of the built ESM entry point reaches the whole public API', () => {
 	// The BUILT entry, not src: this must prove the artifact a consumer installs,
