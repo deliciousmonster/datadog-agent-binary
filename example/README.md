@@ -406,6 +406,28 @@ startup: it tries to spawn a command that cannot exist and requires the attempt 
 refused. Under Harper that throws `Command ... is not allowed` synchronously, with no
 process and no PID file created; under real Node it does not throw at all.
 
+## Worker threads, and which of them you will hear from
+
+Harper loads this component in every worker thread. It does not serve HTTP from every one.
+
+On darwin and Windows the HTTP server is bound without SO_REUSEPORT (`server.noReusePort`,
+Harper's `server/http.js`), so every worker attempts an exclusive bind, the first wins, and the
+rest lose the race silently. Measured on 5.2.6 with `threads.count: 8`: 4,000 requests at 400/s
+were all served by thread 1, and `lsof` showed one listening socket on 9926, not eight. On
+Linux the same code binds with SO_REUSEPORT and the kernel spreads connections across all of
+them.
+
+The component still runs everywhere, which is the part that matters here: all eight threads
+detect spawn interception, join the PID-file singleton, and initialise their own `dd-trace`.
+The hazard is that a thread whose tracer never initialised is invisible on a platform where no
+request will ever reach it. So each thread emits one `harper.thread.ready` span once the
+receiver answers, tagged `harper.thread_id`, `harper.tracer_initialized` and
+`harper.receiver_bound`, and logs the same thing to `hdb.log`. Count the distinct
+`harper.thread_id` values on that span in Datadog: one per thread, or a thread is broken.
+
+`GET /Work/` and `/DatadogStatus/` also report `threadId`, which is what tells you a trace came
+from a thread rather than from the node.
+
 ## Shutting down
 
 Harper does not stop what a component spawned. `harper stop` sends one SIGTERM to one PID, the
@@ -505,6 +527,8 @@ checks writability before spawning.
 | `Command /... is not allowed` | Most often the whole config edit landed in a file Harper never opened: on an installed node it reads the absolute path in `settings_path` (`~/.harperdb/hdb_boot_properties.file`), which is the `harper-config.yaml` the installer wrote, and a hand-created `harperdb-config.yaml` beside it is never parsed. Failing that, the path is not in `allowedSpawnCommands`, or contains a space, or Harper was not restarted after the edit. |
 | Every node-level key looks ignored at once | Same cause. `threads.preloadRequire` missing (`tracerInitialized: false`), the allowlist missing, and `logging.level` still at `warn` in one go is the signature of editing the wrong file. `cat $(grep settings_path ~/.harperdb/hdb_boot_properties.file \| cut -d= -f2)` prints the one Harper reads. |
 | `tracerInitialized: false` | `threads.preloadRequire: dd-trace/init` missing. `preload` alone initialises nothing. |
+| Fewer `harper.thread_id` values than `threads.count` | A thread loaded the component but its tracer is dead, or it never reached the receiver. `hdb.log` carries the matching `Spans from this thread are being discarded` line. |
+| One thread serves every request | Expected on darwin and Windows: the HTTP port is bound without SO_REUSEPORT and the first worker to bind wins. Not a configuration error, and not something `threads.count` changes. |
 | `curl 127.0.0.1:8126/info` refused | trace-agent not running. Check `hdb.log` and `<runtime>/logs/trace-agent.log`. |
 | trace-agent exits immediately, non-zero | Something else holds 8126, or `datadog.yaml` is missing at the path passed to `-c`. |
 | trace-agent hangs ~30s then dies on its auth token | Its config directory is not writable. |

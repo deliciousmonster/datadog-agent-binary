@@ -28,6 +28,39 @@ import { readDeliverySignal, startDatadogAgents } from './dd-supervisor.js';
  */
 const supervisor = startDatadogAgents(import.meta.dirname);
 
+/**
+ * One span per worker thread, at startup, saying whether that thread's tracer is real.
+ *
+ * Harper loads this component in every worker thread but does not serve HTTP from every one.
+ * On darwin and Windows the HTTP server binds without SO_REUSEPORT (`server.noReusePort` in
+ * Harper's `server/http.js`), so whichever worker wins the bind serves every request and the
+ * rest silently lose the race. A thread whose tracer never initialised is then invisible: no
+ * request reaches it, so it never emits the `tracerInitialized: false` that GET /Work/ would
+ * have reported. Measured on 5.2.6 with `threads.count: 8`: 4,000 requests, all served by
+ * thread 1.
+ *
+ * Chained off the supervisor rather than fired at load, because until the receiver answers
+ * there is nothing on 8126 to accept the span and dd-trace discards it without a word.
+ */
+supervisor.then((status) => {
+	const receiverBound = status.agents?.some((agent) => agent.kind === 'trace' && agent.receiverBound === true);
+	tracer.trace(
+		'harper.thread.ready',
+		{
+			resource: `worker thread ${threadId}`,
+			tags: { 'component': 'datadog-agent-binary-example', 'harper.thread_id': threadId },
+		},
+		(span) => {
+			const live = isTracerLive(span);
+			span.setTag('harper.tracer_initialized', live);
+			span.setTag('harper.receiver_bound', receiverBound);
+			const detail = `thread ${threadId}: tracer ${live ? 'live' : 'NOT INITIALISED'}, receiver ${receiverBound ? 'bound' : 'unavailable'}`;
+			if (live && receiverBound) log.info(`Datadog example: ${detail}. It emitted a harper.thread.ready span.`);
+			else log.error(`Datadog example: ${detail}. Spans from this thread are being discarded.`);
+		}
+	);
+});
+
 /** Harper seeds every component compartment with `logger`; entries land in hdb.log. */
 const log = typeof logger === 'undefined' ? console : logger;
 
