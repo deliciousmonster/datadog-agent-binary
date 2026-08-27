@@ -54,6 +54,10 @@ jobs:
   cut:
     name: compute and push the tag
     runs-on: ubuntu-latest
+    # Sized off the "Require a green Test run" step below, which waits 60 * 30s by
+    # design and reports its own failure at that bound. Anything under 30 minutes
+    # here would take that decision away from it and kill a healthy wait instead.
+    timeout-minutes: 40
     # `[skip release]` in the subject is the escape hatch for a push that should not
     # ship, e.g. a CI-only fix that would otherwise build four Go agents to prove nothing.
     if: "!contains(github.event.head_commit.message, '[skip release]')"

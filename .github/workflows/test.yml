@@ -21,6 +21,11 @@ jobs:
         # node:24-trixie. 22 and 24 are the two versions that exist in the field.
         node: ['22', '24']
     runs-on: ${{ matrix.os }}
+    # A green leg is well under a minute of work; the Windows legs measured 35-44s
+    # end to end. This is sized against `npm ci` on a cold cache, not against the
+    # suite, and exists so a runner that never schedules fails in minutes instead
+    # of holding the default six hours.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -84,6 +89,11 @@ jobs:
   integration:
     name: integration (harper v5, ubuntu, node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    # Five real Harper instances boot over the run, 40-95s locally across repeated
+    # runs. The ceiling is the suite's own waits rather than its measured time:
+    # pollJsonlRows() gives each probing suite 60s before it gives up, and every one
+    # of those has to be able to expire and still report.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -141,6 +151,10 @@ jobs:
       github.event_name == 'pull_request' && github.base_ref == 'main' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # Five registry reads and no install; ~2s against a live registry. The margin is
+    # for a registry that answers slowly rather than not at all, which is the case
+    # the script's own 3-attempt backoff already rides out.
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

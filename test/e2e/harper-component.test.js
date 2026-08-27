@@ -13,12 +13,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import child_process from 'node:child_process';
-import http from 'node:http';
 import { EventEmitter } from 'node:events';
 import { syncBuiltinESMExports } from 'node:module';
 
 import { findFreePort } from '../support/find-free-port.js';
-import { PACKAGE_MANIFEST, createDistSandbox, importDist, withEnv } from '../support/harness.js';
+import { PACKAGE_MANIFEST, createDistSandbox, createReceiverStub, importDist, withEnv } from '../support/harness.js';
 
 const { Platform } = await importDist('platform.js');
 
@@ -358,14 +357,6 @@ async function withStubbedSpawn(fakeChild, run, onSpawn) {
 	return calls;
 }
 
-/** An unstarted /info server answering the way a live trace-agent answers. */
-function stubReceiver() {
-	return http.createServer((request, response) => {
-		response.writeHead(request.url === '/info' ? 200 : 404, { 'content-type': 'application/json' });
-		response.end(JSON.stringify({ endpoints: ['/v0.4/traces'] }));
-	});
-}
-
 /** Minimal stand-in for a real ChildProcess. `spawnargs` is what marks it as one. */
 function fakeChildProcess() {
 	const child = new EventEmitter();
@@ -388,7 +379,7 @@ test("launchAgent spawns with Harper's required `name`, distinct per binary", as
 			'Harper throws on a spawn with no `name`, and uses it as the PID-lock filename'
 		);
 
-		const receiver = stubReceiver();
+		const receiver = createReceiverStub({ body: { endpoints: ['/v0.4/traces'] } });
 		try {
 			const traceCalls = await withStubbedSpawn(
 				fakeChildProcess(),

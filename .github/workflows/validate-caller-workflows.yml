@@ -21,6 +21,10 @@ name: Validate caller workflows
 # trivial, so unconditional firing is the right trade-off.
 #
 # Make this `validate` job a REQUIRED status check on `main`.
+#
+# No `timeout-minutes` here, and none is missing: Actions rejects that key on a
+# job that calls a reusable workflow. The cap lives in the reusable, which sets
+# `timeout-minutes: 2` on the job it defines.
 
 on:
   pull_request:
