@@ -54,14 +54,20 @@ jobs:
         run: npm run build
 
       - name: Check the published matrix
+        env:
+          # Through env, never interpolated into the script: `${{ }}` is substituted
+          # as text before bash parses the line, so a dispatch input holding shell
+          # syntax would run as a command in this step.
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_DEEP: ${{ github.event.inputs.deep }}
         run: |
           set -euo pipefail
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${INPUT_VERSION:-}"
           if [ -z "$VERSION" ]; then
             VERSION="$(node -p "require('./package.json').version")"
           fi
           echo "Checking $VERSION"
-          if [ "${{ github.event.inputs.deep }}" = "true" ]; then
+          if [ "${INPUT_DEEP:-}" = "true" ]; then
             node scripts/publish-matrix.js --registry "$VERSION" --deep | tee matrix.txt
           else
             node scripts/publish-matrix.js --registry "$VERSION" | tee matrix.txt

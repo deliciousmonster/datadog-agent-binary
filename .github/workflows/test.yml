@@ -78,6 +78,92 @@ jobs:
             exit 1
           fi
 
+  # "Change both or neither" as an assertion instead of a comment. build-verify.yml
+  # and build-release.yml deliberately run the same build and the same receiver
+  # check, and keeping the two in step by hand did not hold: the verifying workflow
+  # ended up grepping /info for a string while the publishing workflow parsed the
+  # endpoints array, so a body advertising nothing at all passed the check that only
+  # verifies and would have failed the check that ships.
+  #
+  # Compares the `run:` bodies byte for byte. What legitimately differs between the
+  # two workflows arrives through the step `env:`, which is not compared.
+  workflow-drift:
+    name: shared workflow steps are identical
+    runs-on: ubuntu-latest
+    # Reads two files and compares strings; the ceiling is the runner starting at
+    # all.
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # No setup-node and no npm ci: the extractor reads the workflow files as text,
+      # so the runner image Node is enough and the job costs a checkout.
+      - name: Compare the steps the two build workflows share
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e '
+            const { readFileSync } = require("node:fs");
+
+            // Text extraction rather than a YAML parse, because a parser means an
+            // npm ci for one string comparison. The shape read here is fixed:
+            // `run: |` followed by a block indented past it. Anything else throws
+            // rather than silently comparing nothing.
+            const body = (file, step) => {
+              const lines = readFileSync(`.github/workflows/${file}`, "utf8").split("\n");
+              const start = lines.findIndex((line) => line.trim() === `- name: ${step}`);
+              if (start === -1) throw new Error(`${file}: no step named "${step}"`);
+              let run = -1;
+              for (let i = start + 1; i < lines.length && !/^\s*- name: /.test(lines[i]); i++) {
+                if (/^\s+run: \|\s*$/.test(lines[i])) {
+                  run = i;
+                  break;
+                }
+              }
+              if (run === -1) throw new Error(`${file}: step "${step}" has no literal run block`);
+              const keyIndent = lines[run].search(/\S/);
+              const block = [];
+              for (let i = run + 1; i < lines.length; i++) {
+                if (lines[i].trim() !== "" && lines[i].search(/\S/) <= keyIndent) break;
+                block.push(lines[i]);
+              }
+              while (block.length && block[block.length - 1].trim() === "") block.pop();
+              const pad = block.find((line) => line.trim() !== "").match(/^ */)[0];
+              return block.map((line) => line.slice(pad.length)).join("\n");
+            };
+
+            const shared = [
+              "Reclaim disk space (Linux)",
+              "Report free disk space (Windows)",
+              "Build both agent binaries (Unix)",
+              "Build both agent binaries (Windows)",
+              "Assert the trace binary contains the APM receiver",
+              "Verify the APM receiver accepts a trace (Unix)",
+              "Verify the APM receiver accepts a trace (Windows)",
+            ];
+
+            let failed = 0;
+            for (const step of shared) {
+              const verify = body("build-verify.yml", step).split("\n");
+              const release = body("build-release.yml", step).split("\n");
+              const at = verify.findIndex((line, i) => line !== release[i]);
+              if (at === -1 && verify.length === release.length) {
+                console.log(`same: ${step} (${verify.length} lines)`);
+                continue;
+              }
+              failed++;
+              const i = at === -1 ? Math.min(verify.length, release.length) : at;
+              console.log(`::error::"${step}" differs between the two build workflows, first at line ${i + 1}.`);
+              console.log(`  build-verify.yml : ${verify[i] ?? "(end of body)"}`);
+              console.log(`  build-release.yml: ${release[i] ?? "(end of body)"}`);
+            }
+            if (failed) {
+              console.log("::error::Change both files or neither. Per-workflow differences belong in the step env:, not in the run body.");
+              process.exitCode = 1;
+            }
+          '
+
   # The only job that boots a real database. It proves the two claims the
   # singleton design rests on: Harper enforces `applications.allowedSpawnCommands`
   # and the `name` option, and two distinct names take two independent PID-file

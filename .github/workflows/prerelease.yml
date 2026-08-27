@@ -131,16 +131,21 @@ jobs:
 
       - name: Compute the next prerelease version
         id: next
+        env:
+          # Same reason as the arm step above, and it applies to every dispatch
+          # input, not just secrets: this job holds the PAT that pushes the tag.
+          INPUT_CHANNEL: ${{ github.event.inputs.channel }}
+          INPUT_BASE: ${{ github.event.inputs.base }}
         run: |
           set -euo pipefail
 
-          CHANNEL="${{ github.event.inputs.channel }}"
+          CHANNEL="${INPUT_CHANNEL:-}"
           [ -z "$CHANNEL" ] && CHANNEL="next"
           PKG=$(node -p "require('./package.json').name")
 
           # An explicit base is a floor, not an override: it still has to clear whatever
           # is already released, or the run fails rather than shipping a lower version.
-          PKG_VERSION="${{ github.event.inputs.base }}"
+          PKG_VERSION="${INPUT_BASE:-}"
           if [ -z "$PKG_VERSION" ]; then
             PKG_VERSION=$(node -p "require('./package.json').version")
           fi
