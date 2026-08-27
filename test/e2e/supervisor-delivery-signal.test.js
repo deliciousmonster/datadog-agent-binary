@@ -97,7 +97,9 @@ test('NEGATIVE: a non-zero trace_writer does not change the verdict either', () 
 	// that fixes the race must not silently become the thing this signal depends on, because
 	// then the signal only works on the versions that never needed it.
 	const busy = { ...TRACE_WRITER_ZERO, Payloads: 99, Traces: 400, Spans: 1600, Bytes: 50000 };
-	const withCounter = deliveryVerdict(expvar({ trace_writer: busy, stats_writer: { Payloads: 0, Retries: 0 } }));
+	const withCounter = deliveryVerdict(
+		expvar({ trace_writer: busy, stats_writer: { Payloads: 0, Retries: 0, StatsBuckets: 3 } })
+	);
 	assert.equal(
 		withCounter.verdict,
 		'not-delivering',
@@ -142,10 +144,26 @@ test('a quiet minute after a delivery says so, so silence is not read as regress
 	assert.equal(later.everDelivered, true, 'the thread saw delivery succeed; the report has to keep saying so');
 });
 
-test('spans arriving with nothing accepted reads as not-delivering', () => {
-	const signal = deliveryVerdict(expvar({ stats_writer: {} }));
+test('spans arriving with nothing accepted, and the stats writer working, reads as not-delivering', () => {
+	const signal = deliveryVerdict(expvar({ stats_writer: { StatsBuckets: 2, ClientPayloads: 1 } }));
 	assert.equal(signal.verdict, 'not-delivering');
 	assert.equal(signal.receiver.spansReceived, 80);
+});
+
+test('NEGATIVE: a stale receiver window on a quiet node is idle, not a delivery failure', async () => {
+	// Found by running it. Upstream refreshes the receiver snapshot only when a payload
+	// arrives, so a node that has gone quiet keeps publishing its last busy minute while the
+	// stats window correctly resets. Read naively that pair says "spans are arriving and none
+	// are accepted", which reports a healthy node as broken - the exact mistake the
+	// `Writer (previous minute)` field makes and the reason this signal exists.
+	//
+	// The discriminator is that the stats writer is idle too. The concentrator builds buckets
+	// from spans that were received, before anything is sent, so real traffic in the same
+	// minute always leaves StatsBuckets or ClientPayloads behind even when delivery fails.
+	const cold = await coldSupervisor();
+	const signal = cold.deliveryVerdict(expvar({ stats_writer: { Payloads: 0, StatsBuckets: 0, ClientPayloads: 0 } }));
+	assert.equal(signal.verdict, 'idle');
+	assert.match(signal.detail, /only refreshed when/);
 });
 
 test('the report says the window is one minute and not cumulative', () => {

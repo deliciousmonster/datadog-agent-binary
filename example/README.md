@@ -277,7 +277,7 @@ curl -s -u HDB_ADMIN:password http://localhost:9926/DatadogStatus/ | jq .deliver
 | `delivering` | The intake accepted an authenticated payload in the last minute. |
 | `rejected` | Payloads went out and every one came back refused. Check `DD_API_KEY` and `DD_SITE`. |
 | `not-delivering` | Spans are arriving at the agent and none have been accepted. Read it again first: both windows reset each minute. |
-| `idle` | Nothing arrived in the last minute. `everDelivered` says whether this thread ever saw delivery work. |
+| `idle` | Nothing arrived in the last minute, or the receiver's snapshot is left over from an earlier one. `everDelivered` says whether this thread ever saw delivery work. |
 | `unavailable` | Nothing answered the expvar endpoint. The trace-agent is not running. |
 
 **Do not read `Traces: 0 payloads` off `datadog-agent status`.** That section renders
@@ -290,6 +290,15 @@ the v1.0 writer receives nothing from a tracer posting to `/v0.4/traces`, so the
 struct usually belongs to a writer that never sends anything. Measured against the shipped
 binary: 55 samples over two minutes, spans flowing, payloads retried and dropped, and all nine
 `trace_writer` fields zero in every sample while `receiver` and `stats_writer` moved normally.
+
+One quirk of the receiver counters is worth knowing, because reading them naively reproduces
+the very failure this section is about. Upstream refreshes the `receiver` snapshot only when a
+payload arrives, so a node that has gone quiet keeps publishing its last busy minute while the
+stats window correctly resets to zero. Taken together those two say "spans are arriving and
+none are accepted", which is a healthy node described as broken. `delivery` separates them on
+whether the stats writer saw any work at all in the same minute: the concentrator builds its
+buckets from spans that were received, before anything is sent, so real traffic always leaves
+`StatsBuckets` or `ClientPayloads` behind even when delivery fails.
 
 `stats_writer` is what `delivery` reads instead, and it is a real signal rather than a stand-in
 for one. It has a single producer, so it cannot lose that race; its `Payloads` counter

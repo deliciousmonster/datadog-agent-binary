@@ -733,12 +733,23 @@ export function deliveryVerdict(vars, source = `https://127.0.0.1:${DEBUG_PORT}/
 		errors: Number(stats.Errors) || 0,
 		retries: Number(stats.Retries) || 0,
 		bytes: Number(stats.Bytes) || 0,
+		// Not delivery, but evidence that the last minute contained work at all: the
+		// concentrator builds these from spans that were received, before anything is sent.
+		// They are what separates a stale receiver window from a live one below.
+		buckets: Number(stats.StatsBuckets) || 0,
+		clientPayloads: Number(stats.ClientPayloads) || 0,
 	};
 
 	if (signal.statsWriter.payloads > 0) deliveryObserved = true;
 	signal.everDelivered = deliveryObserved;
 
 	const arriving = signal.receiver.tracesReceived > 0 || signal.receiver.spansReceived > 0;
+	// Whether the stats writer saw the same minute the receiver claims. Upstream refreshes the
+	// receiver snapshot only when a payload arrives (pkg/trace/api/api.go), so on a node that
+	// has gone quiet the last busy minute stays published indefinitely while the stats window
+	// correctly resets to zero. Reading that pair as a failure reports a healthy idle node as
+	// broken, which is the exact failure this signal exists to stop making.
+	const statsSawWork = signal.statsWriter.buckets > 0 || signal.statsWriter.clientPayloads > 0;
 	if (signal.statsWriter.payloads > 0) {
 		signal.verdict = 'delivering';
 		signal.detail = `the intake accepted ${signal.statsWriter.payloads} payload(s) in the last minute.`;
@@ -747,12 +758,18 @@ export function deliveryVerdict(vars, source = `https://127.0.0.1:${DEBUG_PORT}/
 		signal.detail =
 			`the intake refused every payload (${signal.statsWriter.retries} retries, ` +
 			`${signal.statsWriter.errors} errors) and accepted none. Check DD_API_KEY and DD_SITE.`;
-	} else if (arriving) {
+	} else if (arriving && statsSawWork) {
 		signal.verdict = 'not-delivering';
 		signal.detail =
-			`spans are arriving (${signal.receiver.spansReceived} in the last minute) but nothing ` +
-			`has been accepted. Both windows reset each minute, so read this again before ` +
-			`believing it; a first read seconds after startup can land before the first flush.`;
+			`spans are arriving (${signal.receiver.spansReceived} in the last minute) and nothing ` +
+			`has been accepted. Read this again before believing it: both windows reset each ` +
+			`minute, and a read seconds after startup can land before the first flush.`;
+	} else if (arriving) {
+		signal.verdict = 'idle';
+		signal.detail =
+			`the receiver still shows ${signal.receiver.spansReceived} spans, but the stats ` +
+			`writer saw no work in the last minute. The receiver snapshot is only refreshed when ` +
+			`a payload arrives, so that reading is from the last busy minute, not this one.`;
 	} else if (deliveryObserved) {
 		signal.verdict = 'idle';
 		signal.detail = 'no spans in the last minute, but this thread has seen delivery succeed since it started.';
