@@ -13,13 +13,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { importDist, withEnv, withTempDir } from '../support/harness.js';
+import { importDist, withEnv, withHome, withTempDir } from '../support/harness.js';
 
 const { AgentBuilder } = await importDist('builder.js');
 const { Platform } = await importDist('platform.js');
-
-/** os.homedir() reads HOME on POSIX and USERPROFILE on Windows. */
-const withHome = (home, run) => withEnv('HOME', home, () => withEnv('USERPROFILE', home, run));
 
 /**
  * A builder whose MSYS2 lookup is pointed at `shells` instead of C:. The real candidate

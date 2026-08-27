@@ -9,11 +9,10 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import net from 'node:net';
 
 import { findFreePort } from '../support/find-free-port.js';
-import { importDist, withEnv } from '../support/harness.js';
+import { captureWarnings, createReceiverStub, importDist, withEnv } from '../support/harness.js';
 
 const { describeSpawnFailure, receiverPort, isRunSubcommand, isTraceReceiverHealthy, waitForReceiver, onExit } = (
 	await importDist('agent-launcher.js')
@@ -33,37 +32,9 @@ async function withServer(server, run) {
 	}
 }
 
-/**
- * An HTTP stub answering only /info with `body`, or with a raw non-JSON
- * payload. Any other path 404s: the probe URL is part of the contract under
- * test, and a stub that answers everything lets a probe-path typo pass.
- */
-function withReceiver({ status = 200, body, raw, path = '/info' } = {}, run) {
-	return withServer(
-		http.createServer((request, response) => {
-			if (request.url !== path) {
-				response.writeHead(404, { 'content-type': 'application/json' });
-				response.end('{}');
-				return;
-			}
-			response.writeHead(status, { 'content-type': 'application/json' });
-			response.end(raw ?? JSON.stringify(body ?? {}));
-		}),
-		run
-	);
-}
-
-/** `fn` with console.warn captured, which is where the launcher's logger writes. */
-async function captureWarnings(fn) {
-	const warnings = [];
-	const realWarn = console.warn;
-	console.warn = (...args) => warnings.push(args.join(' '));
-	try {
-		await fn();
-	} finally {
-		console.warn = realWarn;
-	}
-	return warnings;
+/** A receiver stub listening for the duration of `run`. */
+function withReceiver(options, run) {
+	return withServer(createReceiverStub(options), run);
 }
 
 /**
@@ -195,7 +166,7 @@ test('a /info listing a /traces endpoint is the only healthy answer', () =>
 test('the probe asks /info specifically, not just any answering path', () =>
 	// A receiver serving the right body somewhere else must read as unhealthy,
 	// or a probe-URL typo in the launcher would ship green against this suite.
-	withReceiver({ body: { endpoints: ['/v0.4/traces'] }, path: '/some-other-info' }, async (port) => {
+	withReceiver({ body: { endpoints: ['/v0.4/traces'] }, answers: '/some-other-info' }, async (port) => {
 		assert.equal(await isTraceReceiverHealthy(port), false);
 	}));
 
@@ -254,10 +225,7 @@ test('waitForReceiver() keeps polling while the agent is still coming up', async
 	// failure, which is the one way this check could refuse a working launch.
 	const port = await findFreePort();
 	const watch = { port, bound: false };
-	const server = http.createServer((request, response) => {
-		response.writeHead(request.url === '/info' ? 200 : 404, { 'content-type': 'application/json' });
-		response.end(JSON.stringify({ endpoints: ['/v0.4/traces'] }));
-	});
+	const server = createReceiverStub({ body: { endpoints: ['/v0.4/traces'] } });
 	const late = setTimeout(() => server.listen(port, '127.0.0.1'), 600);
 	try {
 		assert.equal(await waitForReceiver(watch, 10000), true);

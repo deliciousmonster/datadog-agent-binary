@@ -268,7 +268,7 @@ A prerelease cannot move `latest`, with one exception the pipeline guards: on th
 | --- | --- |
 | before publish | `npm test`, typecheck, and formatting |
 | before publish | Both binaries built and smoke-tested per platform; the trace-agent must answer `/info` and accept a `v0.4` payload |
-| before publish | `publish-matrix --local`: Node-valid `os`/`cpu`, no platform declared but unbuilt, no package missing the trace-agent |
+| before publish | `publish-matrix --local` over the staged `npm/` dirs: every declared platform present and version-locked to the main package, `os`/`cpu` values Node can match, and both binaries present and over a 1 MiB floor. The floor is what fails a truncated or placeholder binary, which a check on filenames alone passes |
 | publish order | Platform packages first, then the main package. Reversed, the main package briefly advertises `optionalDependencies` that do not exist, silently |
 | publish | Idempotent: already-published versions are skipped, so a partially failed tag can be re-run |
 | after publish | `publish-matrix --registry --deep` against the real registry; the matrix is appended to the release notes |

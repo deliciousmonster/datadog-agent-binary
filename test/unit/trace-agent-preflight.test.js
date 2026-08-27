@@ -21,7 +21,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { importDist, withTempDir } from '../support/harness.js';
+import { captureWarnings, importDist, withTempDir } from '../support/harness.js';
 
 const { preflightTraceAgentConfig, LaunchPreflightError } = await importDist('agent-launcher.js');
 
@@ -36,18 +36,6 @@ function stubBinary(root) {
 	const binaryPath = path.join(root, 'bin', 'trace-agent');
 	fs.writeFileSync(binaryPath, '');
 	return binaryPath;
-}
-
-function captureWarnings(fn) {
-	const warnings = [];
-	const realWarn = console.warn;
-	console.warn = (...args) => warnings.push(args.join(' '));
-	try {
-		fn();
-	} finally {
-		console.warn = realWarn;
-	}
-	return warnings;
 }
 
 test('an explicitly named config file that does not exist is fatal', () =>
@@ -104,11 +92,13 @@ test('a config flag pointing at a directory is checked at <dir>/datadog.yaml', (
 	}));
 
 test('an inferred config path that does not exist warns instead of refusing', () =>
-	withTempDir('ddpf-', (dir) => {
+	withTempDir('ddpf-', async (dir) => {
 		const binaryPath = stubBinary(dir);
 		// No config flag, so the path is derived from the binary's own location.
 		// Blocking a launch on that guess is the regression this asserts against.
-		const warnings = captureWarnings(() => assert.doesNotThrow(() => preflightTraceAgentConfig(['run'], binaryPath)));
+		const warnings = await captureWarnings(() =>
+			assert.doesNotThrow(() => preflightTraceAgentConfig(['run'], binaryPath))
+		);
 		assert.equal(warnings.length, 1, 'the guess must be reported, not silent');
 		assert.match(warnings[0], /No config flag was passed/, 'the warning must say the path was inferred');
 		assert.ok(
@@ -118,14 +108,16 @@ test('an inferred config path that does not exist warns instead of refusing', ()
 	}));
 
 test('the inferred path is derived from the binary, not from /etc/datadog-agent', () =>
-	withTempDir('ddpf-', (dir) => {
+	withTempDir('ddpf-', async (dir) => {
 		const binaryPath = stubBinary(dir);
 		// <root>/etc/datadog.yaml is what upstream's InstallPath resolves to once
 		// osinit() rewrites it from the executable location. A launcher still
 		// checking the core agent's /etc/datadog-agent/datadog.yaml would warn here.
 		fs.mkdirSync(path.join(dir, 'etc'), { recursive: true });
 		fs.writeFileSync(path.join(dir, 'etc', 'datadog.yaml'), '');
-		const warnings = captureWarnings(() => assert.doesNotThrow(() => preflightTraceAgentConfig(['run'], binaryPath)));
+		const warnings = await captureWarnings(() =>
+			assert.doesNotThrow(() => preflightTraceAgentConfig(['run'], binaryPath))
+		);
 		assert.deepEqual(warnings, []);
 	}));
 

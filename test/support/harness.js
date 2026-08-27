@@ -13,6 +13,7 @@
  * test/integration/support/harness.ts instead.
  */
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -109,4 +110,47 @@ export async function withEnv(name, value, run) {
 		if (previous === undefined) delete process.env[name];
 		else process.env[name] = previous;
 	}
+}
+
+/** os.homedir() reads HOME on POSIX and USERPROFILE on Windows. */
+export function withHome(home, run) {
+	return withEnv('HOME', home, () => withEnv('USERPROFILE', home, run));
+}
+
+/**
+ * `run` with console.warn captured, which is where this package's logger writes.
+ * Async so one copy serves both the launcher's awaited probes and the preflight
+ * checks that run synchronously; those callers have to await it anyway.
+ */
+export async function captureWarnings(run) {
+	const warnings = [];
+	const realWarn = console.warn;
+	console.warn = (...args) => warnings.push(args.join(' '));
+	try {
+		await run();
+	} finally {
+		console.warn = realWarn;
+	}
+	return warnings;
+}
+
+/**
+ * An unstarted HTTP server answering `answers` and 404ing every other path. The
+ * 404 is the point: the probe URL is part of what these suites assert, and a
+ * stub that answered everything would let a probe-path typo pass.
+ *
+ * Unstarted because where and when it listens differs per caller; one of them
+ * defers the listen to prove the launcher's poller keeps polling.
+ */
+export function createReceiverStub({ status = 200, body = {}, raw, answers = '/info' } = {}) {
+	return http.createServer((request, response) => {
+		const head = { 'content-type': 'application/json' };
+		if (request.url !== answers) {
+			response.writeHead(404, head);
+			response.end('{}');
+			return;
+		}
+		response.writeHead(status, head);
+		response.end(raw ?? JSON.stringify(body));
+	});
 }

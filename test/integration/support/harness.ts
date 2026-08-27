@@ -84,6 +84,12 @@ export async function darwinLoopbackSkipReason(): Promise<string | false> {
  * A temp directory whose path is already resolved: on macOS os.tmpdir() lives
  * under a /var -> /private/var symlink, while the paths both suites compare
  * against it (ps(1) output, a Harper install dir) are the resolved spelling.
+ *
+ * Deliberately a second copy of the one in test/support/harness.js. Importing
+ * that file from here is TS7016 under tsconfig.test.json, and the settings that
+ * clear it either admit any untyped .js to the integration suite as `any`
+ * (allowJs) or duplicate the signature in a hand-written .d.ts. Two lines is
+ * cheaper than either.
  */
 export function makeTempDir(prefix: string): string {
 	return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
