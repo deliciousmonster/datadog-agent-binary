@@ -19,7 +19,15 @@
 import { threadId } from 'node:worker_threads';
 
 import tracer from 'dd-trace';
-import { readDeliverySignal, startDatadogAgents } from './dd-supervisor.js';
+import { readDeliverySignal, startDatadogAgents, untraceAgentProbes } from './dd-supervisor.js';
+
+/**
+ * Before the first probe, not after. The supervisor polls the trace-agent until it answers,
+ * and dd-trace turns every refusal on the way into an errored client span attributed to this
+ * service. Registering the filter after startDatadogAgents() would leave exactly the spans
+ * this call exists to prevent.
+ */
+untraceAgentProbes(tracer);
 
 /**
  * Started at component load, not on first request, and deliberately not awaited: a rejected

@@ -173,6 +173,41 @@ const REAPER = {
 const REAPER_RESTART_GRACE_MS = 8000;
 
 /**
+ * The two agent endpoints this file polls, as `dd-trace` builds the URI it filters on:
+ * `<protocol>//<host>:<port><path>`, query stripped.
+ */
+function agentProbeUrls() {
+	return [`http://127.0.0.1:${RECEIVER_PORT}/info`, `https://127.0.0.1:${DEBUG_PORT}/debug/vars`];
+}
+
+/**
+ * Keep the supervisor's own health probes out of the application's traces.
+ *
+ * Both probes go through `node:http`, which dd-trace instruments, so each one becomes a client
+ * span attributed to DD_SERVICE. That is bad in a specific and misleading way: waitForReceiver
+ * polls /info every 250ms until the trace-agent binds, and every refusal on the way is an
+ * errored span. Measured on the deployed node: 182 error spans on `harper-example`, 100% of
+ * the service's APM errors, all of them `127.0.0.1:8126`, while not one user request failed.
+ * A service that reads as unhealthy while working perfectly is the failure this package
+ * exists to remove, so the probes must not produce it.
+ *
+ * `blocklist` is dd-trace's own mechanism and it suppresses rather than merely detaches: the
+ * client plugin sets `span._spanContext._trace.record = false` for a blocked URI
+ * (datadog-plugin-http/src/client.js), so nothing is sent. Scoped under `client`, which the
+ * composite plugin hands only to the client half, leaving inbound HTTP instrumentation alone.
+ *
+ * Nothing is hidden by this. A receiver that never answers is an error line in hdb.log naming
+ * the log to read, `receiverBound: false` on /DatadogStatus/, and a `delivery.verdict` of
+ * `unavailable`. What goes away is the error span, not the error.
+ *
+ * @param {{use: Function}} tracer the initialised dd-trace; this file deliberately does not
+ *   import it, so that a native load of this module cannot pull in a second copy.
+ */
+export function untraceAgentProbes(tracer) {
+	tracer.use('http', { client: { blocklist: agentProbeUrls() } });
+}
+
+/**
  * Prove that the `spawn` bound at the top of this file is Harper's, not Node's.
  *
  * Harper's `createSpawn` checks the allowlist before the `name` gate, so an unlistable

@@ -20,8 +20,18 @@
 # Against a real hdb.log, 185,440 physical lines collapse to 15,952 events with
 # no continuation line wrongly treated as a new one.
 #
-# `source` is omitted deliberately. These logs are not JSON, so `source: harperdb`
-# only routes them to a pipeline that does not match them.
+# SEVERITY IS NOT PARSED HERE, AND THE AGENT CANNOT PARSE IT. Harper writes
+# `<timestamp> [<thread>] [<level>]: <message>`, which is not JSON, and the Agent's
+# log_processing_rules only do exclude/include/mask/multi_line - none of them set a
+# log's status. Every entry therefore arrives as `info`, and `status:error` over
+# these logs returns nothing however many errors Harper logged. Measured on a real
+# node: 2,109 `[warn]` entries and 2 `[error]` entries in one lifetime, all of them
+# `Info` in Datadog. Fixing it takes a log pipeline on the Datadog side; the grok
+# rule and the two processors are in example/README.md under "Log severity".
+#
+# `source` is set so that pipeline has a stable filter. It is deliberately not
+# `harperdb`, which is a Datadog integration name and would route these logs into an
+# integration pipeline written for a different format.
 
 logs:
   - type: file
@@ -30,6 +40,9 @@ logs:
     # Correlates these logs with APM traces and RUM. Use the same value as
     # DD_SERVICE / the tracer's service name.
     service: "harper"
+    # The filter a custom log pipeline keys on. See the note above: without that
+    # pipeline every entry lands as `info`, whatever level Harper wrote.
+    source: "harper"
     log_processing_rules:
       # Datadog auto-anchors the pattern to the start of the line, so no leading
       # '^'. Single-quoted so YAML keeps the backslashes.

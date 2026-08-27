@@ -28,7 +28,7 @@ import { findFreePort } from '../support/find-free-port.js';
 const sandbox = createDistSandbox({ prefix: 'ddab-delivery-' });
 fs.copyFileSync(path.join(REPO_ROOT, 'example', 'dd-supervisor.js'), path.join(sandbox, 'dd-supervisor.js'));
 const supervisorUrl = pathToFileURL(path.join(sandbox, 'dd-supervisor.js')).href;
-const { deliveryVerdict, prepareRuntime, readDeliverySignal } = await import(supervisorUrl);
+const { deliveryVerdict, prepareRuntime, readDeliverySignal, untraceAgentProbes } = await import(supervisorUrl);
 
 /**
  * A module instance that has never seen a delivery. `everDelivered` is a per-thread
@@ -260,4 +260,66 @@ test('the generated datadog.yaml pins the port the delivery signal reads', () =>
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
+});
+
+/**
+ * What `untraceAgentProbes` registered, without a tracer.
+ *
+ * dd-trace is not a dependency of this package (it is one of the example's), so the matcher
+ * cannot be imported here. It does not need to be: string entries in a dd-trace blocklist are
+ * compared with `===` against the URI the client plugin builds
+ * (`plugins/util/urlfilter.js`, `applyFilter`), so exact membership is the whole contract, and
+ * the cases below tie each entry to the URL the supervisor actually polls rather than to a
+ * copy of it.
+ */
+function registeredFilter() {
+	let captured;
+	untraceAgentProbes({
+		use(plugin, config) {
+			captured = { plugin, config };
+		},
+	});
+	return captured;
+}
+
+test("NEGATIVE: the supervisor's own probes are excluded from the application's traces", async () => {
+	// On the deployed node these were 182 error spans on harper-example, 100% of the
+	// service's APM errors, every one 127.0.0.1:8126, while no user request failed.
+	// waitForReceiver polls /info every 250ms until the trace-agent binds, so each refusal on
+	// the way is an errored client span. A service that reads as unhealthy while working is
+	// the failure mode this package exists to remove.
+	const captured = registeredFilter();
+	assert.equal(captured?.plugin, 'http', 'the filter must be registered on the http plugin');
+
+	const blocklist = captured.config?.client?.blocklist;
+	assert.ok(
+		Array.isArray(blocklist),
+		"the blocklist must sit under `client`. dd-trace's composite plugin hands " +
+			'`{...config, ...config.client}` to the client half only, so a top-level blocklist ' +
+			'would also reach the server plugin and drop inbound request traces.'
+	);
+
+	// Taken from the reader itself rather than written out again: if the port or the path
+	// moves, the entry has to move with it, and asserting against a literal would not notice.
+	const expvarUrl = (await readDeliverySignal(0)).source.replace('127.0.0.1:0', '127.0.0.1:5012');
+	assert.ok(blocklist.includes(expvarUrl), `the expvar read (${expvarUrl}) is still traced`);
+	assert.ok(
+		blocklist.includes('http://127.0.0.1:8126/info'),
+		'the receiver probe is still traced. This is the one that polls, and the one that ' +
+			'produced every error span on the deployed node.'
+	);
+});
+
+test('POSITIVE: the blocklist names only the probes, not the application', () => {
+	// A blocklist that swallowed the application's own outbound calls would be a worse bug
+	// than the one it fixes, and an invisible one. Entries are matched with `===`, so the
+	// guard is that there are exactly two of them and both are agent endpoints.
+	const blocklist = registeredFilter().config.client.blocklist;
+	assert.equal(blocklist.length, 2, `expected exactly the two agent probes, got ${JSON.stringify(blocklist)}`);
+	for (const entry of blocklist) {
+		assert.match(entry, /^https?:\/\/127\.0\.0\.1:\d+\//, `${entry} is not a loopback agent endpoint`);
+	}
+	// The receiver's own trace intake shares a host and port with the /info probe, so an
+	// entry that matched by host would silence dd-trace's own delivery. Exact URIs do not.
+	assert.ok(!blocklist.includes('http://127.0.0.1:8126/v0.4/traces'), 'the span intake must never be blocklisted');
 });

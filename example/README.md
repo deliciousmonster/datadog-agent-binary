@@ -415,6 +415,46 @@ startup: it tries to spawn a command that cannot exist and requires the attempt 
 refused. Under Harper that throws `Command ... is not allowed` synchronously, with no
 process and no PID file created; under real Node it does not throw at all.
 
+## Log severity
+
+Every entry from this component arrives in Datadog as **Info**, whatever level Harper wrote.
+Measured on the deployed node over one lifetime: 2,152 `[info]` entries, 2,109 `[warn]`, 2
+`[error]`, and in Datadog `Error 0` and `Warn 0` against 33.6K Info.
+
+Not the `multi_line` rule folding them away. That rule starts a new entry at an ISO-8601
+timestamp, and Harper begins every entry with one, including the `warn` that carries the stack
+trace. The counts confirm it: `LogsProcessed: 24566` matched exactly the 24,566 timestamped
+lines in the file, with the 49,300 stack-trace lines appended to them.
+
+The cause is that nothing conveys the level. Harper's format is
+`<timestamp> [<thread>] [<level>]: <message>` and is not JSON, and the Agent's
+`log_processing_rules` only do `exclude_at_match`, `include_at_match`, `mask_sequences` and
+`multi_line` — none of them set a log's status. Harper 5.2.6 has no JSON logging mode
+(`logging.*` offers level, file, rotation and the audit log, and no format). So the Agent
+cannot fix this and neither can the component.
+
+A Datadog **log pipeline** can, and it is the only thing that can. Create one filtered on
+`source:harper`, which is why the shipped log source now sets that attribute:
+
+1. **Grok Parser** on the log message:
+
+   ```
+   harper_entry %{notSpace:timestamp}\s+\[%{notSpace:harper.thread}\]\s+\[%{word:level}\]:\s+%{data:msg}
+   ```
+
+2. **Date Remapper** on `timestamp`, so the entry carries Harper's own time rather than
+   arrival time.
+3. **Status Remapper** on `level`. Harper's levels (`trace`, `debug`, `info`, `warn`, `error`,
+   `fatal`, `notify`) map onto Datadog's without translation.
+
+`harper.thread` is a bonus and a useful one here: it makes a log line attributable to the
+worker thread that wrote it, which is the same question
+[Worker threads](#worker-threads-and-which-of-them-you-will-hear-from) answers for spans.
+
+Not verified against a live pipeline: no application key exists on the machine this was
+measured on, so the grok rule above is written from the format and has not been run through
+Datadog's parser.
+
 ## Worker threads, and which of them you will hear from
 
 Harper loads this component in every worker thread. It does not serve HTTP from every one.
@@ -542,6 +582,7 @@ checks writability before spawning.
 | trace-agent exits immediately, non-zero | Something else holds 8126, or `datadog.yaml` is missing at the path passed to `-c`. |
 | trace-agent hangs ~30s then dies on its auth token | Its config directory is not writable. |
 | Stack traces arrive as one log per line | The `multi_line` rule is not reaching the agent. Check `confd_path` and the rendered `conf.d/harperdb.d/conf.yaml`. |
+| Every log is `Info`, `status:error` finds nothing | Expected without a log pipeline. Harper's format is not JSON and the Agent cannot set a log's status. See [Log severity](#log-severity). |
 | Nothing in Datadog, no errors anywhere | `DD_API_KEY` unset or wrong. Spans and logs are accepted locally and dropped at the intake. `/DatadogStatus/` reports `verdict: "rejected"` for this. |
 | `datadog-agent status` says `Traces: 0 payloads` | Not a symptom. `trace_writer` is zero on 7.73.0 through at least 7.82.1 whatever the agent is doing; two writers race for one expvar slot. Read `/DatadogStatus/`'s `delivery` instead. |
 | `delivery.verdict` is `unavailable` | Nothing answered `https://127.0.0.1:5012/debug/vars`. The trace-agent is not running, or `apm_config.debug.port` was moved by `DD_APM_DEBUG_PORT`. |

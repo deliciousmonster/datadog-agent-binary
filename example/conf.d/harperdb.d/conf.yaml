@@ -11,6 +11,11 @@
 # Harper prefixes every entry with an ISO-8601 timestamp and a logged Error spills its stack
 # across following lines that carry none. GET /Work/ logs such an Error deliberately, so the
 # rule is exercised on the first request.
+#
+# Severity is a separate problem the Agent cannot solve. Harper's format is not JSON and
+# log_processing_rules cannot set a log's status, so every entry arrives as `info` and
+# `status:error` returns nothing. `source` below is the filter a Datadog log pipeline keys on;
+# the grok rule and the two processors are in ../../README.md under "Log severity".
 
 logs:
   - type: file
@@ -20,6 +25,9 @@ logs:
     # Substituted from DD_SERVICE. Must match the tracer's service name for logs and APM
     # traces to correlate; dd-trace reads the same DD_SERVICE.
     service: "__DD_SERVICE__"
+    # Deliberately not `harperdb`, which is a Datadog integration name and would route these
+    # logs into an integration pipeline written for a different format.
+    source: "harper"
     log_processing_rules:
       - type: multi_line
         name: harper_new_log_starts_with_timestamp

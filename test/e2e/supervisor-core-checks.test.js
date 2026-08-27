@@ -166,3 +166,64 @@ test('a package with no conf.d leaves the trace-agent path intact', () =>
 			fs.renameSync(stashed, confd);
 		}
 	}));
+
+/**
+ * A `warn` entry as Harper writes it, with the stack the example's deliberate Error produces.
+ * Copied from a real hdb.log rather than composed, because the whole question below is
+ * whether the shipped rule treats this shape as one entry or as five.
+ */
+const HARPER_WARN_ENTRY = [
+	'2026-08-27T05:21:23.291Z [http/2] [warn]: Datadog example: emitting a deliberate multi-line log entry Error: This error is intentional.',
+	'    at file:///app/components/harper-datadog-example/resources.js:135:6',
+	'    at async http (/opt/harper/server/REST.ts:215:22)',
+	'    at async authentication (/opt/harper/security/auth.ts:345:20)',
+];
+
+const HARPER_INFO_LINE = '2026-08-27T05:21:23.290Z [http/2] [info]: Datadog example: handling GET /Work/ in trace 903';
+
+/** The multi_line pattern out of the rendered source, as the Agent would apply it. */
+function multiLinePattern(logsYaml) {
+	const pattern = logsYaml.match(/pattern:\s*'([^']+)'/)?.[1];
+	assert.ok(pattern, 'the rendered log source carries no multi_line pattern');
+	// Datadog anchors a multi_line pattern to the start of the line, so the rule is "does a
+	// new entry begin here", not "does this appear anywhere".
+	return new RegExp(`^(?:${pattern})`);
+}
+
+test('NEGATIVE: a warn entry begins its own log, it is not folded into the info above it', () =>
+	withRuntime((runtimeDir) => {
+		prepareRuntime(sandbox);
+		const logsYaml = fs.readFileSync(path.join(runtimeDir, 'conf.d', 'harperdb.d', 'conf.yaml'), 'utf-8');
+		const startsEntry = multiLinePattern(logsYaml);
+
+		// The reading this rules out: that Datadog shows Warn 0 because the multi_line rule
+		// swallowed every warn into the preceding info entry. It does not. The severity gap is
+		// elsewhere, and looking in the wrong place would have produced a rule change that
+		// broke stack-trace reassembly without fixing anything.
+		assert.ok(startsEntry.test(HARPER_WARN_ENTRY[0]), 'a warn line must start a new entry, not continue the one above');
+		assert.ok(startsEntry.test(HARPER_INFO_LINE), 'an info line must start a new entry');
+		for (const frame of HARPER_WARN_ENTRY.slice(1)) {
+			assert.ok(!startsEntry.test(frame), `a stack frame must continue the entry above it: ${frame}`);
+		}
+	}));
+
+test('the log source carries the attribute a severity pipeline filters on', () =>
+	withRuntime((runtimeDir) => {
+		prepareRuntime(sandbox);
+		const logsYaml = fs.readFileSync(path.join(runtimeDir, 'conf.d', 'harperdb.d', 'conf.yaml'), 'utf-8');
+
+		// Harper's format is not JSON and the Agent's processing rules cannot set a log's
+		// status, so every entry lands as `info` until a Datadog pipeline parses the level.
+		// `source` is what such a pipeline filters on, and it is the only part of that fix
+		// this package can ship.
+		assert.match(
+			logsYaml,
+			/^ {4}source: "harper"$/m,
+			'no `source` on the log source, so a pipeline has nothing stable to key on'
+		);
+		assert.ok(
+			!/source: "harperdb"/.test(logsYaml),
+			'`harperdb` is a Datadog integration name; using it routes these logs into an ' +
+				'integration pipeline written for a different format'
+		);
+	}));
