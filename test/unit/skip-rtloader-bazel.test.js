@@ -39,7 +39,7 @@ function recordingBuilder(sourceDir) {
 	const dev = path.join(sourceDir, 'dev');
 	const record = (command) => issued.push({ command, devExisted: fs.existsSync(dev) });
 	const builder = new (class extends AgentBuilder {
-		async checkGoVersion() {}
+		async ensureGoVersion() {}
 		async ensureCacheDirectory() {}
 		async ensureDdaInstalled() {}
 		async executeCommand(command) {

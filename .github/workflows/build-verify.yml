@@ -462,8 +462,8 @@ jobs:
           const { BinaryManager } = require('./dist/binary-manager.js');
           const manager = new BinaryManager();
           Promise.all([
-            manager.ensureBinary('core', 'not-a-published-version'),
-            manager.ensureBinary('trace', 'not-a-published-version'),
+            manager.ensureBinary('core'),
+            manager.ensureBinary('trace'),
           ]).then(([core, trace]) => {
             console.log('resolvable:', core);
             console.log('resolvable:', trace);

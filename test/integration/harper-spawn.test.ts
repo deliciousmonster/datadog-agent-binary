@@ -159,34 +159,6 @@ function createWorkspace(): Workspace {
 }
 
 /**
- * Copy the top-level directories for `names` (and, recursively, their
- * dependencies) out of this repo's node_modules. Each directory travels with its
- * own nested node_modules, so the assembled tree resolves exactly as npm laid it
- * out here rather than through a flattening that could pair a package with the
- * wrong major of a dependency.
- */
-function copyDependencyClosure(names: string[], destModulesDir: string): void {
-	const queue = [...names];
-	const copied = new Set<string>();
-	while (queue.length > 0) {
-		const name = queue.shift()!;
-		if (copied.has(name)) continue;
-		copied.add(name);
-		const source = join(REPO_ROOT, 'node_modules', name);
-		cpSync(source, join(destModulesDir, name), { recursive: true });
-		const manifest = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8')) as {
-			dependencies?: Record<string, string>;
-		};
-		for (const dependency of Object.keys(manifest.dependencies ?? {})) {
-			// A nested copy already travelled with its parent directory.
-			if (!existsSync(join(source, 'node_modules', dependency))) {
-				queue.push(dependency);
-			}
-		}
-	}
-}
-
-/**
  * Assemble the Harper application under test inside the workspace.
  *
  * The committed fixture carries only the component entry. dd-supervisor.js and
@@ -196,9 +168,7 @@ function copyDependencyClosure(names: string[], destModulesDir: string): void {
  * (Harper sees node_modules and skips its own install, keeping the suite off
  * npm and the network):
  *
- * - the real package: this repo's package.json, version pin and dist/, plus its
- *   production dependency closure (dist/index.js loads the downloader eagerly,
- *   which needs tar);
+ * - the real package: this repo's package.json, version pin, dist/ and conf.d/;
  * - a generated platform package whose accessors return `binaries`. That keeps
  *   BinaryManager's production resolution path - the platform package accessor -
  *   the one under test, while the suite chooses what actually gets spawned.
@@ -226,7 +196,15 @@ function assembleFixtureApp(
 	// the suite proves nothing about host metrics while still going green: the supervisor
 	// treats an unreadable conf.d as the optional feature it is and warns.
 	cpSync(join(REPO_ROOT, 'conf.d'), join(packageDir, 'conf.d'), { recursive: true });
-	copyDependencyClosure(Object.keys(PACKAGE_MANIFEST.dependencies ?? {}), modulesDir);
+	// Harper skips its own install when node_modules exists, so anything the package
+	// needs at runtime has to be staged here. Nothing is, because the package declares
+	// no dependencies; a dependency added later would resolve on a developer's machine
+	// and nowhere else.
+	assert.deepEqual(
+		Object.keys(PACKAGE_MANIFEST.dependencies ?? {}),
+		[],
+		'the package gained a runtime dependency, which this fixture does not copy into the assembled app'
+	);
 
 	// dist is the arbiter of the platform package's name and accessor contract,
 	// so the stand-in cannot drift from what BinaryManager will call.
@@ -267,8 +245,15 @@ function assembleFixtureApp(
  * it would silently move this run off the derivation under test. Cleared, the
  * only remaining source is the boot properties file Harper writes into the
  * isolated HOME, which is what the assertions below check.
+ *
+ * The return type is inferred from these keys rather than declared
+ * `Record<string, string>`, under which reading a variable this no longer sets
+ * typechecks as a `string` and arrives as `undefined`. That is how the launch
+ * change and the path derivation passed separately and broke together: an
+ * assertion still read DD_HARPER_RUNTIME_DIR out of here after the variable
+ * stopped existing, and `join()` took the undefined at runtime.
  */
-function supervisorEnv(workspace: Workspace): Record<string, string> {
+function supervisorEnv(workspace: Workspace) {
 	return {
 		DD_SPAWN_PROBE_DIR: workspace.dir,
 		DD_SPAWN_PROBE_COMMAND: workspace.longLivedCommand,
@@ -277,7 +262,7 @@ function supervisorEnv(workspace: Workspace): Record<string, string> {
 		DD_SITE: '',
 		DD_ENV: '',
 		DD_SERVICE: '',
-	};
+	} satisfies Record<string, string>;
 }
 
 /**
@@ -833,11 +818,8 @@ suite('the example supervisor with the optional logs template missing', { skip: 
 	});
 
 	test('datadog.yaml is still written, and no logs source is', () => {
-		// Derived the way the supervisor derives it, from the root path Harper recorded.
-		// This used to read DD_HARPER_RUNTIME_DIR out of supervisorEnv(), which stopped
-		// existing when the path derivation replaced that variable: the two changes landed
-		// in parallel, each green against a base that lacked the other, and the merge left
-		// join() taking undefined.
+		// Derived the way the supervisor derives it, from the root path Harper recorded;
+		// nothing in the environment names it. See supervisorEnv().
 		const runtimeDir = join(ctx.harper.dataRootDir, 'datadog');
 		assert.ok(
 			existsSync(join(runtimeDir, 'datadog.yaml')),

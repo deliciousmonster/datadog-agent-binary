@@ -98,7 +98,12 @@ test('off CI nothing is created and no XDG_CACHE_HOME is exported', async () => 
 test('every build precondition runs before dda is installed', async () => {
 	const order = [];
 	const build = new (class extends AgentBuilder {
-		async checkGoVersion() {}
+		async ensureXcodeTools() {
+			order.push('xcode');
+		}
+		async ensureGoVersion() {
+			order.push('go');
+		}
 		async ensureCacheDirectory() {
 			order.push('cache');
 		}
@@ -119,5 +124,7 @@ test('every build precondition runs before dda is installed', async () => {
 	})({ platform: new Platform('linux', 'x86_64'), sourceDir: '/nonexistent', outputDir: '/nonexistent/out' });
 
 	await build.buildCommon();
-	assert.deepEqual(order, ['cache', 'dev', 'windows', 'dda']);
+	// Every guard in one list: the macOS toolchain check used to sit a level up in
+	// build(), where this assertion could not see it at all.
+	assert.deepEqual(order, ['xcode', 'go', 'cache', 'dev', 'windows', 'dda']);
 });

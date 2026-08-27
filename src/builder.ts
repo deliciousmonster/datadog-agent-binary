@@ -47,8 +47,6 @@ export class AgentBuilder {
 
 		try {
 			await this.ensureOutputDirectory();
-			await this.preflight();
-
 			await this.buildCommon();
 
 			logger.info('Copying binaries to output directory...');
@@ -81,8 +79,8 @@ export class AgentBuilder {
 		}
 	}
 
-	/** Runs before anything is compiled. Only macOS has something to check. */
-	protected async preflight(): Promise<void> {
+	/** CGO_ENABLED is 1 on every target, so a macOS build needs the command line tools' clang. */
+	protected async ensureXcodeTools(): Promise<void> {
 		if (this.config.platform.getOS() !== 'macos') {
 			return;
 		}
@@ -127,7 +125,7 @@ export class AgentBuilder {
 	 * binary. A minor-version gap is refused because Go's runtime and crypto defaults
 	 * move between minors; a patch gap only warns, since upstream floats those.
 	 */
-	protected async checkGoVersion(): Promise<void> {
+	protected async ensureGoVersion(): Promise<void> {
 		// Probed before the pin is read, so a host with no Go fails here on every tag
 		// rather than five minutes later inside `dda inv install-tools`. Nothing else
 		// checks for a toolchain now that the `which` sweep is gone.
@@ -159,7 +157,8 @@ export class AgentBuilder {
 	}
 
 	protected async buildCommon(): Promise<void> {
-		await this.checkGoVersion();
+		await this.ensureXcodeTools();
+		await this.ensureGoVersion();
 		await this.ensureCacheDirectory();
 		await this.ensureEmbeddedPath();
 		await this.ensureWindowsPreconditions();
@@ -196,12 +195,19 @@ export class AgentBuilder {
 		return process.env[binary.buildArgsEnvVar]?.trim() || binary.buildArgs;
 	}
 
-	protected async executeCommand(command: string, cwd?: string): Promise<string> {
+	/**
+	 * `probe` marks a command whose failure is an answer rather than a fault. Without it the
+	 * dda, uv and pipx version checks report an absent tool at `error`, with an exit code and
+	 * an empty `Stderr:`, so a clean install prints three failures for a build that then
+	 * succeeds. Every other command keeps the full dump, which is the only record of why one
+	 * that was supposed to work did not.
+	 */
+	protected async executeCommand(command: string, { probe = false } = {}): Promise<string> {
 		logger.debug(`Executing: ${command}`);
 
 		try {
 			return execSync(command, {
-				cwd: cwd || this.config.sourceDir,
+				cwd: this.config.sourceDir,
 				encoding: 'utf8',
 				stdio: ['inherit', 'pipe', 'pipe'],
 				timeout: 1200000,
@@ -215,6 +221,10 @@ export class AgentBuilder {
 				stdout?: Buffer | string;
 				stderr?: Buffer | string;
 			};
+			if (probe) {
+				logger.debug(`Probe failed (exit ${execError.status}): ${command}`);
+				throw error;
+			}
 			logger.error(`Command failed: ${command}`);
 			logger.error(`Exit code: ${execError.status}`);
 			logger.error(`Error: ${execError.message}`);
@@ -457,7 +467,8 @@ export class AgentBuilder {
 			let reported: string;
 			try {
 				reported = await this.executeCommand(
-					`${candidate} -c "import sys;print('%d.%d' % sys.version_info[:2], sys.executable)"`
+					`${candidate} -c "import sys;print('%d.%d' % sys.version_info[:2], sys.executable)"`,
+					{ probe: true }
 				);
 			} catch {
 				continue;
@@ -494,7 +505,7 @@ export class AgentBuilder {
 	 */
 	protected async ensureDdaInstalled(): Promise<void> {
 		try {
-			await this.executeCommand('dda --version');
+			await this.executeCommand('dda --version', { probe: true });
 			logger.debug('dda is already installed');
 			return;
 		} catch {
@@ -506,7 +517,7 @@ export class AgentBuilder {
 			['pipx --version', 'pipx install dda'],
 		]) {
 			try {
-				await this.executeCommand(probe);
+				await this.executeCommand(probe, { probe: true });
 			} catch {
 				continue;
 			}

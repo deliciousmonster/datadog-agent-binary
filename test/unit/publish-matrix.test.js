@@ -52,7 +52,7 @@ function rowsFor(dir) {
 test('a correctly staged matrix has no problems', () =>
 	withTempDir('ddab-matrix-', (dir) => {
 		stageAll(dir);
-		assert.deepEqual(verify(rowsFor(dir), { mode: 'local' }), []);
+		assert.deepEqual(verify(rowsFor(dir)), []);
 	}));
 
 test("rejects this project's internal os/cpu names (the macos-x86_64 defect)", () =>
@@ -66,7 +66,7 @@ test("rejects this project's internal os/cpu names (the macos-x86_64 defect)", (
 				spec.cpu = ['x86_64'];
 			}
 		});
-		const problems = verify(rowsFor(dir), { mode: 'local' });
+		const problems = verify(rowsFor(dir));
 		assert.ok(
 			problems.some((p) => /os "macos" is not a Node process.platform/.test(p)),
 			`expected an os rejection, got: ${problems.join(' | ')}`
@@ -86,7 +86,7 @@ test('rejects a package missing the trace-agent (the original defect)', () =>
 				spec.binaries = spec.binaries.filter((b) => !b.startsWith('trace-agent'));
 			}
 		});
-		const problems = verify(rowsFor(dir), { mode: 'local' });
+		const problems = verify(rowsFor(dir));
 		assert.ok(
 			problems.some((p) => /missing trace-agent/.test(p)),
 			`expected a missing-binary problem, got: ${problems.join(' | ')}`
@@ -101,7 +101,7 @@ test('an empty bin/ is a problem, not a silent pass', () =>
 		stageAll(dir, (platform, spec) => {
 			if (platform === 'linux-x86_64') spec.binaries = [];
 		});
-		const problems = verify(rowsFor(dir), { mode: 'local' });
+		const problems = verify(rowsFor(dir));
 		assert.ok(
 			problems.some((p) => /linux-x86_64/.test(p) && /missing trace-agent/.test(p)),
 			`a staged package with no binaries must not clear the pre-publish gate, got: ${problems.join(' | ')}`
@@ -115,7 +115,7 @@ test('rejects a binary too small to be a real agent', () =>
 		stageAll(dir, (platform, spec) => {
 			if (platform === 'macos-arm64') spec.binaryBytes = 0;
 		});
-		const problems = verify(rowsFor(dir), { mode: 'local' });
+		const problems = verify(rowsFor(dir));
 		assert.ok(
 			problems.some((p) => /macos-arm64/.test(p) && /trace-agent is 0 bytes/.test(p)),
 			`expected a size-floor problem, got: ${problems.join(' | ')}`
@@ -127,7 +127,7 @@ test('rejects a platform package whose version has drifted from the main package
 		stageAll(dir, (platform, spec) => {
 			if (platform === 'linux-arm64') spec.version = '0.0.1';
 		});
-		const problems = verify(rowsFor(dir), { mode: 'local' });
+		const problems = verify(rowsFor(dir));
 		assert.ok(
 			problems.some((p) => /does not match the main package/.test(p)),
 			`expected a version-skew problem, got: ${problems.join(' | ')}`
@@ -140,7 +140,7 @@ test('reports a declared platform that was never staged', () =>
 		// A build leg that failed: the package is declared but absent.
 		const victim = expectedPackages()[0].platform;
 		fs.rmSync(path.join(dir, victim), { recursive: true, force: true });
-		const problems = verify(rowsFor(dir), { mode: 'local' });
+		const problems = verify(rowsFor(dir));
 		assert.ok(
 			problems.some((p) => /not found/.test(p) && /skip it silently/.test(p)),
 			`expected a not-found problem, got: ${problems.join(' | ')}`
@@ -154,7 +154,7 @@ test('reports a declared platform that was never staged', () =>
 test('optionalDependencies matches SUPPORTED_PLATFORMS, and drift is detected', () =>
 	withTempDir('ddab-matrix-', (dir) => {
 		stageAll(dir);
-		const problems = verify(rowsFor(dir), { mode: 'local' });
+		const problems = verify(rowsFor(dir));
 		assert.ok(
 			!problems.some((p) => /does not match SUPPORTED_PLATFORMS/.test(p)),
 			`optionalDependencies is out of sync: ${problems.join(' | ')}`
@@ -170,7 +170,7 @@ test('optionalDependencies matches SUPPORTED_PLATFORMS, and drift is detected', 
 		};
 		const rows = [...rowsFor(dir), readLocal(undeclared, dir)];
 		assert.ok(
-			verify(rows, { mode: 'local' }).some((p) => /does not match SUPPORTED_PLATFORMS/.test(p)),
+			verify(rows).some((p) => /does not match SUPPORTED_PLATFORMS/.test(p)),
 			'an undeclared platform should be reported'
 		);
 	}));
@@ -187,7 +187,7 @@ test('a --deep tarball read that failed is a problem, not a silent downgrade', (
 		rows[0].files = null;
 		rows[0].deepError = 'socket hang up';
 
-		const problems = verify(rows, { mode: 'registry' });
+		const problems = verify(rows);
 		assert.equal(problems.length, 1);
 		assert.match(problems[0], /could not inspect the published tarball \(socket hang up\)/);
 		assert.match(problems[0], /not proven/);
@@ -196,7 +196,7 @@ test('a --deep tarball read that failed is a problem, not a silent downgrade', (
 test('a --deep read that succeeded stays silent', () =>
 	withTempDir('ddab-matrix-', (dir) => {
 		stageAll(dir);
-		assert.deepEqual(verify(rowsFor(dir), { mode: 'registry' }), []);
+		assert.deepEqual(verify(rowsFor(dir)), []);
 	}));
 
 test('a published package that reports nothing about its bin/ is unverified, not OK', () =>
@@ -210,7 +210,7 @@ test('a published package that reports nothing about its bin/ is unverified, not
 		delete rows[0].sizes;
 		rows[0].bytes = 12_000;
 
-		const problems = verify(rows, { mode: 'registry' });
+		const problems = verify(rows);
 		assert.equal(problems.length, 1);
 		assert.match(problems[0], /unverified/);
 	}));
@@ -226,7 +226,7 @@ test('a published package too small to hold its binaries is a problem', () =>
 		rows[0].fileCount = 5;
 		rows[0].bytes = 40 * 1024;
 
-		const problems = verify(rows, { mode: 'registry' });
+		const problems = verify(rows);
 		assert.equal(problems.length, 1);
 		assert.match(problems[0], /cannot hold/);
 	}));

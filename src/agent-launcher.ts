@@ -577,9 +577,13 @@ export async function launchAgent(
 		// first space-delimited token, so each binary needs its own entry.
 		if (/is not allowed/.test(message)) {
 			logger.error(
-				`Harper rejected this spawn. Add this exact absolute path to ` +
-					`applications.allowedSpawnCommands and restart Harper (the allowlist is ` +
-					`read once at module load): ${resolvedBinaryPath ?? '<unresolved>'}`
+				resolvedBinaryPath?.includes(' ')
+					? `Harper rejected this spawn and no allowlist entry can accept it: the ` +
+							`comparison is against the first space-delimited token, so a path with a ` +
+							`space in it never matches. Install somewhere without one: ${resolvedBinaryPath}`
+					: `Harper rejected this spawn. Add this exact absolute path to ` +
+							`applications.allowedSpawnCommands and restart Harper (the allowlist is ` +
+							`read once at module load): ${resolvedBinaryPath ?? '<unresolved>'}`
 			);
 		} else if (/must have a process "name"/.test(message)) {
 			logger.error(

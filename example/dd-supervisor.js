@@ -584,7 +584,16 @@ function launchOne(descriptor, binaryPath, paths, version) {
 	// event is asynchronous, so returning from here without this listener is a crash waiting
 	// on the next tick.
 	child.on('error', (error) => {
-		log.error(`Datadog supervisor: the ${descriptor.title} failed to execute: ${error.message}`);
+		// ENOEXEC is the one spawn failure preflightBinary() cannot see coming: X_OK passes
+		// for a binary built for another architecture, and the bare message is "Exec format
+		// error". src/agent-launcher.ts names the same case for the bin/ shims.
+		const detail =
+			error.code === 'ENOEXEC'
+				? `${binaryPath} is not executable code for this machine (ENOEXEC). A platform ` +
+					`package filled from another architecture produces exactly this; check with ` +
+					`\`file ${binaryPath}\`.`
+				: error.message;
+		log.error(`Datadog supervisor: the ${descriptor.title} failed to execute: ${detail}`);
 	});
 
 	// Every loser of the PID-file race gets an ExistingProcessWrapper: an EventEmitter with
