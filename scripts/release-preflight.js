@@ -23,7 +23,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { isCliEntry } from './cli-entry.js';
+import { runCli } from './cli-entry.js';
 
 const REGISTRY = 'https://registry.npmjs.org';
 
@@ -166,8 +166,9 @@ function main() {
 			console.error(`::error::${reason}`);
 		}
 	}
-	if (failed) process.exit(1);
+	if (failed) return 1;
 	console.log('Preflight OK: the publish path is as ready as it can be proven.');
+	return 0;
 }
 
-if (isCliEntry(import.meta.url)) main();
+await runCli(import.meta.url, 'release-preflight', main);

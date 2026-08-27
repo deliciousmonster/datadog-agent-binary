@@ -18,11 +18,40 @@ const invert = <T extends string>(table: Partial<Record<string, T>>): Record<T, 
 export const NODE_PLATFORMS: Record<OS, string> = invert(OPERATING_SYSTEMS);
 export const NODE_ARCHES: Record<Architecture, string> = invert(ARCHITECTURES);
 
-/** What publish-matrix checks a published manifest's `os`/`cpu` against. */
-export const NODE_FIELDS: ReadonlyArray<readonly [string, string, ReadonlySet<string>]> = [
+const NODE_FIELDS: ReadonlyArray<readonly ['os' | 'cpu', string, ReadonlySet<string>]> = [
 	['os', 'platform', new Set(Object.values(NODE_PLATFORMS))],
 	['cpu', 'arch', new Set(Object.values(NODE_ARCHES))],
 ];
+
+/**
+ * What is wrong with a platform manifest's `os`/`cpu`, empty when npm can match them.
+ *
+ * One function rather than a check in the generator and a second in the pre-publish gate:
+ * those two had already drifted over the empty case. Empty or absent is a defect in its own
+ * right, because npm reads a missing list as "installs everywhere", so a manifest that lost
+ * the field ships the wrong platform's binaries as readily as one carrying this project's own
+ * vocabulary ships none. Neither is visible on npmjs.com.
+ */
+export function nodeFieldProblems(manifest: { os?: string[]; cpu?: string[] }, label: string): string[] {
+	const problems: string[] = [];
+	for (const [field, nodeField, allowed] of NODE_FIELDS) {
+		const values = manifest[field] ?? [];
+		if (values.length === 0) {
+			problems.push(
+				`${label}: ${field} is empty or absent, which npm reads as "installs on every ` +
+					`platform". It must name a process.${nodeField} value (${[...allowed].join(', ')}).`
+			);
+			continue;
+		}
+		for (const value of values.filter((v) => !allowed.has(v))) {
+			problems.push(
+				`${label}: ${field} "${value}" is not a Node process.${nodeField} value ` +
+					`(${[...allowed].join(', ')}). npm can never match this package.`
+			);
+		}
+	}
+	return problems;
+}
 
 export class Platform {
 	constructor(

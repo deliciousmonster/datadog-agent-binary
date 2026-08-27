@@ -12,7 +12,7 @@
 // Only two shapes are understood, `X.Y.Z` and `X.Y.Z-<channel>.N`. Anything else is
 // ignored rather than guessed at, and the caller is told what was skipped.
 
-import { isCliEntry } from './cli-entry.js';
+import { runCli } from './cli-entry.js';
 
 const CHANNEL_RE = /^[a-z][a-z0-9]*$/;
 
@@ -88,7 +88,7 @@ export function nextPrerelease({ channel = 'next', tags = [], registry = [], pac
 	};
 }
 
-if (isCliEntry(import.meta.url)) {
+await runCli(import.meta.url, 'next-prerelease', () => {
 	const args = process.argv.slice(2);
 	const get = (flag) => {
 		const i = args.indexOf(flag);
@@ -106,18 +106,13 @@ if (isCliEntry(import.meta.url)) {
 		// Not JSON at all, so nothing published is known. Tags still decide.
 	}
 
-	try {
-		const result = nextPrerelease({
-			channel: get('--channel') || 'next',
-			tags: split(get('--tags')),
-			registry,
-			packageVersion: get('--package-version'),
-		});
-		if (result.ignored.length) console.error(`Ignored unparseable versions: ${result.ignored.join(', ')}`);
-		console.error(`Highest known: ${result.highest ?? 'none'}`);
-		process.stdout.write(result.version);
-	} catch (err) {
-		console.error(`::error::${err.message}`);
-		process.exit(1);
-	}
-}
+	const result = nextPrerelease({
+		channel: get('--channel') || 'next',
+		tags: split(get('--tags')),
+		registry,
+		packageVersion: get('--package-version'),
+	});
+	if (result.ignored.length) console.error(`Ignored unparseable versions: ${result.ignored.join(', ')}`);
+	console.error(`Highest known: ${result.highest ?? 'none'}`);
+	process.stdout.write(result.version);
+});
