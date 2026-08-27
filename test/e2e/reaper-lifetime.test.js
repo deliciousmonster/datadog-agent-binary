@@ -248,3 +248,37 @@ test('a PID file naming a process that is already gone is not an error', async (
 	);
 	fs.rmSync(root, { recursive: true, force: true });
 });
+
+/**
+ * A Harper that IS the container's init is pid 1, and pid 1 is a real process the reaper must
+ * read as alive.
+ *
+ * isAlive() guards its input because kill(2) overloads non-positive pids into process-GROUP
+ * selectors: 0 is the caller's own group and -n is group n, so a reaper that let either through
+ * would signal itself and every sibling. The guard was `pid <= 1`, one value too wide, and it
+ * made a live pid-1 Harper read as dead. In the stock Harper container under `harper run` that
+ * fired on the reaper's first poll: "Harper pid 1 is gone" 4ms after start, then SIGTERM to both
+ * agents once the restart grace elapsed. The agents handle SIGTERM and exit 0, so it surfaced as
+ * "exited cleanly" and looked like an orderly shutdown rather than a kill.
+ *
+ * Asserted against pid 1 itself rather than a stand-in, because the defect was specifically that
+ * the number 1 was excluded. Pid 1 exists on every platform this runs on; the reaper reaches it
+ * either outright or via EPERM, and isAlive() already reads EPERM as alive.
+ */
+test('NEGATIVE: a Harper running as pid 1 is not read as dead and its agents survive', async () => {
+	const trace = startStub();
+	const core = startStub();
+	const root = makeRoot({ harperPid: 1, agents: { 'datadog-trace-agent': trace.pid, 'datadog-agent': core.pid } });
+
+	startReaper(root, { harperPid: 1, agents: { 'datadog-trace-agent': trace.pid, 'datadog-agent': core.pid } });
+
+	// Comfortably past the poll interval and the zero grace, so a reaper that decided pid 1 was
+	// gone would have finished killing by now.
+	await sleep(3000);
+
+	assert.ok(isAlive(trace.pid), 'the trace-agent was reaped while a pid-1 Harper was still running');
+	assert.ok(isAlive(core.pid), 'the core agent was reaped while a pid-1 Harper was still running');
+
+	const log = fs.readFileSync(path.join(root, 'logs', 'reaper.log'), 'utf8');
+	assert.doesNotMatch(log, /is gone/, 'the reaper declared a live pid-1 Harper gone');
+});

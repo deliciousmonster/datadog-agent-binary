@@ -110,7 +110,12 @@ function log(message) {
 }
 
 function isAlive(pid) {
-	if (!Number.isInteger(pid) || pid <= 1) return false;
+	// Reject 0 and negatives, which are process-GROUP selectors to kill(2): 0 is the
+	// caller's own group and -n is group n, so letting either through would have this
+	// reaper signal itself and every sibling. 1 is a real pid and must pass: a Harper
+	// running as a container's init IS pid 1, and reading it as dead made the reaper
+	// declare the node gone on its first poll and kill both agents 8s later.
+	if (!Number.isInteger(pid) || pid <= 0) return false;
 	try {
 		process.kill(pid, 0);
 		return true;
