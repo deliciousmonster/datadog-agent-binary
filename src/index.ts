@@ -61,6 +61,19 @@ export { BinaryManager } from './binary-manager.js';
 export { DatadogAgentDownloader } from './downloader.js';
 export { createBuilder } from './builder.js';
 export { Platform } from './platform.js';
+// Public because a component that spawns the trace-agent itself has to reach the same
+// verdict this package's own launcher reaches, from the same evidence and in the same
+// words. example/dd-supervisor.js is the caller that proved the second copy drifts.
+export {
+	DEFAULT_RECEIVER_PORT,
+	RECEIVER_BIND_TIMEOUT_MS,
+	RECEIVER_DISABLED,
+	RECEIVER_DISABLED_WARNING,
+	describeUnboundReceiver,
+	receiverAdvertisesTraces,
+	resolveReceiverPort,
+	waitForReceiver,
+} from './trace-receiver.js';
 export type {
 	AgentBinaryDescriptor,
 	AgentBinaryKind,

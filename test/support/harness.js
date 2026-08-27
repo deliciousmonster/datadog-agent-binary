@@ -134,6 +134,24 @@ export async function captureWarnings(run) {
 	return warnings;
 }
 
+/** The one variable the receiver suites turn. */
+export const withReceiverPort = (value, run) => withEnv('DD_APM_RECEIVER_PORT', value, run);
+
+/** `run` against a server listening on an ephemeral 127.0.0.1 port. */
+export async function withServer(server, run) {
+	const port = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
+	try {
+		return await run(port);
+	} finally {
+		await new Promise((resolve) => server.close(resolve));
+	}
+}
+
+/** A receiver stub listening for the duration of `run`. */
+export function withReceiver(options, run) {
+	return withServer(createReceiverStub(options), run);
+}
+
 /**
  * An unstarted HTTP server answering `answers` and 404ing every other path. The
  * 404 is the point: the probe URL is part of what these suites assert, and a
