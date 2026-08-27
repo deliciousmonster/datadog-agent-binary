@@ -254,23 +254,58 @@ jobs:
           echo "Reclaimed $(( (after - before) / 1024 )) MiB on /"
           df -h /
 
-      # One build step produces BOTH binaries: src/builder.ts iterates
+      # One build step per shell produces BOTH binaries: src/builder.ts iterates
       # platform.getBinaries() and runs `dda inv <buildTask>` per descriptor. Each
       # descriptor names its own override env var, so core and trace-agent flags
       # cannot be aimed at the wrong target.
       #
-      # The flag is assembled by the Actions expression rather than by a shell
-      # conditional, so one line runs under bash and pwsh alike and the Windows leg
-      # keeps the default shell upstream's bazel guide asks for. Keeping it
-      # conditional is load-bearing: resolveVersion() in src/downloader.ts uses `??`,
-      # which does not catch '', so an unconditional `--datadog-version ''` reaches
-      # assertRefExists('') and 404s the default path.
-      - name: Build ${{ matrix.platform }}
+      # Split by shell rather than assembled by an Actions expression, which is how
+      # the version override used to reach the command line. `${{ }}` is substituted
+      # as text before the shell parses the line, so a dispatch input holding shell
+      # syntax ran as a command inside the job that builds what gets published. The
+      # Windows leg keeps pwsh, the default shell upstream's bazel guide asks for.
+      #
+      # Passing the flag only when the input is non-empty is load-bearing:
+      # resolveVersion() in src/downloader.ts uses `??`, which does not catch '', so
+      # an unconditional `--datadog-version ''` reaches assertRefExists('') and 404s
+      # the default path.
+      #
+      # Both bodies are byte-identical to build-verify.yml's, enforced by the
+      # `workflow-drift` job in test.yml, which pairs the two files by step name.
+      # The matrix platform is already in the job name, so the step name does not
+      # repeat it.
+      - name: Build both agent binaries (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
         env:
           DEBUG: true
           DD_AGENT_BUILD_ARGS: ${{ github.event.inputs.agent_build_args }}
           DD_TRACE_AGENT_BUILD_ARGS: ${{ github.event.inputs.trace_agent_build_args }}
-        run: node dist/cli.js build ${{ github.event.inputs.datadog_version && format('--datadog-version ''{0}''', github.event.inputs.datadog_version) || '' }}
+          DATADOG_VERSION: ${{ github.event.inputs.datadog_version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${DATADOG_VERSION:-}" ]; then
+            node dist/cli.js build --datadog-version "$DATADOG_VERSION"
+          else
+            node dist/cli.js build
+          fi
+
+      - name: Build both agent binaries (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          DEBUG: true
+          DD_AGENT_BUILD_ARGS: ${{ github.event.inputs.agent_build_args }}
+          DD_TRACE_AGENT_BUILD_ARGS: ${{ github.event.inputs.trace_agent_build_args }}
+          DATADOG_VERSION: ${{ github.event.inputs.datadog_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:DATADOG_VERSION) {
+            node dist/cli.js build --datadog-version $env:DATADOG_VERSION
+          } else {
+            node dist/cli.js build
+          }
+          exit $LASTEXITCODE
 
       # Prove every binary we ship runs as a standalone file BEFORE we ship it. The
       # build tree is hidden first so a binary that still links a library by its
@@ -416,12 +451,17 @@ jobs:
       # Every Unix leg, not just Linux. Proving the receiver on one published
       # platform leaves the rest resting on "the file exists". Checked by hand on
       # darwin/arm64 first.
-      - name: Verify APM receiver accepts traces (Unix)
+      #
+      # Byte-identical to the step of the same name in build-verify.yml, enforced by
+      # the `workflow-drift` job in test.yml. Change both or neither.
+      - name: Verify the APM receiver accepts a trace (Unix)
         if: runner.os != 'Windows'
         shell: bash
+        env:
+          BUILD_PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
-          bin="$PWD/build/${{ matrix.platform }}/bin/trace-agent"
+          bin="$PWD/build/$BUILD_PLATFORM/bin/trace-agent"
           work="$(mktemp -d)"
           pid=""
 
@@ -441,10 +481,12 @@ jobs:
           trap cleanup EXIT
 
           mkdir -p "$work/conf.d" "$work/run"
+          # Contents are irrelevant to startup; existence is not. Without this the
+          # process exits immediately with "unable to load Datadog config file".
           : > "$work/datadog.yaml"
 
           export DD_API_KEY=dummy
-          export DD_HOSTNAME=ci-apm-smoke
+          export DD_HOSTNAME=ci-apm-receiver-check
           export DD_CONFD_PATH="$work/conf.d"
           export DD_RUN_PATH="$work/run"
           export DD_AUTH_TOKEN_FILE_PATH="$work/auth_token"
@@ -454,18 +496,21 @@ jobs:
           export DD_APM_ENABLED=true
           export DD_APM_RECEIVER_PORT=8126
           export DD_REMOTE_CONFIGURATION_ENABLED=false
+          # Dead local port: the receiver accepts payloads and then fails to forward
+          # them, keeping the run entirely on the runner.
           export DD_APM_DD_URL=http://127.0.0.1:1
 
           "$bin" run -c "$work/datadog.yaml" > "$work/console.log" 2>&1 &
           pid=$!
           echo "trace-agent running as pid $pid out of $work"
 
-          # 60 * 0.5s = 30s ceiling, but bail the moment the process dies so a
-          # startup failure reports in a second instead of after the timeout.
+          # 60 * 0.5s = 30s ceiling, but bail the moment the process dies so a startup
+          # failure reports in a second instead of after the timeout.
           ready=0
           for _ in $(seq 1 60); do
             # No -S: connection refused until the listener is up is expected, and
-            # printing it 60 times buries the real failure when there is one.
+            # printing it 60 times buries the real failure when there is one. -f also
+            # rejects a non-2xx /info, so a receiver answering 500 never reads as ready.
             if curl -fs --max-time 2 http://127.0.0.1:8126/info -o "$work/info.json"; then
               ready=1
               break
@@ -488,25 +533,32 @@ jobs:
           cat "$work/info.json"
           echo
 
-          # Parse the JSON rather than grep it: the claim is that the receiver
-          # ADVERTISES the endpoint dd-trace posts to, not that the string appears
-          # somewhere in the response.
-          python3 - "$work/info.json" <<'PY'
-          import json, sys
+          # Parse the JSON, never grep it: the claim is that the receiver ADVERTISES the
+          # endpoint dd-trace posts to, and a grep also matches the string inside an error
+          # body that advertises nothing. node rather than python3 because setup-node is
+          # already a prerequisite of this job and the symbol scan above runs the same way,
+          # so the parser costs no extra runtime on any leg.
+          node -e '
+            const { readFileSync } = require("node:fs");
+            let info;
+            try {
+              info = JSON.parse(readFileSync(process.argv[1], "utf8"));
+            } catch (error) {
+              console.log(`::error::/info did not return JSON: ${error.message}`);
+              process.exit(1);
+            }
+            const endpoints = Array.isArray(info?.endpoints) ? info.endpoints : [];
+            if (!endpoints.includes("/v0.4/traces")) {
+              console.log(`::error::/info does not advertise /v0.4/traces (endpoints: ${JSON.stringify(endpoints)})`);
+              process.exit(1);
+            }
+            console.log(`/info advertises /v0.4/traces (trace-agent version ${info.version})`);
+          ' "$work/info.json"
 
-          with open(sys.argv[1]) as fh:
-              info = json.load(fh)
-          endpoints = info.get("endpoints") or []
-          if "/v0.4/traces" not in endpoints:
-              print(f"::error::/info does not advertise /v0.4/traces (endpoints: {endpoints})")
-              sys.exit(1)
-          print(f"/info advertises /v0.4/traces (trace-agent version {info.get('version')})")
-          PY
-
-          # A real single-span v0.4 payload: array of traces, each an array of
-          # spans. An empty array is accepted by a receiver that never decodes a
-          # span, so it proves nothing the open port had not already proven.
-          payload='[[{"trace_id":1,"span_id":2,"name":"ci.smoke","resource":"ci","service":"build-release","type":"custom","start":1,"duration":1000000}]]'
+          # A real single-span v0.4 payload: array of traces, each an array of spans. An
+          # empty array is accepted by a receiver that never decodes a span, so it proves
+          # nothing the open port had not already proven.
+          payload='[[{"trace_id":1,"span_id":2,"name":"ci.smoke","resource":"ci","service":"apm-receiver-check","type":"custom","start":1,"duration":1000000}]]'
           code=$(curl -sS -o "$work/put.out" -w '%{http_code}' --max-time 10 \
             -X PUT -H 'Content-Type: application/json' --data "$payload" \
             http://127.0.0.1:8126/v0.4/traces)
@@ -520,12 +572,13 @@ jobs:
           echo "OK: trace-agent bound 127.0.0.1:8126, advertised /v0.4/traces, and accepted a span."
 
       # windows-x86_64 shipped a trace-agent.exe nothing had ever asked for a span.
-      # Keep this in step with the copy in build-verify.yml; the only deliberate
-      # differences are where the binary path comes from and the hostname each
-      # workflow tags its run with.
-      - name: Verify APM receiver accepts traces (Windows)
+      # Byte-identical to the step of the same name in build-verify.yml, enforced by
+      # the `workflow-drift` job in test.yml.
+      - name: Verify the APM receiver accepts a trace (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          BUILD_PLATFORM: ${{ matrix.platform }}
         run: |
           $ErrorActionPreference = 'Stop'
           # A refused connection is the expected state until the listener is up. If
@@ -533,7 +586,7 @@ jobs:
           # retry loop below turns into a hard failure on its first iteration.
           $PSNativeCommandUseErrorActionPreference = $false
 
-          $bin = Join-Path $PWD "build/${{ matrix.platform }}/bin/trace-agent.exe"
+          $bin = Join-Path $PWD "build/${env:BUILD_PLATFORM}/bin/trace-agent.exe"
           $work = Join-Path $env:RUNNER_TEMP 'apm-receiver-check'
           Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path "$work\conf.d", "$work\run" | Out-Null
@@ -542,7 +595,7 @@ jobs:
           New-Item -ItemType File -Force -Path "$work\datadog.yaml" | Out-Null
 
           $env:DD_API_KEY = 'dummy'
-          $env:DD_HOSTNAME = 'ci-apm-smoke'
+          $env:DD_HOSTNAME = 'ci-apm-receiver-check'
           $env:DD_CONFD_PATH = "$work\conf.d"
           $env:DD_RUN_PATH = "$work\run"
           $env:DD_AUTH_TOKEN_FILE_PATH = "$work\auth_token"
@@ -603,7 +656,7 @@ jobs:
             # A real single-span v0.4 payload: array of traces, each an array of
             # spans. Sent from a file so PowerShell's native-argument quoting never
             # sees the JSON.
-            $payload = '[[{"trace_id":1,"span_id":2,"name":"ci.smoke","resource":"ci","service":"build-release","type":"custom","start":1,"duration":1000000}]]'
+            $payload = '[[{"trace_id":1,"span_id":2,"name":"ci.smoke","resource":"ci","service":"apm-receiver-check","type":"custom","start":1,"duration":1000000}]]'
             Set-Content -Path "$work\payload.json" -Value $payload -Encoding ascii -NoNewline
             $code = curl.exe -sS -o "$work\put.out" -w '%{http_code}' --max-time 10 `
               -X PUT -H 'Content-Type: application/json' --data "@$work\payload.json" `

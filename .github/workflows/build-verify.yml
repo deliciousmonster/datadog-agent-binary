@@ -159,12 +159,38 @@ jobs:
           echo "Reclaimed $(( (after - before) / 1024 )) MiB on /"
           df -h /
 
-      # The run line matches build-release.yml's Build step, and the missing
-      # `shell:` is why: the Windows leg here used to build under Git Bash while
-      # the leg that publishes builds under pwsh, so this workflow proved a path
-      # nothing ships. See build-release.yml for why the flag stays conditional.
-      - name: Build both agent binaries
-        run: node dist/cli.js build ${{ github.event.inputs.datadog_version && format('--datadog-version ''{0}''', github.event.inputs.datadog_version) || '' }}
+      # Both bodies are byte-identical to build-release.yml's Build step, and the
+      # explicit `shell:` is why the split exists here too: the Windows leg used to
+      # build under Git Bash while the leg that publishes built under pwsh, so this
+      # workflow proved a path nothing ships. The `workflow-drift` job in test.yml
+      # fails if the two files stop matching. See build-release.yml for why the
+      # version flag stays conditional.
+      - name: Build both agent binaries (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          DATADOG_VERSION: ${{ github.event.inputs.datadog_version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${DATADOG_VERSION:-}" ]; then
+            node dist/cli.js build --datadog-version "$DATADOG_VERSION"
+          else
+            node dist/cli.js build
+          fi
+
+      - name: Build both agent binaries (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          DATADOG_VERSION: ${{ github.event.inputs.datadog_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:DATADOG_VERSION) {
+            node dist/cli.js build --datadog-version $env:DATADOG_VERSION
+          } else {
+            node dist/cli.js build
+          }
+          exit $LASTEXITCODE
 
       # The check that would have caught the original defect: the package shipped
       # the core agent alone, nothing bound 8126, dd-trace got ECONNREFUSED, and
@@ -259,16 +285,34 @@ jobs:
       # A real receiver, on the real port, accepting a real v0.4 payload.
       # Everything above proves a file exists and loads; only this proves a span
       # would be received.
+      #
+      # Byte-identical to the step of the same name in build-release.yml, which the
+      # `workflow-drift` job in test.yml enforces. These two drifted once already:
+      # this one grepped /info for the string while the workflow that publishes
+      # parsed it, so a body carrying `/v0.4/traces` only inside an error message
+      # passed here and failed there. Anything that legitimately differs between the
+      # two workflows arrives through `env`.
       - name: Verify the APM receiver accepts a trace (Unix)
         if: runner.os != 'Windows'
         shell: bash
+        env:
+          # From the same expression that picks the runner, not from Node's view of
+          # the host: a leg whose runner does not match the platform it claims to
+          # build then fails on a missing binary instead of quietly verifying
+          # whichever one it happens to be running on.
+          BUILD_PLATFORM: ${{ github.event.inputs.platform || 'linux-x86_64' }}
         run: |
           set -euo pipefail
-          platform="$(node -e "console.log(require('./dist/platform.js').Platform.current().getName())")"
-          bin="$PWD/build/$platform/bin/trace-agent"
+          bin="$PWD/build/$BUILD_PLATFORM/bin/trace-agent"
           work="$(mktemp -d)"
           pid=""
 
+          dump_logs() {
+            echo "--- trace-agent console ---"
+            cat "$work/console.log" 2>/dev/null || echo "(none)"
+            echo "--- trace-agent log file ---"
+            cat "$work/trace-agent.log" 2>/dev/null || echo "(none)"
+          }
           cleanup() {
             if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
               kill "$pid" 2>/dev/null || true
@@ -284,7 +328,7 @@ jobs:
           : > "$work/datadog.yaml"
 
           export DD_API_KEY=dummy
-          export DD_HOSTNAME=ci-build-verify
+          export DD_HOSTNAME=ci-apm-receiver-check
           export DD_CONFD_PATH="$work/conf.d"
           export DD_RUN_PATH="$work/run"
           export DD_AUTH_TOKEN_FILE_PATH="$work/auth_token"
@@ -294,50 +338,89 @@ jobs:
           export DD_APM_ENABLED=true
           export DD_APM_RECEIVER_PORT=8126
           export DD_REMOTE_CONFIGURATION_ENABLED=false
-          # Dead local port: the receiver accepts payloads and then fails to
-          # forward them, keeping the run entirely on the runner.
+          # Dead local port: the receiver accepts payloads and then fails to forward
+          # them, keeping the run entirely on the runner.
           export DD_APM_DD_URL=http://127.0.0.1:1
 
           "$bin" run -c "$work/datadog.yaml" > "$work/console.log" 2>&1 &
           pid=$!
+          echo "trace-agent running as pid $pid out of $work"
 
+          # 60 * 0.5s = 30s ceiling, but bail the moment the process dies so a startup
+          # failure reports in a second instead of after the timeout.
           ready=0
           for _ in $(seq 1 60); do
+            # No -S: connection refused until the listener is up is expected, and
+            # printing it 60 times buries the real failure when there is one. -f also
+            # rejects a non-2xx /info, so a receiver answering 500 never reads as ready.
             if curl -fs --max-time 2 http://127.0.0.1:8126/info -o "$work/info.json"; then
               ready=1
               break
             fi
             if ! kill -0 "$pid" 2>/dev/null; then
-              echo "::error::trace-agent exited before binding 127.0.0.1:8126."
-              cat "$work/console.log" || true
+              echo "::error::trace-agent exited before it bound 127.0.0.1:8126."
+              dump_logs
               exit 1
             fi
             sleep 0.5
           done
-          [ "$ready" -eq 1 ] || { echo "::error::trace-agent never bound 8126 within 30s."; cat "$work/console.log" || true; exit 1; }
+
+          if [ "$ready" -ne 1 ]; then
+            echo "::error::trace-agent never answered http://127.0.0.1:8126/info within 30s."
+            dump_logs
+            exit 1
+          fi
 
           echo "--- /info ---"
           cat "$work/info.json"
-          grep -q '/v0.4/traces' "$work/info.json" \
-            || { echo "::error::/info does not advertise /v0.4/traces."; exit 1; }
+          echo
 
-          # A real single-span v0.4 payload: array of traces, each an array of spans.
-          payload='[[{"trace_id":1,"span_id":2,"name":"ci.smoke","resource":"ci","service":"build-verify","type":"custom","start":1,"duration":1000000}]]'
-          code=$(curl -s -o "$work/put.json" -w '%{http_code}' -X PUT \
-            -H 'Content-Type: application/json' \
-            --data "$payload" http://127.0.0.1:8126/v0.4/traces)
-          echo "PUT /v0.4/traces -> HTTP $code, body: $(cat "$work/put.json")"
-          [ "$code" = "200" ] || { echo "::error::receiver rejected a valid v0.4 payload (HTTP $code)."; exit 1; }
+          # Parse the JSON, never grep it: the claim is that the receiver ADVERTISES the
+          # endpoint dd-trace posts to, and a grep also matches the string inside an error
+          # body that advertises nothing. node rather than python3 because setup-node is
+          # already a prerequisite of this job and the symbol scan above runs the same way,
+          # so the parser costs no extra runtime on any leg.
+          node -e '
+            const { readFileSync } = require("node:fs");
+            let info;
+            try {
+              info = JSON.parse(readFileSync(process.argv[1], "utf8"));
+            } catch (error) {
+              console.log(`::error::/info did not return JSON: ${error.message}`);
+              process.exit(1);
+            }
+            const endpoints = Array.isArray(info?.endpoints) ? info.endpoints : [];
+            if (!endpoints.includes("/v0.4/traces")) {
+              console.log(`::error::/info does not advertise /v0.4/traces (endpoints: ${JSON.stringify(endpoints)})`);
+              process.exit(1);
+            }
+            console.log(`/info advertises /v0.4/traces (trace-agent version ${info.version})`);
+          ' "$work/info.json"
 
-          echo "OK: the trace-agent bound 8126, advertised /v0.4/traces, and accepted a span."
+          # A real single-span v0.4 payload: array of traces, each an array of spans. An
+          # empty array is accepted by a receiver that never decodes a span, so it proves
+          # nothing the open port had not already proven.
+          payload='[[{"trace_id":1,"span_id":2,"name":"ci.smoke","resource":"ci","service":"apm-receiver-check","type":"custom","start":1,"duration":1000000}]]'
+          code=$(curl -sS -o "$work/put.out" -w '%{http_code}' --max-time 10 \
+            -X PUT -H 'Content-Type: application/json' --data "$payload" \
+            http://127.0.0.1:8126/v0.4/traces)
+          echo "PUT /v0.4/traces -> HTTP $code, body: $(cat "$work/put.out")"
+          if [ "$code" != "200" ]; then
+            echo "::error::PUT /v0.4/traces returned HTTP $code, expected 200."
+            dump_logs
+            exit 1
+          fi
 
-      # Windows shipped a trace-agent.exe nothing had ever asked for a span. Keep
-      # this in step with the copy in build-release.yml; the only deliberate
-      # differences are where the binary path comes from and the hostname each
-      # workflow tags its run with.
+          echo "OK: trace-agent bound 127.0.0.1:8126, advertised /v0.4/traces, and accepted a span."
+
+      # Windows shipped a trace-agent.exe nothing had ever asked for a span.
+      # Byte-identical to the step of the same name in build-release.yml, enforced
+      # by the `workflow-drift` job in test.yml.
       - name: Verify the APM receiver accepts a trace (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          BUILD_PLATFORM: ${{ github.event.inputs.platform || 'linux-x86_64' }}
         run: |
           $ErrorActionPreference = 'Stop'
           # A refused connection is the expected state until the listener is up. If
@@ -345,8 +428,7 @@ jobs:
           # retry loop below turns into a hard failure on its first iteration.
           $PSNativeCommandUseErrorActionPreference = $false
 
-          $platform = node -e "console.log(require('./dist/platform.js').Platform.current().getName())"
-          $bin = Join-Path $PWD "build/$platform/bin/trace-agent.exe"
+          $bin = Join-Path $PWD "build/${env:BUILD_PLATFORM}/bin/trace-agent.exe"
           $work = Join-Path $env:RUNNER_TEMP 'apm-receiver-check'
           Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path "$work\conf.d", "$work\run" | Out-Null
@@ -355,7 +437,7 @@ jobs:
           New-Item -ItemType File -Force -Path "$work\datadog.yaml" | Out-Null
 
           $env:DD_API_KEY = 'dummy'
-          $env:DD_HOSTNAME = 'ci-build-verify'
+          $env:DD_HOSTNAME = 'ci-apm-receiver-check'
           $env:DD_CONFD_PATH = "$work\conf.d"
           $env:DD_RUN_PATH = "$work\run"
           $env:DD_AUTH_TOKEN_FILE_PATH = "$work\auth_token"
@@ -416,7 +498,7 @@ jobs:
             # A real single-span v0.4 payload: array of traces, each an array of
             # spans. Sent from a file so PowerShell's native-argument quoting never
             # sees the JSON.
-            $payload = '[[{"trace_id":1,"span_id":2,"name":"ci.smoke","resource":"ci","service":"build-verify","type":"custom","start":1,"duration":1000000}]]'
+            $payload = '[[{"trace_id":1,"span_id":2,"name":"ci.smoke","resource":"ci","service":"apm-receiver-check","type":"custom","start":1,"duration":1000000}]]'
             Set-Content -Path "$work\payload.json" -Value $payload -Encoding ascii -NoNewline
             $code = curl.exe -sS -o "$work\put.out" -w '%{http_code}' --max-time 10 `
               -X PUT -H 'Content-Type: application/json' --data "@$work\payload.json" `
