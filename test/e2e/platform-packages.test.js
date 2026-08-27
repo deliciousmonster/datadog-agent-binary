@@ -39,6 +39,8 @@ const EXPECTED = {
 
 let workDir;
 let npmDir;
+/** The generator inside the sandbox. */
+let generator;
 /** Every generated package.json, read back once the generator has run. */
 let generated;
 
@@ -47,17 +49,18 @@ before(() => {
 	workDir = makeTempDir('ddab-platform-pkgs-');
 	fs.mkdirSync(path.join(workDir, 'scripts'));
 	fs.mkdirSync(path.join(workDir, 'dist'));
-	fs.copyFileSync(
-		path.join(REPO_ROOT, 'scripts', 'create-platform-packages.js'),
-		path.join(workDir, 'scripts', 'create-platform-packages.js')
-	);
-	// The generator only requires dist/platform.js (type imports are erased).
-	fs.copyFileSync(path.join(REPO_ROOT, 'dist', 'platform.js'), path.join(workDir, 'dist', 'platform.js'));
+	generator = path.join(workDir, 'scripts', 'create-platform-packages.js');
+	fs.copyFileSync(path.join(REPO_ROOT, 'scripts', 'create-platform-packages.js'), generator);
+	// The generator's runtime imports; type imports are erased. package-identity.js walks up
+	// from dist/ for the manifest, which is why the manifest is copied to the same relative
+	// place the real repo puts it.
+	for (const file of ['platform.js', 'package-identity.js']) {
+		fs.copyFileSync(path.join(REPO_ROOT, 'dist', file), path.join(workDir, 'dist', file));
+	}
+	fs.copyFileSync(path.join(REPO_ROOT, 'scripts', 'cli-entry.js'), path.join(workDir, 'scripts', 'cli-entry.js'));
 	fs.copyFileSync(path.join(REPO_ROOT, 'package.json'), path.join(workDir, 'package.json'));
 
-	execFileSync(process.execPath, [path.join(workDir, 'scripts', 'create-platform-packages.js'), '--dummy'], {
-		stdio: 'ignore',
-	});
+	execFileSync(process.execPath, [generator, '--dummy'], { stdio: 'ignore' });
 	npmDir = path.join(workDir, 'npm');
 	generated = readGenerated();
 });
@@ -214,6 +217,28 @@ test('--dummy generates the package layout with no bin/ at all', () => {
 	// accessors exist while the binaries they point at do not.
 	for (const name of Object.keys(EXPECTED)) {
 		assert.ok(!fs.existsSync(path.join(npmDir, name, 'bin')));
+	}
+});
+
+/** @returns {{status: number, stderr: string}} */
+function runGenerator(args) {
+	try {
+		execFileSync(process.execPath, [generator, ...args], { stdio: 'pipe', encoding: 'utf8' });
+		return { status: 0, stderr: '' };
+	} catch (error) {
+		return { status: error.status, stderr: String(error.stderr) };
+	}
+}
+
+test('an argument the generator does not understand fails instead of choosing a mode', () => {
+	// The mode came off the LAST element of argv, so `--all` misspelled staged the host
+	// platform alone, and `--dummy --all` ran a real build in place of the dummy that was
+	// asked for. Neither said so; the pre-publish gate reported missing platforms and the
+	// build took the blame.
+	for (const args of [['--al'], ['--dummy', '--all'], ['--all', '--verbose']]) {
+		const { status, stderr } = runGenerator(args);
+		assert.equal(status, 1, `\`${args.join(' ')}\` should have failed, and did not`);
+		assert.match(stderr, /Usage: create-platform-packages\.js/);
 	}
 });
 

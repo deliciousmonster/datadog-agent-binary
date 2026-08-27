@@ -5,7 +5,6 @@ export type OS = 'linux' | 'windows' | 'macos';
 
 export interface BuildConfig {
 	platform: Platform;
-	version?: string;
 	outputDir: string;
 	sourceDir: string;
 }

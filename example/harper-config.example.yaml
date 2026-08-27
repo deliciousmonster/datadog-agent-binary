@@ -65,8 +65,13 @@ logging:
   # source, which leaves the source tailing a file that never appears.
   file: true
 
-  # The supervisor forwards each agent's stdout and stderr into this log at info and warn. At
-  # Harper's default level of `warn` the agents' startup lines are dropped.
+  # What the supervisor itself reports: which binaries it resolved, which spawns it won, and
+  # whether the receiver came up. Harper's default level of `warn` drops all of it.
+  #
+  # It is not where the agents' own output goes. They are spawned with their stdio ignored, so
+  # a pipe cannot tie them to the worker thread that won the spawn race, and they write
+  # <runtimeDir>/logs/agent.log and trace-agent.log instead; the supervisor prints that
+  # directory as it starts each one.
   level: info
 
   # Optional, and independent of `file` above: Harper's container image sets this so logs also

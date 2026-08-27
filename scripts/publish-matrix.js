@@ -24,9 +24,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { SUPPORTED_PLATFORMS, NODE_FIELDS } from '../dist/platform.js';
+import { SUPPORTED_PLATFORMS, nodeFieldProblems } from '../dist/platform.js';
 import { platformPackageName } from '../dist/package-identity.js';
-import { isCliEntry } from './cli-entry.js';
+import { runCli } from './cli-entry.js';
 
 const REPO_ROOT = path.join(import.meta.dirname, '..');
 const mainPkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
@@ -89,6 +89,9 @@ function presentRow(expected, source, manifest, extra) {
 		...expected,
 		present: true,
 		source,
+		// What the manifest calls itself, which is the name npm publishes under. `name`
+		// above is what optionalDependencies asks for; the two are compared, not assumed.
+		manifestName: manifest.name,
 		version: manifest.version,
 		os: manifest.os ?? [],
 		cpu: manifest.cpu ?? [],
@@ -314,14 +317,18 @@ export function verify(rows) {
 			continue;
 		}
 
-		for (const [field, nodeField, allowed] of NODE_FIELDS) {
-			for (const value of row[field].filter((v) => !allowed.has(v))) {
-				problems.push(
-					`${label}: ${field} "${value}" is not a Node process.${nodeField} ` +
-						`value (${[...allowed].join(', ')}). npm can never match this package.`
-				);
-			}
+		// The gate checked every field a past defect had touched and never this one, so a
+		// staged directory whose manifest names a different package would publish under that
+		// name while optionalDependencies kept asking for this one.
+		if (row.manifestName !== row.name) {
+			problems.push(
+				`${label}: the manifest at ${row.source} calls itself "${row.manifestName}". ` +
+					`That is the name it publishes under, while optionalDependencies asks for ` +
+					`"${row.name}", so npm resolves nothing and skips the dependency in silence.`
+			);
 		}
+
+		problems.push(...nodeFieldProblems(row, label));
 
 		if (row.version && row.version !== PACKAGE_VERSION) {
 			problems.push(
@@ -461,13 +468,5 @@ async function main() {
 	return 0;
 }
 
-// Guarded so tests can import this without the import running the report and
-// calling process.exit().
-if (isCliEntry(import.meta.url)) {
-	main()
-		.then((code) => process.exit(code))
-		.catch((error) => {
-			console.error(`publish-matrix failed: ${error?.stack ?? error}`);
-			process.exit(1);
-		});
-}
+// Guarded so tests can import this without the import running the report.
+await runCli(import.meta.url, 'publish-matrix', main);

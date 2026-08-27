@@ -40,7 +40,6 @@ export class DatadogAgentBuilder {
 
 		const config: BuildConfig = {
 			platform,
-			version,
 			outputDir,
 			sourceDir,
 		};

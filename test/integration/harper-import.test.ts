@@ -29,10 +29,11 @@ import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
-import { setupHarperWithFixture, teardownHarper, type ContextWithHarper } from '@harperfast/integration-testing';
+import { setupHarperWithFixture, teardownHarper } from '@harperfast/integration-testing';
 import {
 	darwinLoopbackSkipReason,
 	errorMessage,
+	harperContext,
 	makeTempDir,
 	PACKAGE_MANIFEST,
 	pollJsonlRows,
@@ -187,9 +188,7 @@ function rowFor(rows: ProbeRow[], probe: string): ProbeRow | undefined {
 }
 
 suite('Harper v5 native import of the published package', { skip: SKIP_REASON }, (suiteContext) => {
-	// Same SuiteContext promotion as harper-spawn.test.ts: before() populates
-	// .harper on this object.
-	const ctx = suiteContext as ContextWithHarper;
+	const ctx = harperContext(suiteContext);
 	// Staged in before(), not at module load: a run that evaluates this file
 	// without executing the suite (--only elsewhere, a name pattern under
 	// --isolation=none, an interrupted discovery) must not pay the npm pack

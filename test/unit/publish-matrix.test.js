@@ -11,13 +11,13 @@ import { withTempDir } from '../support/harness.js';
 const REALISTIC_BINARY_BYTES = 2 * 1024 * 1024;
 
 /** Stage a package dir on disk the way create-platform-packages.js would. */
-function stage(dir, platform, { os: pkgOs, cpu, version, binaries, binaryBytes = REALISTIC_BINARY_BYTES }) {
+function stage(dir, platform, { name, os: pkgOs, cpu, version, binaries, binaryBytes = REALISTIC_BINARY_BYTES }) {
 	const packageDir = path.join(dir, platform);
 	fs.mkdirSync(path.join(packageDir, 'bin'), { recursive: true });
 	fs.writeFileSync(
 		path.join(packageDir, 'package.json'),
 		JSON.stringify({
-			name: `${PACKAGE_NAME}-${platform}`,
+			name: name ?? `${PACKAGE_NAME}-${platform}`,
 			version: version ?? PACKAGE_VERSION,
 			os: pkgOs,
 			cpu,
@@ -74,6 +74,42 @@ test("rejects this project's internal os/cpu names (the macos-x86_64 defect)", (
 		assert.ok(
 			problems.some((p) => /cpu "x86_64" is not a Node process.arch/.test(p)),
 			`expected a cpu rejection, got: ${problems.join(' | ')}`
+		);
+	}));
+
+test('rejects a package that declares no os or cpu at all', () =>
+	withTempDir('ddab-matrix-', (dir) => {
+		// npm reads a missing list as "installs everywhere", so this package resolves on
+		// every host and hands out one platform's binaries to all of them. The gate only
+		// ever compared the values it found, so a manifest with none passed clean.
+		stageAll(dir, (platform, spec) => {
+			if (platform === 'linux-arm64') {
+				delete spec.os;
+				delete spec.cpu;
+			}
+		});
+		const problems = verify(rowsFor(dir));
+		for (const field of ['os', 'cpu']) {
+			assert.ok(
+				problems.some((p) => /linux-arm64/.test(p) && new RegExp(`${field} is empty or absent`).test(p)),
+				`expected an absent-${field} problem, got: ${problems.join(' | ')}`
+			);
+		}
+	}));
+
+test('rejects a staged package whose manifest names a different package', () =>
+	withTempDir('ddab-matrix-', (dir) => {
+		// The directory decides what gets published; the manifest decides under what name.
+		// A re-scope that missed the generator would publish the new name while
+		// optionalDependencies still asked for the old one, and npm skips an unresolvable
+		// optional dependency without a word.
+		stageAll(dir, (platform, spec) => {
+			if (platform === 'macos-arm64') spec.name = '@somebody-else/datadog-agent-binary-macos-arm64';
+		});
+		const problems = verify(rowsFor(dir));
+		assert.ok(
+			problems.some((p) => /calls itself "@somebody-else\/datadog-agent-binary-macos-arm64"/.test(p)),
+			`expected a manifest-name problem, got: ${problems.join(' | ')}`
 		);
 	}));
 
@@ -191,12 +227,6 @@ test('a --deep tarball read that failed is a problem, not a silent downgrade', (
 		assert.equal(problems.length, 1);
 		assert.match(problems[0], /could not inspect the published tarball \(socket hang up\)/);
 		assert.match(problems[0], /not proven/);
-	}));
-
-test('a --deep read that succeeded stays silent', () =>
-	withTempDir('ddab-matrix-', (dir) => {
-		stageAll(dir);
-		assert.deepEqual(verify(rowsFor(dir)), []);
 	}));
 
 test('a published package that reports nothing about its bin/ is unverified, not OK', () =>

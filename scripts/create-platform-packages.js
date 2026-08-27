@@ -3,15 +3,25 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { argv } from 'node:process';
-import { SUPPORTED_PLATFORMS, Platform, NODE_PLATFORMS, NODE_ARCHES, NODE_FIELDS } from '../dist/platform.js';
+import { SUPPORTED_PLATFORMS, Platform, NODE_PLATFORMS, NODE_ARCHES, nodeFieldProblems } from '../dist/platform.js';
+import { PACKAGE_NAME, platformPackageName } from '../dist/package-identity.js';
+import { runCli } from './cli-entry.js';
 
-// Platform sub-packages are named `<this package>-<platform>`. Deriving the prefix
-// from the manifest keeps packaging and runtime resolution in agreement and makes
-// re-scoping a one-line edit.
 const parentPackageJson = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf8'));
-const PACKAGE_NAME = parentPackageJson.name;
-if (!PACKAGE_NAME) {
-	throw new Error('package.json has no `name`; cannot derive package names.');
+
+/**
+ * The `<root name>-<platform>` convention lives in package-identity.ts because the name was
+ * hardcoded in eleven places; spelling it out again here would be the twelfth, at the one site
+ * whose output is what npm publishes. That module falls back to a literal when its manifest
+ * walk finds nothing, so prove it read this repo's manifest before generating names under it.
+ */
+function assertIdentityAgrees() {
+	if (PACKAGE_NAME === parentPackageJson.name) return;
+	throw new Error(
+		`package-identity resolved "${PACKAGE_NAME}" but this repo's manifest is ` +
+			`"${parentPackageJson.name}". The generated packages would not be the ones ` +
+			`optionalDependencies declares, and npm skips an unresolvable optional dependency in silence.`
+	);
 }
 
 function getPackageDir(platform) {
@@ -88,22 +98,28 @@ function npmValue(table, key, field) {
  * shipping another uninstallable package.
  */
 function assertNodeOSAndCPU(packageJson) {
-	for (const [field, nodeField, allowed] of NODE_FIELDS) {
-		for (const value of packageJson[field]) {
-			if (!allowed.has(value)) {
-				throw new Error(
-					`${packageJson.name}: ${field} "${value}" is not a Node ` +
-						`process.${nodeField} value (expected one of ` +
-						`${[...allowed].join(', ')}); npm would never install this package`
-				);
-			}
-		}
+	const problems = nodeFieldProblems(packageJson, packageJson.name);
+	if (problems.length > 0) {
+		throw new Error(problems.join('\n'));
 	}
 }
 
-const lastArg = argv[argv.length - 1];
-const createDummyPackages = lastArg === '--dummy';
-const platforms = lastArg === '--all' || createDummyPackages ? SUPPORTED_PLATFORMS : [Platform.current()];
+/**
+ * The mode was read off the LAST element of argv, so an unrecognized argument fell through to
+ * single-platform mode instead of failing: `--all` misspelled in the release workflow would
+ * stage one platform out of four, and `--dummy --all` silently ran a real build. Parse it once,
+ * refuse anything else.
+ */
+const MODES = { '--all': 'all', '--dummy': 'dummy' };
+
+function parseMode(args) {
+	if (args.length === 0) return 'current';
+	const mode = args.length === 1 ? MODES[args[0]] : undefined;
+	if (!mode) {
+		throw new Error(`Usage: create-platform-packages.js [--all|--dummy]; got \`${args.join(' ')}\``);
+	}
+	return mode;
+}
 
 const packageTemplate = {
 	version: parentPackageJson.version,
@@ -161,7 +177,7 @@ function writePlatformPackageJson(platform) {
 	const arch = platform.getArch();
 	const packageJson = {
 		...packageTemplate,
-		name: `${PACKAGE_NAME}-${platform.getName()}`,
+		name: platformPackageName(platform.getName()),
 		description: `Datadog Agent and trace-agent binaries for ${os} ${arch}`,
 		os: [npmValue(NODE_PLATFORMS, os, 'os')],
 		cpu: [npmValue(NODE_ARCHES, arch, 'cpu')],
@@ -183,7 +199,7 @@ function writePlatformPackageJson(platform) {
 }
 
 function renderReadme(platform, descriptors) {
-	const name = `${PACKAGE_NAME}-${platform.getName()}`;
+	const name = platformPackageName(platform.getName());
 	const os = platform.getOS();
 	const arch = platform.getArch();
 	const binaryList = descriptors.map((d) => `- \`${d.outputName}\`, resolved by \`${d.accessorName}()\``).join('\n');
@@ -217,30 +233,37 @@ license per the [Datadog Agent repository](https://github.com/DataDog/datadog-ag
 `;
 }
 
-// In --all mode (release), a platform whose binaries did not build is skipped with
-// a warning rather than aborting the whole release. Single-platform and --dummy
-// modes still fail hard.
-const tolerateMissing = lastArg === '--all';
+function main() {
+	assertIdentityAgrees();
+	const mode = parseMode(argv.slice(2));
+	const createDummyPackages = mode === 'dummy';
+	// In --all mode (release), a platform whose binaries did not build is skipped with a
+	// warning rather than aborting the whole release. The other modes fail hard.
+	const tolerateMissing = mode === 'all';
+	const platforms = mode === 'current' ? [Platform.current()] : SUPPORTED_PLATFORMS;
 
-platforms.forEach((platform) => {
-	fs.mkdirSync(getPackageDir(platform), { recursive: true });
-	if (!createDummyPackages) {
-		try {
-			copyPlatformBinaries(platform);
-		} catch (err) {
-			if (!tolerateMissing) throw err;
-			// Delete the whole package dir, do not just skip writing to it. The
-			// release workflow publishes any npm/<platform>/ whose bin/ is non-empty,
-			// so leftovers from an earlier run would go out as a package that
-			// resolves but cannot spawn what it claims to ship.
-			fs.rmSync(getPackageDir(platform), { recursive: true, force: true });
-			console.warn(`Skipping ${platform.getName()}: ${err.message}`);
-			return;
+	for (const platform of platforms) {
+		fs.mkdirSync(getPackageDir(platform), { recursive: true });
+		if (!createDummyPackages) {
+			try {
+				copyPlatformBinaries(platform);
+			} catch (err) {
+				if (!tolerateMissing) throw err;
+				// Delete the whole package dir, do not just skip writing to it. The
+				// release workflow publishes any npm/<platform>/ whose bin/ is non-empty,
+				// so leftovers from an earlier run would go out as a package that
+				// resolves but cannot spawn what it claims to ship.
+				fs.rmSync(getPackageDir(platform), { recursive: true, force: true });
+				console.warn(`Skipping ${platform.getName()}: ${err.message}`);
+				continue;
+			}
 		}
+		const descriptors = getDescriptors(platform);
+		const packageJson = writePlatformPackageJson(platform);
+		write(platform, 'index.js', renderIndexJs(descriptors));
+		write(platform, 'README.md', renderReadme(platform, descriptors));
+		console.log(`Created package: ${packageJson.name} (${descriptors.map((d) => d.outputName).join(', ')})`);
 	}
-	const descriptors = getDescriptors(platform);
-	const packageJson = writePlatformPackageJson(platform);
-	write(platform, 'index.js', renderIndexJs(descriptors));
-	write(platform, 'README.md', renderReadme(platform, descriptors));
-	console.log(`Created package: ${packageJson.name} (${descriptors.map((d) => d.outputName).join(', ')})`);
-});
+}
+
+await runCli(import.meta.url, 'create-platform-packages', main);

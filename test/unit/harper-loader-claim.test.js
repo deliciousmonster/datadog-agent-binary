@@ -17,7 +17,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import path from 'node:path';
+import { PACKAGE_MANIFEST } from '../support/harness.js';
 // The claim-id list and its live derivation live in one support module because
 // test/integration/harper-import.test.ts scans the packed artifact against the
 // same ids; a private copy here or there goes stale when harper adds one.
@@ -27,8 +27,6 @@ import {
 	claimedIds,
 	extractClaimedIds,
 } from '../support/harper-claimed-ids.js';
-
-const REPO_ROOT = path.join(import.meta.dirname, '..', '..');
 
 /**
  * Every { key, name } pair a published manifest can use to name a dependency.
@@ -88,9 +86,8 @@ test('the claim list can still be derived from the installed harper', (t) => {
 });
 
 test('no dependency key in the published manifest names a claimed module id', () => {
-	const manifest = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
 	assert.deepEqual(
-		loaderClaimViolations(manifest, claimedIds()),
+		loaderClaimViolations(PACKAGE_MANIFEST, claimedIds()),
 		[],
 		"the published manifest names a module id Harper's loader claims. " +
 			"packageDependsOnHarper() will route this package through Harper's " +
