@@ -253,6 +253,50 @@ an `Error` whose stack runs to three physical lines. The second one exercises th
 `multi_line` rule in `conf.d/harperdb.d/conf.yaml`; without that rule each `at ...` frame
 arrives in Datadog as its own log entry.
 
+## 7. Ask whether it is actually delivering
+
+```bash
+curl -s -u HDB_ADMIN:password http://localhost:9926/DatadogStatus/ | jq .delivery
+```
+
+```json
+{
+	"source": "https://127.0.0.1:5012/debug/vars",
+	"window": "the last completed minute; the agent resets these counters, so they are not cumulative",
+	"verdict": "delivering",
+	"detail": "the intake accepted 3 payload(s) in the last minute.",
+	"receiver": { "tracesReceived": 20, "spansReceived": 80, "payloadRefused": 0, "clients": ["nodejs 6.12.0"] },
+	"statsWriter": { "payloads": 3, "errors": 0, "retries": 0 },
+	"everDelivered": true
+}
+```
+
+| `verdict` | What it means |
+| --- | --- |
+| `delivering` | The intake accepted an authenticated payload in the last minute. |
+| `rejected` | Payloads went out and every one came back refused. Check `DD_API_KEY` and `DD_SITE`. |
+| `not-delivering` | Spans are arriving at the agent and none have been accepted. Read it again first: both windows reset each minute. |
+| `idle` | Nothing arrived in the last minute. `everDelivered` says whether this thread ever saw delivery work. |
+| `unavailable` | Nothing answered the expvar endpoint. The trace-agent is not running. |
+
+**Do not read `Traces: 0 payloads` off `datadog-agent status`.** That section renders
+`trace_writer` out of the trace-agent's expvar, and on 7.73.0 through at least 7.82.1 that key
+is zero no matter what the agent is doing. Upstream constructs a `TraceWriter` and a
+`TraceWriterV1` unconditionally (`pkg/trace/agent/agent.go`), each starts a `reporter()`
+goroutine whose second statement is `info.UpdateTraceWriterInfo(w.statsLastMinute)`, and that
+function assigns one global pointer (`pkg/trace/info/writer.go`). Last registration wins, and
+the v1.0 writer receives nothing from a tracer posting to `/v0.4/traces`, so the published
+struct usually belongs to a writer that never sends anything. Measured against the shipped
+binary: 55 samples over two minutes, spans flowing, payloads retried and dropped, and all nine
+`trace_writer` fields zero in every sample while `receiver` and `stats_writer` moved normally.
+
+`stats_writer` is what `delivery` reads instead, and it is a real signal rather than a stand-in
+for one. It has a single producer, so it cannot lose that race; its `Payloads` counter
+increments only on the sender's 2xx branch; and its payloads go to the same host with the same
+API key over the same sender as the trace payloads, built only from spans that were actually
+received. Verified with a deliberately wrong key: the receiver counters climbed,
+`stats_writer.Retries` climbed, and `Payloads` stayed at zero.
+
 ## Verifying without a Datadog account
 
 The trace-agent accepts spans whether or not the API key is valid, so everything up to the
@@ -271,9 +315,9 @@ pgrep -f 'bin/(datadog-agent|trace-agent)' | wc -l   # 2
 curl -s -u HDB_ADMIN:password http://localhost:9926/DatadogStatus/ | jq
 ```
 
-For proof that spans arrive, call `/Work/` a few times and watch the trace-agent's periodic
-summary in `<runtime dir>/logs/trace-agent.log` (the agents write their own log files; no
-worker thread collects their output). `traces received` climbing is the end-to-end signal:
+`/DatadogStatus/`'s `delivery.receiver` carries the same counters without a log file. Reading
+the log directly still works, and is the only place a trace payload's own round trip is
+printed:
 
 ```
 [TRACE] ... INFO (...): [lang:nodejs ...] -> traces received: 4, traces filtered: 0,
@@ -419,7 +463,9 @@ checks writability before spawning.
 | trace-agent exits immediately, non-zero | Something else holds 8126, or `datadog.yaml` is missing at the path passed to `-c`. |
 | trace-agent hangs ~30s then dies on its auth token | Its config directory is not writable. |
 | Stack traces arrive as one log per line | The `multi_line` rule is not reaching the agent. Check `confd_path` and the rendered `conf.d/harperdb.d/conf.yaml`. |
-| Nothing in Datadog, no errors anywhere | `DD_API_KEY` unset or wrong. Spans and logs are accepted locally and dropped at the intake. |
+| Nothing in Datadog, no errors anywhere | `DD_API_KEY` unset or wrong. Spans and logs are accepted locally and dropped at the intake. `/DatadogStatus/` reports `verdict: "rejected"` for this. |
+| `datadog-agent status` says `Traces: 0 payloads` | Not a symptom. `trace_writer` is zero on 7.73.0 through at least 7.82.1 whatever the agent is doing; two writers race for one expvar slot. Read `/DatadogStatus/`'s `delivery` instead. |
+| `delivery.verdict` is `unavailable` | Nothing answered `https://127.0.0.1:5012/debug/vars`. The trace-agent is not running, or `apm_config.debug.port` was moved by `DD_APM_DEBUG_PORT`. |
 | Agent startup lines absent from `hdb.log` | `logging.level` is `warn` (Harper's default). Set it to `info`. |
 | `no log source was written, because Harper's root path could not be determined` | `ROOTPATH` is unset and `~/.harperdb/hdb_boot_properties.file` is absent, or its `settings_path` names a config with no absolute `rootPath`. Export `ROOTPATH`. |
 | Log source configured but nothing arrives | `logging.file` is off, or `logging.root`/`logging.path` moved the log off `<rootPath>/log/hdb.log`, which is the only place the source looks. |

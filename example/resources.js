@@ -19,7 +19,7 @@
 import { threadId } from 'node:worker_threads';
 
 import tracer from 'dd-trace';
-import { startDatadogAgents } from './dd-supervisor.js';
+import { readDeliverySignal, startDatadogAgents } from './dd-supervisor.js';
 
 /**
  * Started at component load, not on first request, and deliberately not awaited: a rejected
@@ -123,6 +123,11 @@ export class Work extends Resource {
  * GET /DatadogStatus/ reports what the supervisor did: whether Harper's spawn interception is
  * live, where the runtime tree went, the PID of each agent. Everything here fails silently by
  * default, which is why it gets an endpoint.
+ *
+ * `delivery` is read live on every request rather than captured at startup, because it is the
+ * one question an operator actually has and its answer changes minute to minute. It comes
+ * from the trace-agent's own counters, not from `datadog-agent status`, whose
+ * `Writer (previous minute)` section reads zero on a working node. See readDeliverySignal().
  */
 export class DatadogStatus extends Resource {
 	static async get() {
@@ -133,6 +138,7 @@ export class DatadogStatus extends Resource {
 			// response says nothing about the node until you have seen one from each.
 			threadId,
 			tracerInitialized: tracer.trace('harper.status.probe', (span) => isTracerLive(span)),
+			delivery: await readDeliverySignal(),
 			verify: {
 				receiver: `curl -s 127.0.0.1:${status.receiverPort}/info`,
 				traces: 'curl -s -u <user>:<pass> http://localhost:9926/Work/',

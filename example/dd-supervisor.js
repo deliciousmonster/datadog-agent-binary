@@ -32,6 +32,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from 'node:fs';
+import { request as httpsRequest } from 'node:https';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
@@ -80,6 +81,32 @@ function resolveReceiverPort() {
 }
 
 const RECEIVER_PORT = resolveReceiverPort();
+
+/** `apm_config.debug.port` default, from upstream's own BindEnvAndSetDefault. */
+const DEFAULT_DEBUG_PORT = 5012;
+
+/**
+ * The port the trace-agent serves expvar on. Written into the generated config rather than
+ * left to the upstream default, because readDeliverySignal() has to reach it: a probe aimed
+ * at an assumed port and an agent that moved would report a healthy node as unreachable.
+ * DD_APM_DEBUG_PORT is the agent's own variable, so the two cannot be made to disagree.
+ */
+function resolveDebugPort() {
+	const raw = process.env.DD_APM_DEBUG_PORT;
+	if (!raw) return DEFAULT_DEBUG_PORT;
+	// Upstream reads 0 as "serve no debug endpoint" (debug_server.go), which is a legitimate
+	// choice and not something to override.
+	if (raw.trim() === '0') return 0;
+	const parsed = Number.parseInt(raw, 10);
+	if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) return parsed;
+	log.warn(
+		`Datadog supervisor: DD_APM_DEBUG_PORT="${raw}" is not a port in 1-65535. Using ` +
+			`${DEFAULT_DEBUG_PORT}. The delivery signal on /DatadogStatus/ reads that port.`
+	);
+	return DEFAULT_DEBUG_PORT;
+}
+
+const DEBUG_PORT = resolveDebugPort();
 
 /**
  * How long the trace-agent gets to answer /info before the supervisor reports the
@@ -331,6 +358,10 @@ function renderDatadogYaml(paths) {
 		'  # On, this binds 0.0.0.0 and accepts spans from anything that reaches the container.',
 		'  apm_non_local_traffic: false',
 		`  log_file: ${yamlString(paths.traceLog)}`,
+		'  # Pinned rather than left to the upstream default, because /DatadogStatus/ reads',
+		'  # expvar off this port for its delivery signal. Loopback and TLS, both upstream.',
+		'  debug:',
+		`    port: ${DEBUG_PORT}`,
 		'',
 	].join('\n');
 }
@@ -527,6 +558,179 @@ async function verifyReceiver(status, paths) {
 			`false in Harper's environment: it overrides the apm_config.enabled written into ` +
 			`${paths.configFile}.`
 	);
+}
+
+/**
+ * Whether this thread has ever seen the trace-agent report an accepted payload.
+ *
+ * Every counter behind the delivery signal is a one-minute window the agent resets, so a
+ * healthy node that served no traffic in the last minute reads exactly like a broken one.
+ * This is the high-water mark that separates them, and it is per worker thread because
+ * that is the only state a component instance has.
+ */
+let deliveryObserved = false;
+
+/** GET a loopback HTTPS URL, resolving to the body or to null. Never throws. */
+function fetchLoopbackTls(url, timeoutMs) {
+	return new Promise((resolve) => {
+		// The agent serves expvar under its own IPC certificate, which is self-signed by
+		// construction and regenerated into the runtime tree on every start, so there is no
+		// CA to pin it to. Upstream's own client does the same thing. Safe here and only
+		// here: the connection never leaves the loopback interface, and the endpoint is
+		// read-only. Never widen this to a host that is not 127.0.0.1.
+		const call = httpsRequest(url, { rejectUnauthorized: false, timeout: timeoutMs }, (response) => {
+			if (response.statusCode !== 200) {
+				response.resume();
+				resolve(null);
+				return;
+			}
+			let body = '';
+			response.setEncoding('utf-8');
+			response.on('data', (chunk) => (body += chunk));
+			response.on('end', () => resolve(body));
+		});
+		call.on('timeout', () => call.destroy());
+		call.on('error', () => resolve(null));
+		call.end();
+	});
+}
+
+/** How long the expvar read gets. It runs inside a request handler, so it cannot hang. */
+const DELIVERY_READ_TIMEOUT_MS = 2000;
+
+/** Sum one numeric field across the receiver's per-client entries. */
+function sumReceiver(entries, field) {
+	return entries.reduce((total, entry) => total + (Number(entry?.[field]) || 0), 0);
+}
+
+/**
+ * Whether spans are reaching Datadog, read from the trace-agent's own counters.
+ *
+ * `datadog-agent status` has a `Writer (previous minute)` section that looks like the answer
+ * and is not one. On 7.82.1 it renders `trace_writer` straight out of this same expvar, and
+ * that key is unusable: upstream constructs two TraceWriters unconditionally
+ * (pkg/trace/agent/agent.go), each spawns a `reporter()` goroutine whose second statement is
+ * `info.UpdateTraceWriterInfo(w.statsLastMinute)`, and that function overwrites a single
+ * global pointer (pkg/trace/info/writer.go). The v1.0 writer receives nothing unless the
+ * `convert-traces` feature flag is on, so when its goroutine registers last the published
+ * struct belongs to a writer that never sends anything and every field reads zero for the
+ * life of the process. Introduced in 7.73.0 and unfixed upstream as of 7.82.1. Measured
+ * here: 55 samples over two minutes with traffic flowing and payloads being retried and
+ * dropped, `trace_writer` identically zero in all of them - Errors and Retries included -
+ * while `receiver` and `stats_writer` in the same reads moved normally.
+ *
+ * `stats_writer` is the substitute rather than a proxy for one. It has a single producer,
+ * so it cannot lose the same race, and its `Payloads` counter increments only on the
+ * `eventTypeSent` branch, which the sender takes only for a 2xx. Its payloads go to the same
+ * host with the same API key over the same sender as the trace payloads, and they are built
+ * only from spans that were actually received. So `Payloads > 0` means spans arrived, were
+ * processed, and the intake accepted an authenticated POST.
+ *
+ * Verified against a bogus API key: `receiver` climbed, `stats_writer.Retries` climbed, and
+ * `Payloads` stayed at 0. The counter discriminates.
+ *
+ * @returns {Promise<object>} never rejects; an unreachable endpoint is a verdict, not a throw
+ */
+export async function readDeliverySignal(port = DEBUG_PORT) {
+	const source = `https://127.0.0.1:${port}/debug/vars`;
+
+	if (port === 0) {
+		return unavailable(source, 'apm_config.debug.port is 0, which turns the expvar endpoint off.');
+	}
+
+	const body = await fetchLoopbackTls(source, DELIVERY_READ_TIMEOUT_MS);
+	if (body === null) {
+		return unavailable(
+			source,
+			`nothing answered ${source}. The trace-agent is not running, or it is not the one this node started.`
+		);
+	}
+
+	try {
+		return deliveryVerdict(JSON.parse(body), source);
+	} catch (error) {
+		return unavailable(source, `${source} did not return the expected JSON: ${error.message}`);
+	}
+}
+
+/** The shape every delivery verdict carries, so a caller can read it without branching. */
+function deliveryBase(source) {
+	return {
+		source,
+		// Said in the payload because the numbers are meaningless without it: both windows
+		// reset every minute, so zero on a quiet node is silence, not failure.
+		window: 'the last completed minute; the agent resets these counters, so they are not cumulative',
+		traceWriterIgnored:
+			'trace_writer reads zero on 7.73.0 through at least 7.82.1 whatever the agent is ' +
+			'doing (two writers, one global expvar slot, last registration wins). That is the ' +
+			'field `datadog-agent status` renders under "Writer (previous minute)".',
+	};
+}
+
+function unavailable(source, detail) {
+	return { ...deliveryBase(source), verdict: 'unavailable', detail };
+}
+
+/**
+ * Turn one expvar body into a delivery verdict. Pure, and separate from the read so the
+ * decision can be tested against bodies a live agent would take minutes to produce.
+ *
+ * @param {object} vars parsed /debug/vars
+ * @param {string} source the URL it came from, for the report
+ */
+export function deliveryVerdict(vars, source = `https://127.0.0.1:${DEBUG_PORT}/debug/vars`) {
+	const signal = deliveryBase(source);
+	const entries = Array.isArray(vars?.receiver) ? vars.receiver : [];
+	const stats = vars?.stats_writer ?? {};
+
+	signal.agentVersion = vars?.version?.Version;
+	signal.uptimeSeconds = Number(vars?.uptime) || 0;
+	signal.receiver = {
+		tracesReceived: sumReceiver(entries, 'TracesReceived'),
+		spansReceived: sumReceiver(entries, 'SpansReceived'),
+		payloadAccepted: sumReceiver(entries, 'PayloadAccepted'),
+		payloadRefused: sumReceiver(entries, 'PayloadRefused'),
+		payloadTimeout: sumReceiver(entries, 'PayloadTimeout'),
+		spansDropped: sumReceiver(entries, 'SpansDropped'),
+		// Which tracers are talking to it. Empty means nothing sent in the last minute,
+		// which on a Harper node means no request reached a thread with a live tracer.
+		clients: entries.map((entry) => `${entry?.Lang ?? '?'} ${entry?.TracerVersion ?? '?'}`),
+	};
+	signal.statsWriter = {
+		payloads: Number(stats.Payloads) || 0,
+		errors: Number(stats.Errors) || 0,
+		retries: Number(stats.Retries) || 0,
+		bytes: Number(stats.Bytes) || 0,
+	};
+
+	if (signal.statsWriter.payloads > 0) deliveryObserved = true;
+	signal.everDelivered = deliveryObserved;
+
+	const arriving = signal.receiver.tracesReceived > 0 || signal.receiver.spansReceived > 0;
+	if (signal.statsWriter.payloads > 0) {
+		signal.verdict = 'delivering';
+		signal.detail = `the intake accepted ${signal.statsWriter.payloads} payload(s) in the last minute.`;
+	} else if (signal.statsWriter.retries > 0 || signal.statsWriter.errors > 0) {
+		signal.verdict = 'rejected';
+		signal.detail =
+			`the intake refused every payload (${signal.statsWriter.retries} retries, ` +
+			`${signal.statsWriter.errors} errors) and accepted none. Check DD_API_KEY and DD_SITE.`;
+	} else if (arriving) {
+		signal.verdict = 'not-delivering';
+		signal.detail =
+			`spans are arriving (${signal.receiver.spansReceived} in the last minute) but nothing ` +
+			`has been accepted. Both windows reset each minute, so read this again before ` +
+			`believing it; a first read seconds after startup can land before the first flush.`;
+	} else if (deliveryObserved) {
+		signal.verdict = 'idle';
+		signal.detail = 'no spans in the last minute, but this thread has seen delivery succeed since it started.';
+	} else {
+		signal.verdict = 'idle';
+		signal.detail =
+			'no spans reached the trace-agent in the last minute. Call GET /Work/ a few times ' +
+			'and read this again; nothing here can distinguish a quiet node from a broken tracer.';
+	}
+	return signal;
 }
 
 /** Preflight and start one already-resolved agent. Never throws; returns what happened. */
