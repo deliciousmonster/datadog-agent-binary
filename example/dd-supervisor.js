@@ -43,6 +43,7 @@ import { threadId } from 'node:worker_threads';
 // drifted away from the first.
 import {
 	BinaryManager,
+	Platform,
 	RECEIVER_DISABLED,
 	RECEIVER_DISABLED_WARNING,
 	describeUnboundReceiver,
@@ -99,16 +100,13 @@ const DEBUG_PORT = resolveDebugPort();
 const PROBE_COMMAND = 'harper-datadog-spawn-probe-must-not-exist';
 
 /**
- * `name` is load-bearing twice over: Harper rejects a spawn without it, and it is the PID
- * lock filename (`<rootPath>/pids/<name>.pid`, taken with `openSync(..., "wx")`). A file lock
- * dedupes across worker threads and across processes sharing a root path, which is what "one
- * per node" means. Two names mean two independent locks, so each agent is a singleton without
- * blocking the other.
+ * What this component knows about each agent that the package does not: how to reach its
+ * binary, and which config path its `-c` wants. `kind` is the join key into the package's
+ * descriptors, which own the spawn name; see namedAgents().
  */
 const AGENTS = [
 	{
 		kind: 'trace',
-		name: 'datadog-trace-agent',
 		title: 'trace-agent',
 		resolve: (manager) => manager.ensureTraceAgentBinary(),
 		// The trace-agent's `-c` is a FILE. Its help text says "path to directory containing
@@ -119,7 +117,6 @@ const AGENTS = [
 	},
 	{
 		kind: 'core',
-		name: 'datadog-agent',
 		title: 'core agent',
 		resolve: (manager) => manager.ensureBinary('core'),
 		// The core agent's `-c`/`--cfgpath` really is a DIRECTORY, verified against the
@@ -127,6 +124,28 @@ const AGENTS = [
 		args: (paths) => ['run', '-c', paths.runtimeDir],
 	},
 ];
+
+/**
+ * AGENTS with the spawn name stamped on from the package's descriptors.
+ *
+ * `name` is load-bearing twice over: Harper rejects a spawn without it, and it is the PID
+ * lock filename (`<rootPath>/pids/<name>.pid`, taken with `openSync(..., "wx")`). A file lock
+ * dedupes across worker threads and across processes sharing a root path, which is what "one
+ * per node" means. Two names mean two independent locks, so each agent is a singleton without
+ * blocking the other.
+ *
+ * Read rather than restated. When this file carried its own copies, changing
+ * AgentBinaryDescriptor.processName moved the launcher's lock and left this one where it was,
+ * and the two spellings are singletons against different files: two core agents per node,
+ * neither able to see the other.
+ *
+ * Called at startup, not at import: Platform.current() throws on a platform the package does
+ * not build for, and this module has to survive a native load long enough to report it.
+ */
+function namedAgents() {
+	const platform = Platform.current();
+	return AGENTS.map((agent) => ({ ...agent, name: platform.getBinary(agent.kind).processName }));
+}
 
 /**
  * The process that stops the agents when the node does. Its own `name`, so its own PID lock:
@@ -1155,12 +1174,15 @@ export function startDatadogAgents(componentDir) {
 			status.coreChecks = runtime.coreChecks;
 
 			const manager = new BinaryManager();
+			// Resolved once and iterated twice below; namedAgents() reads Platform, so calling
+			// it per loop would ask the same question twice and could answer it differently.
+			const agents = namedAgents();
 			// Resolve both paths up front. The version covers the pair, and each path is then
 			// handed to the spawn that uses it, so the fingerprint can never describe a
 			// different binary from the one started. A resolution failure becomes an empty
 			// string and is reported per-agent by startAgent().
 			const binaries = await Promise.all(
-				AGENTS.map((descriptor) =>
+				agents.map((descriptor) =>
 					descriptor.resolve(manager).catch((error) => {
 						log.error(`Datadog supervisor: could not resolve the ${descriptor.title} ` + `binary: ${error.message}`);
 						return '';
@@ -1181,7 +1203,7 @@ export function startDatadogAgents(componentDir) {
 
 			// In order, trace-agent first: it owns the socket dd-trace is already trying to
 			// reach.
-			for (const [index, descriptor] of AGENTS.entries()) {
+			for (const [index, descriptor] of agents.entries()) {
 				status.agents.push(startAgent(descriptor, binaries[index], runtime.paths, version));
 			}
 

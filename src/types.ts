@@ -84,6 +84,10 @@ export interface AgentBinaryDescriptor {
 	 * Harper's `spawn` `name` option, which Harper requires and uses as the PID-lock
 	 * filename (`<rootPath>/pids/<name>.pid`). That lock is what holds each agent to one
 	 * process per node across worker threads, so the two kinds need distinct names.
+	 *
+	 * The only place either name is written. A component that spawns an agent reads it from
+	 * here; a second copy makes the rename partial, and a partial rename is two locks and two
+	 * live agents rather than one. test/unit/agent-name-ownership.test.js enforces that.
 	 */
 	processName: string;
 }
