@@ -89,6 +89,21 @@ space can never match, and the list is read once at module load. Allowlisting on
 reproduces the original symptom, since metrics and logs keep flowing while the rejected trace-agent
 spawn takes every span with it.
 
+**Harper stops nothing a component spawned.** `harper stop` sends one SIGTERM to the PID in
+`<rootPath>/hdb.pid` and the handler calls `process.exit(0)`; workers are told nothing, a worker's
+own `process.on('exit')` does not run, and nothing sweeps `<rootPath>/pids/`. The only
+component-visible hook, `scope.on('close')`, fires on worker recycle and `harper restart`, which is
+exactly when the agents must survive. `example/dd-reaper.js` is a third process watching the parent
+PID because that is the only signal that separates the two. Do not replace it with an in-process
+handler; that reintroduces the decoupling bug it was written to avoid.
+
+**`trace_writer` is not a delivery signal.** `datadog-agent status` renders it under
+`Writer (previous minute)` and it reads zero on 7.73.0 through at least 7.82.1 whatever the agent is
+doing: upstream constructs two trace writers and each registers itself into one global expvar slot,
+so the idle one usually wins. `example/dd-supervisor.js` reads `stats_writer` and the receiver
+counters instead, and `/DatadogStatus/` reports the verdict. If the pin moves, re-measure before
+trusting that field again.
+
 **The node config file is `harper-config.yaml`.** On an installed node Harper reads the absolute path
 `settings_path` names in `~/.harperdb/hdb_boot_properties.file`, which is what `harper install` wrote;
 the filename is consulted only under `ROOTPATH` with no boot file, where `harper-config.yaml` wins and

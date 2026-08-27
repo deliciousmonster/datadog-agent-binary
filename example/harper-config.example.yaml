@@ -33,7 +33,11 @@ applications:
   #     m.ensureTraceAgentBinary().then(console.log);"
   #
   # Harper's own defaults are `npm` and `node`. Your list replaces that default rather than
-  # extending it, so they are repeated here; drop them only deliberately.
+  # extending it, so they are repeated here. `node` is load-bearing beyond Harper's own use of
+  # it: dd-supervisor.js starts dd-reaper.js as `node dd-reaper.js`, and that process is what
+  # stops both agents when the node stops. Drop it and `harper stop` leaves them running with
+  # 127.0.0.1:8126 still bound. The absolute path of the running Node works too, and is immune
+  # to PATH; the supervisor tries it first.
   allowedSpawnCommands:
     - npm
     - node

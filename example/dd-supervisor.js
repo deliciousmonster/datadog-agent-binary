@@ -151,6 +151,28 @@ const AGENTS = [
 ];
 
 /**
+ * The process that stops the agents when the node does. Its own `name`, so its own PID lock:
+ * one per node, deduped across worker threads exactly like an agent, and outliving the thread
+ * that won the race for it. See dd-reaper.js for why this is a process and not a callback.
+ */
+const REAPER = {
+	name: 'datadog-agent-reaper',
+	title: 'agent reaper',
+	script: 'dd-reaper.js',
+};
+
+/**
+ * How long the reaper waits, after Harper's main process disappears, for a replacement to
+ * write a new `hdb.pid` before it stops the agents.
+ *
+ * `harper restart` forks a fresh main process and exits the old one, so the parent dies on a
+ * path where the agents should be kept. Long enough to cover that fork (`bin/run.js` writes
+ * the file early, before component load), short enough that `harper stop` frees 8126 while an
+ * operator is still watching.
+ */
+const REAPER_RESTART_GRACE_MS = 8000;
+
+/**
  * Prove that the `spawn` bound at the top of this file is Harper's, not Node's.
  *
  * Harper's `createSpawn` checks the allowlist before the `name` gate, so an unlistable
@@ -247,6 +269,19 @@ function readHarperRootPath() {
 }
 
 /**
+ * Harper's root path, or null when nothing names one.
+ *
+ * ROOTPATH is set by the harper-pro image and points at the mounted volume, so the Datadog
+ * tree sits next to Harper's own state and survives a restart. Everywhere else, Harper's boot
+ * properties are what name the root path.
+ *
+ * @returns {string | null}
+ */
+function harperRootPath() {
+	return process.env.ROOTPATH || readHarperRootPath();
+}
+
+/**
  * Directory holding datadog.yaml, conf.d, the auth token, the IPC certificate and the agent
  * logs. Nothing may land in the Datadog defaults: the deploy target runs as a non-root user
  * (`USER harperdb` on node:24-trixie) where /etc/datadog-agent, /opt/datadog-agent,
@@ -258,10 +293,7 @@ function readHarperRootPath() {
  * run directory out from under a live agent.
  */
 export function resolveRuntimeDir() {
-	// ROOTPATH is set by the harper-pro image and points at the mounted volume, so the Datadog
-	// tree sits next to Harper's own state and survives a restart. Everywhere else, Harper's
-	// boot properties are what name the root path.
-	const rootPath = process.env.ROOTPATH || readHarperRootPath();
+	const rootPath = harperRootPath();
 	if (rootPath) return join(rootPath, 'datadog');
 	// Nothing named a root path. Fall back to a directory writable both in the container
 	// (HOME=/home/harperdb) and in a developer shell.
@@ -280,7 +312,7 @@ export function resolveRuntimeDir() {
  * surfaces as the warning that the tailed file does not exist.
  */
 export function resolveHarperLogPath() {
-	const rootPath = process.env.ROOTPATH || readHarperRootPath();
+	const rootPath = harperRootPath();
 	return rootPath ? join(rootPath, 'log', 'hdb.log') : null;
 }
 
@@ -854,6 +886,123 @@ function launchOne(descriptor, binaryPath, paths, version) {
 }
 
 /**
+ * Start the reaper, or say why it was not started.
+ *
+ * The command has to satisfy Harper's allowlist, which is an exact string compare against
+ * `command.split(' ')[0]`. `process.execPath` is tried first because it names this exact Node
+ * and cannot be shadowed by PATH; bare `node` is the fallback and is what works with no
+ * configuration at all, since it is in Harper's own default allowlist and in the example's.
+ * A refused spawn throws synchronously and creates no PID file, so trying both costs nothing.
+ *
+ * Never fatal. Without a reaper the agents run exactly as they did before, and outlive the
+ * node exactly as they did before; that is worth a warning, not an outage.
+ */
+function launchReaper(componentDir, paths, rootPath, agents, version) {
+	const state = { name: REAPER.name, started: false };
+
+	const running = agents.filter((agent) => agent.started && typeof agent.pid === 'number');
+	if (running.length === 0) {
+		state.error = 'no agent started, so there is nothing to stop';
+		return state;
+	}
+	if (!rootPath) {
+		state.error = "Harper's root path is unknown, so the PID files to clean up cannot be located";
+		log.warn(
+			`Datadog supervisor: not starting the ${REAPER.title}: ${state.error}. The agents ` +
+				`will keep running after this node stops; kill them by hand or set ROOTPATH.`
+		);
+		return state;
+	}
+
+	const script = join(componentDir, REAPER.script);
+	if (!existsSync(script)) {
+		state.error = `${script} is missing`;
+		log.error(
+			`Datadog supervisor: cannot start the ${REAPER.title}: ${script} is missing. It ` +
+				`ships beside dd-supervisor.js and has to be copied with it. Without it the ` +
+				`agents keep running after this node stops and 127.0.0.1:${RECEIVER_PORT} stays bound.`
+		);
+		return state;
+	}
+
+	const pidDir = join(rootPath, 'pids');
+	const args = [
+		script,
+		// The worker thread's process.pid IS the main Harper process: threads share a process.
+		// That is also the pid `harper stop` signals and the one this becomes a child of.
+		'--harper-pid',
+		String(process.pid),
+		'--hdb-pid-file',
+		join(rootPath, 'hdb.pid'),
+		'--restart-grace-ms',
+		String(REAPER_RESTART_GRACE_MS),
+		'--self-pid-file',
+		join(pidDir, `${REAPER.name}.pid`),
+		'--log',
+		join(paths.runtimeDir, 'logs', 'reaper.log'),
+		...running.flatMap((agent) => ['--agent', `${join(pidDir, `${agent.name}.pid`)}:${agent.pid}`]),
+	];
+
+	let child;
+	const refusals = [];
+	for (const command of [process.execPath, 'node']) {
+		try {
+			child = spawn(command, args, {
+				name: REAPER.name,
+				version,
+				stdio: ['ignore', 'ignore', 'ignore'],
+				env: process.env,
+			});
+			state.command = command;
+			break;
+		} catch (error) {
+			refusals.push(`${command}: ${error.message}`);
+		}
+	}
+
+	if (!child) {
+		state.error = refusals.join('; ');
+		log.warn(
+			`Datadog supervisor: Harper refused to start the ${REAPER.title} (${state.error}). ` +
+				`Add \`node\` back to applications.allowedSpawnCommands, or add ` +
+				`${process.execPath}. Without it the agents keep running after \`harper stop\` ` +
+				`and 127.0.0.1:${RECEIVER_PORT} stays bound.`
+		);
+		return state;
+	}
+
+	state.pid = child.pid;
+	state.started = true;
+	child.on('error', (error) =>
+		log.error(`Datadog supervisor: the ${REAPER.title} failed to execute: ${error.message}`)
+	);
+
+	state.adopted = !Array.isArray(child.spawnargs);
+	if (state.adopted) {
+		log.info(
+			`Datadog supervisor: the ${REAPER.title} is already running on this node ` +
+				`(pid ${child.pid}); this thread joined it instead of starting a second one.`
+		);
+		child.unref();
+		return state;
+	}
+
+	log.info(
+		`Datadog supervisor: started the ${REAPER.title} (pid ${child.pid}). It watches Harper ` +
+			`(pid ${process.pid}) and stops ${running.map((agent) => agent.name).join(' and ')} ` +
+			`when this node exits, which Harper itself never does for a component's spawns.`
+	);
+	child.on('exit', (code, signal) => {
+		if (signal || code === 0) return;
+		log.warn(
+			`Datadog supervisor: the ${REAPER.title} exited with code ${code}. The agents will ` +
+				`now outlive this node; \`harper stop\` will leave them running.`
+		);
+	});
+	return state;
+}
+
+/**
  * Create the runtime tree and write every config file the agents read from it.
  *
  * Exported for the hermetic suite, which asserts the tree it produces rather than the strings
@@ -1018,6 +1167,13 @@ export function startDatadogAgents(componentDir) {
 			for (const [index, descriptor] of AGENTS.entries()) {
 				status.agents.push(launchOne(descriptor, binaries[index], runtime.paths, version));
 			}
+
+			// Before verifyReceiver, which waits up to 30s for the receiver to answer. Starting
+			// the reaper after that leaves a half-minute window in which the agents exist and
+			// nothing would stop them, and a node killed inside it orphans them.
+			// Deliberately not in `agents`: it is not a Datadog process, and the checks that
+			// count agents must not start counting it.
+			status.reaper = launchReaper(componentDir, runtime.paths, harperRootPath(), status.agents, version);
 
 			await verifyReceiver(status, runtime.paths);
 		} catch (error) {

@@ -38,6 +38,7 @@ no version-specific code.
 | --- | --- |
 | `resources.js` | Component entry. REST resources that log and trace. |
 | `dd-supervisor.js` | Starts both agents. Reached by a **relative** import, which is what makes the singleton real. |
+| `dd-reaper.js` | Stops both agents when the node stops. Its own process, because Harper gives a component no shutdown hook. |
 | `config.yaml` | Component config: `rest` + `jsResource`. |
 | `harper-config.example.yaml` | Keys to merge into the node's `harper-config.yaml`. |
 | `conf.d/harperdb.d/conf.yaml` | Datadog log source template for `hdb.log`. |
@@ -405,6 +406,51 @@ startup: it tries to spawn a command that cannot exist and requires the attempt 
 refused. Under Harper that throws `Command ... is not allowed` synchronously, with no
 process and no PID file created; under real Node it does not throw at all.
 
+## Shutting down
+
+Harper does not stop what a component spawned. `harper stop` sends one SIGTERM to one PID, the
+main process named in `<ROOTPATH>/hdb.pid` (`bin/stop.js`); the handler sets a flag, removes
+that file and calls `process.exit(0)` (`bin/run.js`). Worker threads are told nothing, and a
+worker's own `process.on('exit')` does not run when the main process exits (measured on Node
+24: neither `worker.terminate()`, nor `process.exit()` on main, nor SIGTERM to main fires it).
+Nothing sweeps `<ROOTPATH>/pids/`. Left alone, both agents survive the node, 8126 stays bound,
+and the PID files keep naming live processes.
+
+The obvious fix is worse than the defect. Agent lifetime is decoupled from the worker thread
+that won the spawn race **on purpose**: Harper recycles worker threads, and an agent tied to
+one dies every time. The one lifecycle hook a component gets, `scope.on('close')`, fires on
+exactly that recycle and stays silent on `harper stop`, so building on it would kill the agents
+on the event they were built to survive.
+
+So `dd-supervisor.js` starts a third process. `dd-reaper.js` takes its own PID lock
+(`datadog-agent-reaper`), which makes it one per node and decoupled from any thread in the same
+way the agents are. Because worker threads share a process, a spawn from a worker is a child of
+the **main** Harper process, so the reaper's parent is the PID `harper stop` signals. When that
+PID disappears it SIGTERMs each agent, escalates to SIGKILL after 5 seconds, and removes the
+PID files, its own included.
+
+It runs as `node dd-reaper.js`, which needs `node` in `allowedSpawnCommands`. That is already
+Harper's default and is in the template; the supervisor tries this Node's absolute path first,
+so allowlisting `process.execPath` works too and is immune to `PATH`.
+
+Two things it deliberately does not do:
+
+- **`harper restart` does not stop the agents.** Restart forks a fresh main process and exits
+  the old one, so the parent dies on a path where the agents should be kept. The reaper waits 8
+  seconds for a new `hdb.pid` to appear and stands down if one does, leaving the agents for the
+  new node to adopt. That window also keeps the reap from racing the new node's workers into
+  the PID files, which is the failure that does not heal: a worker that adopts a PID about to
+  be killed joins a corpse and reports "already running" forever.
+- **SIGKILL to Harper leaves `hdb.pid` behind**, because the handler that removes it never
+  runs. The reaper still reaps: the parent is gone and the PID in the stale file is not alive.
+
+What it cannot cover: SIGKILL to the reaper itself, and a machine that loses power. Both leave
+the original defect, and both leave PID files that Harper's own lock treats as stale and
+removes on the next start (`acquirePidFileLock` checks `isProcessRunning`).
+
+`/DatadogStatus/` reports it under `reaper`, deliberately outside `agents` so that counting
+agents keeps meaning what it meant.
+
 ## Non-root paths
 
 The deploy target runs as a non-root user (`USER harperdb` on `node:24-trixie`), where every
@@ -466,6 +512,8 @@ checks writability before spawning.
 | Nothing in Datadog, no errors anywhere | `DD_API_KEY` unset or wrong. Spans and logs are accepted locally and dropped at the intake. `/DatadogStatus/` reports `verdict: "rejected"` for this. |
 | `datadog-agent status` says `Traces: 0 payloads` | Not a symptom. `trace_writer` is zero on 7.73.0 through at least 7.82.1 whatever the agent is doing; two writers race for one expvar slot. Read `/DatadogStatus/`'s `delivery` instead. |
 | `delivery.verdict` is `unavailable` | Nothing answered `https://127.0.0.1:5012/debug/vars`. The trace-agent is not running, or `apm_config.debug.port` was moved by `DD_APM_DEBUG_PORT`. |
+| Agents still running after `harper stop` | The reaper did not start. Check `hdb.log` for `Harper refused to start the agent reaper` and put `node` back in `allowedSpawnCommands`, or read `<runtime dir>/logs/reaper.log`. |
+| Agents restarted by `harper restart` | Expected only if the new node took longer than 8s to write `<ROOTPATH>/hdb.pid`. The reaper stands down for a replacement it can see. |
 | Agent startup lines absent from `hdb.log` | `logging.level` is `warn` (Harper's default). Set it to `info`. |
 | `no log source was written, because Harper's root path could not be determined` | `ROOTPATH` is unset and `~/.harperdb/hdb_boot_properties.file` is absent, or its `settings_path` names a config with no absolute `rootPath`. Export `ROOTPATH`. |
 | Log source configured but nothing arrives | `logging.file` is off, or `logging.root`/`logging.path` moved the log off `<rootPath>/log/hdb.log`, which is the only place the source looks. |
