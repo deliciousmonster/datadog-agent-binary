@@ -16,8 +16,18 @@
 // registry, one that never had init() called on it. An uninitialised dd-trace is not visibly
 // inert: trace() still runs the callback and hands out spans with plausible trace ids, all of
 // them NoopSpans. isTracerLive() separates the two.
+import { threadId } from 'node:worker_threads';
+
 import tracer from 'dd-trace';
-import { startDatadogAgents } from './dd-supervisor.js';
+import { readDeliverySignal, startDatadogAgents, untraceAgentProbes } from './dd-supervisor.js';
+
+/**
+ * Before the first probe, not after. The supervisor polls the trace-agent until it answers,
+ * and dd-trace turns every refusal on the way into an errored client span attributed to this
+ * service. Registering the filter after startDatadogAgents() would leave exactly the spans
+ * this call exists to prevent.
+ */
+untraceAgentProbes(tracer);
 
 /**
  * Started at component load, not on first request, and deliberately not awaited: a rejected
@@ -25,6 +35,39 @@ import { startDatadogAgents } from './dd-supervisor.js';
  * holding the promise lets /DatadogStatus/ report the outcome.
  */
 const supervisor = startDatadogAgents(import.meta.dirname);
+
+/**
+ * One span per worker thread, at startup, saying whether that thread's tracer is real.
+ *
+ * Harper loads this component in every worker thread but does not serve HTTP from every one.
+ * On darwin and Windows the HTTP server binds without SO_REUSEPORT (`server.noReusePort` in
+ * Harper's `server/http.js`), so whichever worker wins the bind serves every request and the
+ * rest silently lose the race. A thread whose tracer never initialised is then invisible: no
+ * request reaches it, so it never emits the `tracerInitialized: false` that GET /Work/ would
+ * have reported. Measured on 5.2.6 with `threads.count: 8`: 4,000 requests, all served by
+ * thread 1.
+ *
+ * Chained off the supervisor rather than fired at load, because until the receiver answers
+ * there is nothing on 8126 to accept the span and dd-trace discards it without a word.
+ */
+supervisor.then((status) => {
+	const receiverBound = status.agents?.some((agent) => agent.kind === 'trace' && agent.receiverBound === true);
+	tracer.trace(
+		'harper.thread.ready',
+		{
+			resource: `worker thread ${threadId}`,
+			tags: { 'component': 'datadog-agent-binary-example', 'harper.thread_id': threadId },
+		},
+		(span) => {
+			const live = isTracerLive(span);
+			span.setTag('harper.tracer_initialized', live);
+			span.setTag('harper.receiver_bound', receiverBound);
+			const detail = `thread ${threadId}: tracer ${live ? 'live' : 'NOT INITIALISED'}, receiver ${receiverBound ? 'bound' : 'unavailable'}`;
+			if (live && receiverBound) log.info(`Datadog example: ${detail}. It emitted a harper.thread.ready span.`);
+			else log.error(`Datadog example: ${detail}. Spans from this thread are being discarded.`);
+		}
+	);
+});
 
 /** Harper seeds every component compartment with `logger`; entries land in hdb.log. */
 const log = typeof logger === 'undefined' ? console : logger;
@@ -51,7 +94,12 @@ export class Work extends Resource {
 			{
 				resource: 'GET /Work/',
 				type: 'web',
-				tags: { component: 'datadog-agent-binary-example' },
+				// Harper runs one component instance per worker thread and routes a request
+				// to whichever is free, so a trace carries no hint of which thread served it.
+				// Without this tag a node where seven of eight threads have a dead tracer
+				// looks in the UI exactly like one where all eight are healthy and the load
+				// is uneven.
+				tags: { 'component': 'datadog-agent-binary-example', 'harper.thread_id': threadId },
 			},
 			async (rootSpan) => {
 				const live = isTracerLive(rootSpan);
@@ -63,9 +111,10 @@ export class Work extends Resource {
 						'Datadog example: dd-trace is NOT initialised on this worker thread. The ' +
 							'span below is a NoopSpan and will never reach the trace-agent, even ' +
 							'though it has a trace id. Set threads.preloadRequire: dd-trace/init in ' +
-							'harperdb-config.yaml and restart Harper. threads.preload alone is not ' +
-							'enough: dd-trace/register.js only installs loader hooks, it does not ' +
-							'call init().'
+							"the node's harper-config.yaml (the path settings_path names in " +
+							'~/.harperdb/hdb_boot_properties.file) and restart Harper. ' +
+							'threads.preload alone is not enough: dd-trace/register.js only installs ' +
+							'loader hooks, it does not call init().'
 					);
 				}
 
@@ -98,6 +147,7 @@ export class Work extends Resource {
 					traceId,
 					traceId128,
 					tracerInitialized: live,
+					threadId,
 					service: process.env.DD_SERVICE || 'harper',
 					sum,
 					delayMs,
@@ -114,13 +164,22 @@ export class Work extends Resource {
  * GET /DatadogStatus/ reports what the supervisor did: whether Harper's spawn interception is
  * live, where the runtime tree went, the PID of each agent. Everything here fails silently by
  * default, which is why it gets an endpoint.
+ *
+ * `delivery` is read live on every request rather than captured at startup, because it is the
+ * one question an operator actually has and its answer changes minute to minute. It comes
+ * from the trace-agent's own counters, not from `datadog-agent status`, whose
+ * `Writer (previous minute)` section reads zero on a working node. See readDeliverySignal().
  */
 export class DatadogStatus extends Resource {
 	static async get() {
 		const status = await supervisor;
 		return {
 			...status,
+			// Which thread answered. Every field above it is per-thread state, so a single
+			// response says nothing about the node until you have seen one from each.
+			threadId,
 			tracerInitialized: tracer.trace('harper.status.probe', (span) => isTracerLive(span)),
+			delivery: await readDeliverySignal(),
 			verify: {
 				receiver: `curl -s 127.0.0.1:${status.receiverPort}/info`,
 				traces: 'curl -s -u <user>:<pass> http://localhost:9926/Work/',

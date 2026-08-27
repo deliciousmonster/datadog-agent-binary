@@ -38,8 +38,9 @@ no version-specific code.
 | --- | --- |
 | `resources.js` | Component entry. REST resources that log and trace. |
 | `dd-supervisor.js` | Starts both agents. Reached by a **relative** import, which is what makes the singleton real. |
+| `dd-reaper.js` | Stops both agents when the node stops. Its own process, because Harper gives a component no shutdown hook. |
 | `config.yaml` | Component config: `rest` + `jsResource`. |
-| `harper-config.example.yaml` | Keys to merge into the node's `harperdb-config.yaml`. |
+| `harper-config.example.yaml` | Keys to merge into the node's `harper-config.yaml`. |
 | `conf.d/harperdb.d/conf.yaml` | Datadog log source template for `hdb.log`. |
 
 The host-check configurations are not here. They carry no component-specific value, so they ship
@@ -112,16 +113,31 @@ space in it cannot be allowlisted by any configuration.
 
 ## 3. Configure the node
 
-Merge the blocks from `harper-config.example.yaml` into `<ROOTPATH>/harperdb-config.yaml`,
-substituting the two paths from step 2. Merge, do not replace: Harper reads the config file
-it finds and does not fall back to `defaultConfig.yaml` for keys a hand-written file omits.
+Merge the blocks from `harper-config.example.yaml` into `<ROOTPATH>/harper-config.yaml`,
+substituting the two paths from step 2. Merge, do not replace: Harper reads one config file
+and does not fall back to `defaultConfig.yaml` for keys a hand-written file omits.
 
-**The template's name ends in `.example.yaml` deliberately.** Harper resolves its node
-config as `harper-config.yaml` first (`HARPER_CONFIG_FILE`) and only then
-`harperdb-config.yaml` (`HDB_CONFIG_FILE`). A file literally named `harper-config.yaml`
-sitting in the application directory is therefore read as the node's real configuration:
-`harper run .` would load the placeholder paths below, leave `rootPath` unset so `database`
-and `keys/` resolve against the app directory, fail startup on
+**`harper-config.yaml` is the file, and on an installed node it is the only one.**
+`harper install` writes it (`createBootPropertiesFile()` joins `HARPER_CONFIG_FILE`,
+`utility/install/installer.js`) and records its absolute path in
+`~/.harperdb/hdb_boot_properties.file` as `settings_path`. A booted node reads whatever that
+line names, so the filename is not even consulted. Only when Harper runs with `ROOTPATH` set
+and no boot file does it probe by name: `harper-config.yaml` first (`HARPER_CONFIG_FILE`),
+then the legacy `harperdb-config.yaml` (`HDB_CONFIG_FILE`) if the first is absent
+(`getConfigFilePath()`, `config/configUtils.js`). Exactly one file is ever parsed; there is no
+merge across the two.
+
+So creating `harperdb-config.yaml` next to the `harper-config.yaml` the installer already
+wrote puts every key in a file nothing opens. The allowlist, both `threads` keys and the
+`logging` level all go missing at once, and the only symptom is
+`Command /... is not allowed` from the first spawn. `harperdb-config.yaml` is inherited from
+the old `harperdb` package and survives only on nodes carried forward from it; nothing renames
+it on upgrade. Every release of the `harper` package, 5.0 through 5.2, writes the new name.
+
+**The template's name ends in `.example.yaml` deliberately.** A file literally named
+`harper-config.yaml` sitting in the application directory is read as the node's real
+configuration under `harper run .`: it would load the placeholder paths below, leave
+`rootPath` unset so `database` and `keys/` resolve against the app directory, fail startup on
 `Specified path <app>/database does not exist`, and then **overwrite the template** with a
 generated config. Keep the shipped template under a name Harper does not claim.
 
@@ -238,6 +254,59 @@ an `Error` whose stack runs to three physical lines. The second one exercises th
 `multi_line` rule in `conf.d/harperdb.d/conf.yaml`; without that rule each `at ...` frame
 arrives in Datadog as its own log entry.
 
+## 7. Ask whether it is actually delivering
+
+```bash
+curl -s -u HDB_ADMIN:password http://localhost:9926/DatadogStatus/ | jq .delivery
+```
+
+```json
+{
+	"source": "https://127.0.0.1:5012/debug/vars",
+	"window": "the last completed minute; the agent resets these counters, so they are not cumulative",
+	"verdict": "delivering",
+	"detail": "the intake accepted 3 payload(s) in the last minute.",
+	"receiver": { "tracesReceived": 20, "spansReceived": 80, "payloadRefused": 0, "clients": ["nodejs 6.12.0"] },
+	"statsWriter": { "payloads": 3, "errors": 0, "retries": 0 },
+	"everDelivered": true
+}
+```
+
+| `verdict` | What it means |
+| --- | --- |
+| `delivering` | The intake accepted an authenticated payload in the last minute. |
+| `rejected` | Payloads went out and every one came back refused. Check `DD_API_KEY` and `DD_SITE`. |
+| `not-delivering` | Spans are arriving at the agent and none have been accepted. Read it again first: both windows reset each minute. |
+| `idle` | Nothing arrived in the last minute, or the receiver's snapshot is left over from an earlier one. `everDelivered` says whether this thread ever saw delivery work. |
+| `unavailable` | Nothing answered the expvar endpoint. The trace-agent is not running. |
+
+**Do not read `Traces: 0 payloads` off `datadog-agent status`.** That section renders
+`trace_writer` out of the trace-agent's expvar, and on 7.73.0 through at least 7.82.1 that key
+is zero no matter what the agent is doing. Upstream constructs a `TraceWriter` and a
+`TraceWriterV1` unconditionally (`pkg/trace/agent/agent.go`), each starts a `reporter()`
+goroutine whose second statement is `info.UpdateTraceWriterInfo(w.statsLastMinute)`, and that
+function assigns one global pointer (`pkg/trace/info/writer.go`). Last registration wins, and
+the v1.0 writer receives nothing from a tracer posting to `/v0.4/traces`, so the published
+struct usually belongs to a writer that never sends anything. Measured against the shipped
+binary: 55 samples over two minutes, spans flowing, payloads retried and dropped, and all nine
+`trace_writer` fields zero in every sample while `receiver` and `stats_writer` moved normally.
+
+One quirk of the receiver counters is worth knowing, because reading them naively reproduces
+the very failure this section is about. Upstream refreshes the `receiver` snapshot only when a
+payload arrives, so a node that has gone quiet keeps publishing its last busy minute while the
+stats window correctly resets to zero. Taken together those two say "spans are arriving and
+none are accepted", which is a healthy node described as broken. `delivery` separates them on
+whether the stats writer saw any work at all in the same minute: the concentrator builds its
+buckets from spans that were received, before anything is sent, so real traffic always leaves
+`StatsBuckets` or `ClientPayloads` behind even when delivery fails.
+
+`stats_writer` is what `delivery` reads instead, and it is a real signal rather than a stand-in
+for one. It has a single producer, so it cannot lose that race; its `Payloads` counter
+increments only on the sender's 2xx branch; and its payloads go to the same host with the same
+API key over the same sender as the trace payloads, built only from spans that were actually
+received. Verified with a deliberately wrong key: the receiver counters climbed,
+`stats_writer.Retries` climbed, and `Payloads` stayed at zero.
+
 ## Verifying without a Datadog account
 
 The trace-agent accepts spans whether or not the API key is valid, so everything up to the
@@ -256,9 +325,9 @@ pgrep -f 'bin/(datadog-agent|trace-agent)' | wc -l   # 2
 curl -s -u HDB_ADMIN:password http://localhost:9926/DatadogStatus/ | jq
 ```
 
-For proof that spans arrive, call `/Work/` a few times and watch the trace-agent's periodic
-summary in `<runtime dir>/logs/trace-agent.log` (the agents write their own log files; no
-worker thread collects their output). `traces received` climbing is the end-to-end signal:
+`/DatadogStatus/`'s `delivery.receiver` carries the same counters without a log file. Reading
+the log directly still works, and is the only place a trace payload's own round trip is
+printed:
 
 ```
 [TRACE] ... INFO (...): [lang:nodejs ...] -> traces received: 4, traces filtered: 0,
@@ -346,6 +415,113 @@ startup: it tries to spawn a command that cannot exist and requires the attempt 
 refused. Under Harper that throws `Command ... is not allowed` synchronously, with no
 process and no PID file created; under real Node it does not throw at all.
 
+## Log severity
+
+Every entry from this component arrives in Datadog as **Info**, whatever level Harper wrote.
+Measured on the deployed node over one lifetime: 2,152 `[info]` entries, 2,109 `[warn]`, 2
+`[error]`, and in Datadog `Error 0` and `Warn 0` against 33.6K Info.
+
+Not the `multi_line` rule folding them away. That rule starts a new entry at an ISO-8601
+timestamp, and Harper begins every entry with one, including the `warn` that carries the stack
+trace. The counts confirm it: `LogsProcessed: 24566` matched exactly the 24,566 timestamped
+lines in the file, with the 49,300 stack-trace lines appended to them.
+
+The cause is that nothing conveys the level. Harper's format is
+`<timestamp> [<thread>] [<level>]: <message>` and is not JSON, and the Agent's
+`log_processing_rules` only do `exclude_at_match`, `include_at_match`, `mask_sequences` and
+`multi_line` — none of them set a log's status. Harper 5.2.6 has no JSON logging mode
+(`logging.*` offers level, file, rotation and the audit log, and no format). So the Agent
+cannot fix this and neither can the component.
+
+A Datadog **log pipeline** can, and it is the only thing that can. Create one filtered on
+`source:harper`, which is why the shipped log source now sets that attribute:
+
+1. **Grok Parser** on the log message:
+
+   ```
+   harper_entry %{notSpace:timestamp}\s+\[%{notSpace:harper.thread}\]\s+\[%{word:level}\]:\s+%{data:msg}
+   ```
+
+2. **Date Remapper** on `timestamp`, so the entry carries Harper's own time rather than
+   arrival time.
+3. **Status Remapper** on `level`. Harper's levels (`trace`, `debug`, `info`, `warn`, `error`,
+   `fatal`, `notify`) map onto Datadog's without translation.
+
+`harper.thread` is a bonus and a useful one here: it makes a log line attributable to the
+worker thread that wrote it, which is the same question
+[Worker threads](#worker-threads-and-which-of-them-you-will-hear-from) answers for spans.
+
+Not verified against a live pipeline: no application key exists on the machine this was
+measured on, so the grok rule above is written from the format and has not been run through
+Datadog's parser.
+
+## Worker threads, and which of them you will hear from
+
+Harper loads this component in every worker thread. It does not serve HTTP from every one.
+
+On darwin and Windows the HTTP server is bound without SO_REUSEPORT (`server.noReusePort`,
+Harper's `server/http.js`), so every worker attempts an exclusive bind, the first wins, and the
+rest lose the race silently. Measured on 5.2.6 with `threads.count: 8`: 4,000 requests at 400/s
+were all served by thread 1, and `lsof` showed one listening socket on 9926, not eight. On
+Linux the same code binds with SO_REUSEPORT and the kernel spreads connections across all of
+them.
+
+The component still runs everywhere, which is the part that matters here: all eight threads
+detect spawn interception, join the PID-file singleton, and initialise their own `dd-trace`.
+The hazard is that a thread whose tracer never initialised is invisible on a platform where no
+request will ever reach it. So each thread emits one `harper.thread.ready` span once the
+receiver answers, tagged `harper.thread_id`, `harper.tracer_initialized` and
+`harper.receiver_bound`, and logs the same thing to `hdb.log`. Count the distinct
+`harper.thread_id` values on that span in Datadog: one per thread, or a thread is broken.
+
+`GET /Work/` and `/DatadogStatus/` also report `threadId`, which is what tells you a trace came
+from a thread rather than from the node.
+
+## Shutting down
+
+Harper does not stop what a component spawned. `harper stop` sends one SIGTERM to one PID, the
+main process named in `<ROOTPATH>/hdb.pid` (`bin/stop.js`); the handler sets a flag, removes
+that file and calls `process.exit(0)` (`bin/run.js`). Worker threads are told nothing, and a
+worker's own `process.on('exit')` does not run when the main process exits (measured on Node
+24: neither `worker.terminate()`, nor `process.exit()` on main, nor SIGTERM to main fires it).
+Nothing sweeps `<ROOTPATH>/pids/`. Left alone, both agents survive the node, 8126 stays bound,
+and the PID files keep naming live processes.
+
+The obvious fix is worse than the defect. Agent lifetime is decoupled from the worker thread
+that won the spawn race **on purpose**: Harper recycles worker threads, and an agent tied to
+one dies every time. The one lifecycle hook a component gets, `scope.on('close')`, fires on
+exactly that recycle and stays silent on `harper stop`, so building on it would kill the agents
+on the event they were built to survive.
+
+So `dd-supervisor.js` starts a third process. `dd-reaper.js` takes its own PID lock
+(`datadog-agent-reaper`), which makes it one per node and decoupled from any thread in the same
+way the agents are. Because worker threads share a process, a spawn from a worker is a child of
+the **main** Harper process, so the reaper's parent is the PID `harper stop` signals. When that
+PID disappears it SIGTERMs each agent, escalates to SIGKILL after 5 seconds, and removes the
+PID files, its own included.
+
+It runs as `node dd-reaper.js`, which needs `node` in `allowedSpawnCommands`. That is already
+Harper's default and is in the template; the supervisor tries this Node's absolute path first,
+so allowlisting `process.execPath` works too and is immune to `PATH`.
+
+Two things it deliberately does not do:
+
+- **`harper restart` does not stop the agents.** Restart forks a fresh main process and exits
+  the old one, so the parent dies on a path where the agents should be kept. The reaper waits 8
+  seconds for a new `hdb.pid` to appear and stands down if one does, leaving the agents for the
+  new node to adopt. That window also keeps the reap from racing the new node's workers into
+  the PID files, which is the failure that does not heal: a worker that adopts a PID about to
+  be killed joins a corpse and reports "already running" forever.
+- **SIGKILL to Harper leaves `hdb.pid` behind**, because the handler that removes it never
+  runs. The reaper still reaps: the parent is gone and the PID in the stale file is not alive.
+
+What it cannot cover: SIGKILL to the reaper itself, and a machine that loses power. Both leave
+the original defect, and both leave PID files that Harper's own lock treats as stale and
+removes on the next start (`acquirePidFileLock` checks `isProcessRunning`).
+
+`/DatadogStatus/` reports it under `reaper`, deliberately outside `agents` so that counting
+agents keeps meaning what it meant.
+
 ## Non-root paths
 
 The deploy target runs as a non-root user (`USER harperdb` on `node:24-trixie`), where every
@@ -397,13 +573,21 @@ checks writability before spawning.
 | Symptom | Cause |
 | --- | --- |
 | `HARPER'S SPAWN INTERCEPTION IS NOT ACTIVE` | Supervisor not reached by a relative import, or `child_process` pulled in with `require()`, or `applications.moduleLoader: native`. |
-| `Command /... is not allowed` | Path not in `allowedSpawnCommands`, or Harper not restarted after the edit, or the path contains a space. |
+| `Command /... is not allowed` | Most often the whole config edit landed in a file Harper never opened: on an installed node it reads the absolute path in `settings_path` (`~/.harperdb/hdb_boot_properties.file`), which is the `harper-config.yaml` the installer wrote, and a hand-created `harperdb-config.yaml` beside it is never parsed. Failing that, the path is not in `allowedSpawnCommands`, or contains a space, or Harper was not restarted after the edit. |
+| Every node-level key looks ignored at once | Same cause. `threads.preloadRequire` missing (`tracerInitialized: false`), the allowlist missing, and `logging.level` still at `warn` in one go is the signature of editing the wrong file. `cat $(grep settings_path ~/.harperdb/hdb_boot_properties.file \| cut -d= -f2)` prints the one Harper reads. |
 | `tracerInitialized: false` | `threads.preloadRequire: dd-trace/init` missing. `preload` alone initialises nothing. |
+| Fewer `harper.thread_id` values than `threads.count` | A thread loaded the component but its tracer is dead, or it never reached the receiver. `hdb.log` carries the matching `Spans from this thread are being discarded` line. |
+| One thread serves every request | Expected on darwin and Windows: the HTTP port is bound without SO_REUSEPORT and the first worker to bind wins. Not a configuration error, and not something `threads.count` changes. |
 | `curl 127.0.0.1:8126/info` refused | trace-agent not running. Check `hdb.log` and `<runtime>/logs/trace-agent.log`. |
 | trace-agent exits immediately, non-zero | Something else holds 8126, or `datadog.yaml` is missing at the path passed to `-c`. |
 | trace-agent hangs ~30s then dies on its auth token | Its config directory is not writable. |
 | Stack traces arrive as one log per line | The `multi_line` rule is not reaching the agent. Check `confd_path` and the rendered `conf.d/harperdb.d/conf.yaml`. |
-| Nothing in Datadog, no errors anywhere | `DD_API_KEY` unset or wrong. Spans and logs are accepted locally and dropped at the intake. |
+| Every log is `Info`, `status:error` finds nothing | Expected without a log pipeline. Harper's format is not JSON and the Agent cannot set a log's status. See [Log severity](#log-severity). |
+| Nothing in Datadog, no errors anywhere | `DD_API_KEY` unset or wrong. Spans and logs are accepted locally and dropped at the intake. `/DatadogStatus/` reports `verdict: "rejected"` for this. |
+| `datadog-agent status` says `Traces: 0 payloads` | Not a symptom. `trace_writer` is zero on 7.73.0 through at least 7.82.1 whatever the agent is doing; two writers race for one expvar slot. Read `/DatadogStatus/`'s `delivery` instead. |
+| `delivery.verdict` is `unavailable` | Nothing answered `https://127.0.0.1:5012/debug/vars`. The trace-agent is not running, or `apm_config.debug.port` was moved by `DD_APM_DEBUG_PORT`. |
+| Agents still running after `harper stop` | The reaper did not start. Check `hdb.log` for `Harper refused to start the agent reaper` and put `node` back in `allowedSpawnCommands`, or read `<runtime dir>/logs/reaper.log`. |
+| Agents restarted by `harper restart` | Expected only if the new node took longer than 8s to write `<ROOTPATH>/hdb.pid`. The reaper stands down for a replacement it can see. |
 | Agent startup lines absent from `hdb.log` | `logging.level` is `warn` (Harper's default). Set it to `info`. |
 | `no log source was written, because Harper's root path could not be determined` | `ROOTPATH` is unset and `~/.harperdb/hdb_boot_properties.file` is absent, or its `settings_path` names a config with no absolute `rootPath`. Export `ROOTPATH`. |
 | Log source configured but nothing arrives | `logging.file` is off, or `logging.root`/`logging.path` moved the log off `<rootPath>/log/hdb.log`, which is the only place the source looks. |

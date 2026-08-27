@@ -34,7 +34,12 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFi
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { setupHarperWithFixture, teardownHarper, type ContextWithHarper } from '@harperfast/integration-testing';
+import {
+	sendOperation,
+	setupHarperWithFixture,
+	teardownHarper,
+	type ContextWithHarper,
+} from '@harperfast/integration-testing';
 import {
 	darwinLoopbackSkipReason,
 	errorMessage,
@@ -57,6 +62,8 @@ const APP_NAME = 'datadog-example-app';
 const TRACE_AGENT_NAME = 'datadog-trace-agent';
 const CORE_AGENT_NAME = 'datadog-agent';
 const AGENT_NAMES = [TRACE_AGENT_NAME, CORE_AGENT_NAME];
+/** The reaper's own PID lock. Deliberately not in AGENT_NAMES: it is not a Datadog process. */
+const REAPER_NAME = 'datadog-agent-reaper';
 
 const harperBinPath = resolveHarperBinPath();
 
@@ -108,6 +115,8 @@ type SupervisorStatus = {
 	service?: string;
 	/** Core checks whose configuration reached the runtime conf.d, by check name. */
 	coreChecks?: string[];
+	/** The process that stops the agents when this node does. Never in `agents`. */
+	reaper?: { name: string; started: boolean; pid?: number; adopted?: boolean; command?: string; error?: string };
 	version?: number;
 	error?: string;
 };
@@ -181,6 +190,9 @@ function assembleFixtureApp(
 	const appDir = join(workspace.dir, APP_NAME);
 	cpSync(FIXTURE_PATH, appDir, { recursive: true });
 	cpSync(join(EXAMPLE_DIR, 'dd-supervisor.js'), join(appDir, 'dd-supervisor.js'));
+	// The supervisor spawns this by absolute path inside the component directory, so an
+	// assembled app without it has no reaper and the agents outlive the node.
+	cpSync(join(EXAMPLE_DIR, 'dd-reaper.js'), join(appDir, 'dd-reaper.js'));
 	// Omitted, not corrupted: an absent template is what an operator who renamed or
 	// never created conf.d/harperdb.d/conf.yaml actually has.
 	if (!omitLogsTemplate) cpSync(join(EXAMPLE_DIR, 'conf.d'), join(appDir, 'conf.d'), { recursive: true });
@@ -372,9 +384,10 @@ async function teardown(
 			for (const agent of status.agents) {
 				if (typeof agent.pid === 'number' && agent.pid > 0) pids.add(agent.pid);
 			}
+			if (typeof status.reaper?.pid === 'number' && status.reaper.pid > 0) pids.add(status.reaper.pid);
 		}
 		if (ctx.harper?.dataRootDir) {
-			for (const name of AGENT_NAMES) {
+			for (const name of [...AGENT_NAMES, REAPER_NAME]) {
 				const record = readPidRecord(ctx.harper.dataRootDir, name);
 				if (record) pids.add(record.pid);
 			}
@@ -641,6 +654,27 @@ suite('the shipped example supervisor under Harper v5 spawn enforcement', { skip
 			assert.ok(record, `missing ${pidFilePath(ctx.harper.dataRootDir, name)}`);
 			assert.equal(record!.version, version, `${name}: line 2 of the PID file must round-trip the fingerprint`);
 		}
+	});
+
+	test('the node config file a real Harper writes is the one the docs name', () => {
+		// The docs guard in test/unit/node-config-filename.test.js checks the documents
+		// against each other, which cannot catch both of them being wrong together. This
+		// checks them against a Harper that just wrote its own config. The harness boots
+		// with --ROOTPATH and an isolated HOME, so getConfigFilePath() takes the
+		// probe-by-name branch, which is the only branch where the filename decides
+		// anything.
+		const rootPath = ctx.harper.dataRootDir;
+		assert.ok(
+			existsSync(join(rootPath, 'harper-config.yaml')),
+			`Harper wrote no harper-config.yaml into ${rootPath}. Every document in this ` +
+				`repo tells the reader to edit that file; if Harper stopped writing it, they ` +
+				`are all sending keys somewhere nothing reads.`
+		);
+		assert.ok(
+			!existsSync(join(rootPath, 'harperdb-config.yaml')),
+			'Harper wrote the legacy harperdb-config.yaml. The docs describe it as read only ' +
+				'as a fallback for nodes carried over from the old harperdb package.'
+		);
 	});
 
 	test("the runtime tree is rendered from the example's templates", () => {
@@ -924,3 +958,122 @@ suite(
 		});
 	}
 );
+
+/**
+ * Agent lifetime against the two events that must produce opposite outcomes.
+ *
+ * The defect: the agents outlive `harper stop`, leaving 127.0.0.1:8126 bound and PID files
+ * naming live processes after the node that owns them is gone. The reason it was not already
+ * fixed: agent lifetime is decoupled from the worker thread that won the spawn race on
+ * purpose, because Harper recycles that thread and the agents must not die with it. So a
+ * naive parent-exit handler reintroduces the bug it was written to prevent, and both halves
+ * have to be proven on the same node.
+ *
+ * Its own Harper, because the second test kills it. `harper stop` is one SIGTERM to the PID
+ * in `<root>/hdb.pid` (`bin/stop.js` reads it through `getHDBProcessInfo()` and runs
+ * `kill <pid>`), so that is what is sent here rather than the harness's tree-wide teardown,
+ * which would kill the agents itself and prove nothing.
+ */
+suite('agent lifetime across a worker recycle and a node shutdown', { skip: SKIP_REASON }, (suiteContext) => {
+	const ctx = harperContext(suiteContext);
+	let workspace: Workspace;
+	let rows: ProbeRow[];
+	/** PIDs observed while the node was up: two agents and the reaper. */
+	let agentPids: number[];
+	let reaperPid: number | undefined;
+
+	before(async () => {
+		({ workspace, rows } = await startSupervisorRun(ctx, (ws) => ({
+			binaries: { core: ws.longLivedCommand, trace: ws.longLivedCommand },
+		})));
+		const records = AGENT_NAMES.map((name) => readPidRecord(ctx.harper.dataRootDir, name));
+		agentPids = records.flatMap((record) => (record ? [record.pid] : []));
+		reaperPid = readPidRecord(ctx.harper.dataRootDir, REAPER_NAME)?.pid;
+	});
+
+	after(() => teardown(ctx, workspace, rows));
+
+	test('the node started exactly one reaper, and it is not counted as an agent', () => {
+		for (const { threadId, status } of supervisorStatuses(rows)) {
+			assert.ok(status.reaper, `thread ${threadId}: no reaper was reported`);
+			assert.equal(
+				status.reaper!.started,
+				true,
+				`thread ${threadId}: the reaper did not start (${status.reaper!.error}). Without it ` +
+					`the agents outlive \`harper stop\`.`
+			);
+			// The suites above count agents and assert on the exact contents of `agents`.
+			// A reaper folded into that list would break the singleton arithmetic and
+			// silently change what "one core agent and one trace-agent" means.
+			assert.deepEqual(
+				status.agents.map((agent) => agent.name),
+				AGENT_NAMES,
+				`thread ${threadId}: the reaper must not appear in the agents list`
+			);
+		}
+		const pids = new Set(supervisorStatuses(rows).map(({ status }) => status.reaper?.pid));
+		assert.equal(pids.size, 1, `threads saw different reapers: ${[...pids].join(', ')}`);
+		assert.ok(reaperPid && isAlive(reaperPid), `${REAPER_NAME}.pid does not name a live process`);
+	});
+
+	test('SURVIVES: a worker recycle leaves the agents and the reaper untouched', async () => {
+		// `restart_service` with http_workers reaches `restartWorkers('http')` on the main
+		// thread (`bin/restart.js`): the worker threads are replaced inside the same process.
+		// That is the event agent lifetime was decoupled from, and the one a parent-exit
+		// handler in the worker would have turned back into a kill.
+		assert.equal(agentPids.length, 2, 'both agents must be running before the recycle');
+		await sendOperation(ctx.harper, { operation: 'restart_service', service: 'http_workers' });
+
+		// Long enough for the replacement threads to load the component and run the
+		// supervisor, which is when a broken decoupling would show.
+		await sleep(8000);
+
+		for (const pid of agentPids) {
+			assert.ok(isAlive(pid), `agent pid ${pid} died on a worker recycle; it must survive one`);
+		}
+		assert.ok(isAlive(reaperPid!), `the reaper (pid ${reaperPid}) died on a worker recycle`);
+		for (const name of [...AGENT_NAMES, REAPER_NAME]) {
+			const record = readPidRecord(ctx.harper.dataRootDir, name);
+			assert.ok(record, `${name}.pid was removed by a worker recycle`);
+		}
+		// The replacement threads adopted rather than started: same PIDs, so the node still
+		// has one of each and the recycle cost nothing.
+		assert.deepEqual(
+			AGENT_NAMES.map((name) => readPidRecord(ctx.harper.dataRootDir, name)!.pid),
+			agentPids,
+			'the recycle replaced the agents instead of leaving them alone'
+		);
+	});
+
+	test('DIES: the agents and the reaper exit when the node does, and take their PID files', async () => {
+		const hdbPidFile = join(ctx.harper.dataRootDir, 'hdb.pid');
+		assert.ok(existsSync(hdbPidFile), `${hdbPidFile} is missing, so there is no node PID to signal`);
+		const harperPid = Number.parseInt(readFileSync(hdbPidFile, 'utf8').trim(), 10);
+		assert.ok(isAlive(harperPid), `hdb.pid names ${harperPid}, which is not running`);
+
+		// Exactly what `harper stop` sends: SIGTERM to that one PID. Not the process group,
+		// which would kill the agents whether or not anything in this package worked.
+		process.kill(harperPid, 'SIGTERM');
+		assert.ok(await waitUntil(() => !isAlive(harperPid), { timeoutMs: 30000 }), 'Harper did not exit on SIGTERM');
+
+		for (const pid of agentPids) {
+			assert.ok(
+				await waitUntil(() => !isAlive(pid), { timeoutMs: 40000 }),
+				`agent pid ${pid} outlived the node. This is the defect: the process keeps ` +
+					`127.0.0.1:8126 bound after the Harper that started it is gone.`
+			);
+		}
+		assert.ok(
+			await waitUntil(() => !isAlive(reaperPid!), { timeoutMs: 20000 }),
+			'the reaper did not exit after reaping'
+		);
+
+		for (const name of [...AGENT_NAMES, REAPER_NAME]) {
+			const file = pidFilePath(ctx.harper.dataRootDir, name);
+			assert.ok(
+				await waitUntil(() => !existsSync(file), { timeoutMs: 20000 }),
+				`${file} was left behind naming a process that is gone`
+			);
+		}
+	});
+});
