@@ -16,6 +16,8 @@
 // registry, one that never had init() called on it. An uninitialised dd-trace is not visibly
 // inert: trace() still runs the callback and hands out spans with plausible trace ids, all of
 // them NoopSpans. isTracerLive() separates the two.
+import { threadId } from 'node:worker_threads';
+
 import tracer from 'dd-trace';
 import { startDatadogAgents } from './dd-supervisor.js';
 
@@ -51,7 +53,12 @@ export class Work extends Resource {
 			{
 				resource: 'GET /Work/',
 				type: 'web',
-				tags: { component: 'datadog-agent-binary-example' },
+				// Harper runs one component instance per worker thread and routes a request
+				// to whichever is free, so a trace carries no hint of which thread served it.
+				// Without this tag a node where seven of eight threads have a dead tracer
+				// looks in the UI exactly like one where all eight are healthy and the load
+				// is uneven.
+				tags: { 'component': 'datadog-agent-binary-example', 'harper.thread_id': threadId },
 			},
 			async (rootSpan) => {
 				const live = isTracerLive(rootSpan);
@@ -63,9 +70,10 @@ export class Work extends Resource {
 						'Datadog example: dd-trace is NOT initialised on this worker thread. The ' +
 							'span below is a NoopSpan and will never reach the trace-agent, even ' +
 							'though it has a trace id. Set threads.preloadRequire: dd-trace/init in ' +
-							'harperdb-config.yaml and restart Harper. threads.preload alone is not ' +
-							'enough: dd-trace/register.js only installs loader hooks, it does not ' +
-							'call init().'
+							"the node's harper-config.yaml (the path settings_path names in " +
+							'~/.harperdb/hdb_boot_properties.file) and restart Harper. ' +
+							'threads.preload alone is not enough: dd-trace/register.js only installs ' +
+							'loader hooks, it does not call init().'
 					);
 				}
 
@@ -98,6 +106,7 @@ export class Work extends Resource {
 					traceId,
 					traceId128,
 					tracerInitialized: live,
+					threadId,
 					service: process.env.DD_SERVICE || 'harper',
 					sum,
 					delayMs,
@@ -120,6 +129,9 @@ export class DatadogStatus extends Resource {
 		const status = await supervisor;
 		return {
 			...status,
+			// Which thread answered. Every field above it is per-thread state, so a single
+			// response says nothing about the node until you have seen one from each.
+			threadId,
 			tracerInitialized: tracer.trace('harper.status.probe', (span) => isTracerLive(span)),
 			verify: {
 				receiver: `curl -s 127.0.0.1:${status.receiverPort}/info`,

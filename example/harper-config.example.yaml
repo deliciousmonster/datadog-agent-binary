@@ -1,10 +1,15 @@
 # Node-level Harper configuration for the Datadog example.
 #
 # THIS IS NOT A DROP-IN FILE. It is the set of keys to add to, or change in, the
-# harperdb-config.yaml Harper generates at <ROOTPATH>/harperdb-config.yaml on first run. Copy
-# the blocks below into that file rather than replacing it: Harper reads the file it finds and
-# does not fall back to defaultConfig.yaml for keys a hand-written config omits, so a config
+# harper-config.yaml `harper install` writes at <ROOTPATH>/harper-config.yaml. Copy the blocks
+# below into that file rather than replacing it: Harper parses exactly one config file and does
+# not fall back to defaultConfig.yaml for keys a hand-written config omits, so a config
 # containing only the `applications` block would leave every other setting undefined.
+#
+# The file to edit is the one `settings_path` names in ~/.harperdb/hdb_boot_properties.file.
+# `harperdb-config.yaml` is the legacy name, read only when Harper runs with ROOTPATH set and
+# no harper-config.yaml exists. Creating one beside an installed node's harper-config.yaml
+# produces a file nothing opens, and the first symptom is `Command /... is not allowed`.
 #
 # Everything here is node-level; none of it belongs in the component's own config.yaml.
 # Restart Harper after editing. The spawn allowlist is captured once at module load

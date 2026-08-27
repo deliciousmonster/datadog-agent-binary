@@ -643,6 +643,27 @@ suite('the shipped example supervisor under Harper v5 spawn enforcement', { skip
 		}
 	});
 
+	test('the node config file a real Harper writes is the one the docs name', () => {
+		// The docs guard in test/unit/node-config-filename.test.js checks the documents
+		// against each other, which cannot catch both of them being wrong together. This
+		// checks them against a Harper that just wrote its own config. The harness boots
+		// with --ROOTPATH and an isolated HOME, so getConfigFilePath() takes the
+		// probe-by-name branch, which is the only branch where the filename decides
+		// anything.
+		const rootPath = ctx.harper.dataRootDir;
+		assert.ok(
+			existsSync(join(rootPath, 'harper-config.yaml')),
+			`Harper wrote no harper-config.yaml into ${rootPath}. Every document in this ` +
+				`repo tells the reader to edit that file; if Harper stopped writing it, they ` +
+				`are all sending keys somewhere nothing reads.`
+		);
+		assert.ok(
+			!existsSync(join(rootPath, 'harperdb-config.yaml')),
+			'Harper wrote the legacy harperdb-config.yaml. The docs describe it as read only ' +
+				'as a fallback for nodes carried over from the old harperdb package.'
+		);
+	});
+
 	test("the runtime tree is rendered from the example's templates", () => {
 		const [{ status }] = supervisorStatuses(rows);
 		// Nothing in the Harper process's environment names either path: ROOTPATH is

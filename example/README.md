@@ -39,7 +39,7 @@ no version-specific code.
 | `resources.js` | Component entry. REST resources that log and trace. |
 | `dd-supervisor.js` | Starts both agents. Reached by a **relative** import, which is what makes the singleton real. |
 | `config.yaml` | Component config: `rest` + `jsResource`. |
-| `harper-config.example.yaml` | Keys to merge into the node's `harperdb-config.yaml`. |
+| `harper-config.example.yaml` | Keys to merge into the node's `harper-config.yaml`. |
 | `conf.d/harperdb.d/conf.yaml` | Datadog log source template for `hdb.log`. |
 
 The host-check configurations are not here. They carry no component-specific value, so they ship
@@ -112,16 +112,31 @@ space in it cannot be allowlisted by any configuration.
 
 ## 3. Configure the node
 
-Merge the blocks from `harper-config.example.yaml` into `<ROOTPATH>/harperdb-config.yaml`,
-substituting the two paths from step 2. Merge, do not replace: Harper reads the config file
-it finds and does not fall back to `defaultConfig.yaml` for keys a hand-written file omits.
+Merge the blocks from `harper-config.example.yaml` into `<ROOTPATH>/harper-config.yaml`,
+substituting the two paths from step 2. Merge, do not replace: Harper reads one config file
+and does not fall back to `defaultConfig.yaml` for keys a hand-written file omits.
 
-**The template's name ends in `.example.yaml` deliberately.** Harper resolves its node
-config as `harper-config.yaml` first (`HARPER_CONFIG_FILE`) and only then
-`harperdb-config.yaml` (`HDB_CONFIG_FILE`). A file literally named `harper-config.yaml`
-sitting in the application directory is therefore read as the node's real configuration:
-`harper run .` would load the placeholder paths below, leave `rootPath` unset so `database`
-and `keys/` resolve against the app directory, fail startup on
+**`harper-config.yaml` is the file, and on an installed node it is the only one.**
+`harper install` writes it (`createBootPropertiesFile()` joins `HARPER_CONFIG_FILE`,
+`utility/install/installer.js`) and records its absolute path in
+`~/.harperdb/hdb_boot_properties.file` as `settings_path`. A booted node reads whatever that
+line names, so the filename is not even consulted. Only when Harper runs with `ROOTPATH` set
+and no boot file does it probe by name: `harper-config.yaml` first (`HARPER_CONFIG_FILE`),
+then the legacy `harperdb-config.yaml` (`HDB_CONFIG_FILE`) if the first is absent
+(`getConfigFilePath()`, `config/configUtils.js`). Exactly one file is ever parsed; there is no
+merge across the two.
+
+So creating `harperdb-config.yaml` next to the `harper-config.yaml` the installer already
+wrote puts every key in a file nothing opens. The allowlist, both `threads` keys and the
+`logging` level all go missing at once, and the only symptom is
+`Command /... is not allowed` from the first spawn. `harperdb-config.yaml` is inherited from
+the old `harperdb` package and survives only on nodes carried forward from it; nothing renames
+it on upgrade. Every release of the `harper` package, 5.0 through 5.2, writes the new name.
+
+**The template's name ends in `.example.yaml` deliberately.** A file literally named
+`harper-config.yaml` sitting in the application directory is read as the node's real
+configuration under `harper run .`: it would load the placeholder paths below, leave
+`rootPath` unset so `database` and `keys/` resolve against the app directory, fail startup on
 `Specified path <app>/database does not exist`, and then **overwrite the template** with a
 generated config. Keep the shipped template under a name Harper does not claim.
 
@@ -397,7 +412,8 @@ checks writability before spawning.
 | Symptom | Cause |
 | --- | --- |
 | `HARPER'S SPAWN INTERCEPTION IS NOT ACTIVE` | Supervisor not reached by a relative import, or `child_process` pulled in with `require()`, or `applications.moduleLoader: native`. |
-| `Command /... is not allowed` | Path not in `allowedSpawnCommands`, or Harper not restarted after the edit, or the path contains a space. |
+| `Command /... is not allowed` | Most often the whole config edit landed in a file Harper never opened: on an installed node it reads the absolute path in `settings_path` (`~/.harperdb/hdb_boot_properties.file`), which is the `harper-config.yaml` the installer wrote, and a hand-created `harperdb-config.yaml` beside it is never parsed. Failing that, the path is not in `allowedSpawnCommands`, or contains a space, or Harper was not restarted after the edit. |
+| Every node-level key looks ignored at once | Same cause. `threads.preloadRequire` missing (`tracerInitialized: false`), the allowlist missing, and `logging.level` still at `warn` in one go is the signature of editing the wrong file. `cat $(grep settings_path ~/.harperdb/hdb_boot_properties.file \| cut -d= -f2)` prints the one Harper reads. |
 | `tracerInitialized: false` | `threads.preloadRequire: dd-trace/init` missing. `preload` alone initialises nothing. |
 | `curl 127.0.0.1:8126/info` refused | trace-agent not running. Check `hdb.log` and `<runtime>/logs/trace-agent.log`. |
 | trace-agent exits immediately, non-zero | Something else holds 8126, or `datadog.yaml` is missing at the path passed to `-c`. |

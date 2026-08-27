@@ -89,6 +89,13 @@ space can never match, and the list is read once at module load. Allowlisting on
 reproduces the original symptom, since metrics and logs keep flowing while the rejected trace-agent
 spawn takes every span with it.
 
+**The node config file is `harper-config.yaml`.** On an installed node Harper reads the absolute path
+`settings_path` names in `~/.harperdb/hdb_boot_properties.file`, which is what `harper install` wrote;
+the filename is consulted only under `ROOTPATH` with no boot file, where `harper-config.yaml` wins and
+the legacy `harperdb-config.yaml` is the fallback. Exactly one file is parsed, never a merge, so a
+`harperdb-config.yaml` created beside an installed node's config is never opened. That fails as
+`Command /... is not allowed` from the first spawn, which reads like an allowlist problem.
+
 **`dd-trace` needs both preload keys.** `threads.preloadRequire: dd-trace/init` is what initializes the
 tracer, since `register.js` under `--import` initializes nothing in a worker, and
 `threads.preload: dd-trace/register.js` is additionally required or `node:http` is not instrumented.
