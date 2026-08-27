@@ -91,7 +91,7 @@ const SKIP_REASON: string | false =
 					"repo's real dist/ into the Harper component; run `npm run build` first"
 				: await darwinLoopbackSkipReason();
 
-/** One agent entry of the supervisor's status object (launchOne's return). */
+/** One agent entry of the supervisor's status object (startAgent's return). */
 type AgentRow = {
 	kind: string;
 	name: string;

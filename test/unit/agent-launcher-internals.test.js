@@ -1,41 +1,21 @@
 /**
- * The launcher's supervision internals: `receiverPort()`, `isRunSubcommand()`,
- * `isTraceReceiverHealthy()`, and `onExit()`. Each guards a failure mode that
- * surfaces only as silently dropped spans; they are reached through the
- * launcher's `internalsForTesting` export.
+ * What is left in the launcher once the receiver probe moved out of it:
+ * `describeSpawnFailure()`, `isRunSubcommand()` and `onExit()`. Each guards a
+ * failure mode that surfaces only as silently dropped spans; they are reached
+ * through the launcher's `internalsForTesting` export. The probe itself is
+ * covered by test/unit/trace-receiver.test.js.
  *
  * Hermetic: the only sockets are ephemeral 127.0.0.1 listeners standing in for
  * a receiver, the same device test/e2e/harper-component.test.js uses.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import net from 'node:net';
 
 import { findFreePort } from '../support/find-free-port.js';
-import { captureWarnings, createReceiverStub, importDist, withEnv } from '../support/harness.js';
+import { importDist, withReceiver, withReceiverPort } from '../support/harness.js';
 
-const { describeSpawnFailure, receiverPort, isRunSubcommand, isTraceReceiverHealthy, waitForReceiver, onExit } = (
-	await importDist('agent-launcher.js')
-).internalsForTesting;
+const { describeSpawnFailure, isRunSubcommand, onExit } = (await importDist('agent-launcher.js')).internalsForTesting;
 const { Platform } = await importDist('platform.js');
-
-/** The one variable every test here turns. */
-const withReceiverPort = (value, run) => withEnv('DD_APM_RECEIVER_PORT', value, run);
-
-/** `run` against a server listening on an ephemeral 127.0.0.1 port. */
-async function withServer(server, run) {
-	const port = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
-	try {
-		return await run(port);
-	} finally {
-		await new Promise((resolve) => server.close(resolve));
-	}
-}
-
-/** A receiver stub listening for the duration of `run`. */
-function withReceiver(options, run) {
-	return withServer(createReceiverStub(options), run);
-}
 
 /**
  * Run `onExit` with `process.exit` replaced by a throw, and return the exit
@@ -64,43 +44,6 @@ async function exitCodeFrom(run) {
 		process.exit = realExit;
 	}
 }
-
-test('receiverPort() defaults to 8126, the port dd-trace dials', () =>
-	withReceiverPort(undefined, () => {
-		assert.equal(receiverPort(), 8126);
-	}));
-
-test('receiverPort() honours DD_APM_RECEIVER_PORT', () =>
-	withReceiverPort('9126', () => {
-		assert.equal(receiverPort(), 9126);
-	}));
-
-test('an unusable DD_APM_RECEIVER_PORT falls back to 8126, and says so', async () => {
-	// The fallback itself is right: 8126 is what dd-trace dials. Taking it in
-	// silence is not, because the agent reads the same variable and resolves it
-	// differently, so the launcher ends up probing a port nothing will bind.
-	for (const bad of ['banana', '-1', '70000', '0abc']) {
-		const warnings = await captureWarnings(() =>
-			withReceiverPort(bad, () => {
-				assert.equal(receiverPort(), 8126, `override "${bad}"`);
-			})
-		);
-		assert.equal(warnings.length, 1, `override "${bad}" was rewritten with no warning`);
-		assert.ok(warnings[0].includes(bad), `the warning must quote the rejected value; got: ${warnings[0]}`);
-	}
-});
-
-test('DD_APM_RECEIVER_PORT=0 is a configuration, not a typo', async () => {
-	// Upstream reads 0 as "serve no HTTP receiver" (the UDS-only setup). Folding it
-	// into the 8126 fallback is what produces the alive-but-not-bound case: the
-	// launcher probes 8126, the agent binds nothing, every signal says started.
-	const warnings = await captureWarnings(() =>
-		withReceiverPort('0', () => {
-			assert.equal(receiverPort(), 0);
-		})
-	);
-	assert.deepEqual(warnings, [], 'an explicit 0 must not be reported as a bad value');
-});
 
 test('a wrong-architecture binary is diagnosed as one', () => {
 	// ENOEXEC arrives as "Failed to execute", which reads like a bad argument and
@@ -152,88 +95,6 @@ test('a flag value is not read as the subcommand', () => {
 	assert.equal(isRunSubcommand(['-c=/etc/datadog.yaml', 'run']), true);
 	// The value is skipped, not blindly consumed: a query after one stays a query.
 	assert.equal(isRunSubcommand(['-c', '/etc/datadog.yaml', 'version']), false);
-});
-
-test('isTraceReceiverHealthy() is false when nothing listens', async () => {
-	assert.equal(await isTraceReceiverHealthy(await findFreePort()), false);
-});
-
-test('a /info listing a /traces endpoint is the only healthy answer', () =>
-	withReceiver({ body: { endpoints: ['/v0.4/traces', '/v0.7/config'] } }, async (port) => {
-		assert.equal(await isTraceReceiverHealthy(port), true);
-	}));
-
-test('the probe asks /info specifically, not just any answering path', () =>
-	// A receiver serving the right body somewhere else must read as unhealthy,
-	// or a probe-URL typo in the launcher would ship green against this suite.
-	withReceiver({ body: { endpoints: ['/v0.4/traces'] }, answers: '/some-other-info' }, async (port) => {
-		assert.equal(await isTraceReceiverHealthy(port), false);
-	}));
-
-test('an HTTP listener without a /traces endpoint is not a receiver', async () => {
-	// Any leftover health-check stub accepts connections and answers 200;
-	// treating it as "APM is handled" is the failure this probe exists to stop.
-	for (const body of [{ endpoints: ['/health'] }, { endpoints: [] }, {}, { endpoints: 'not-an-array' }]) {
-		await withReceiver({ body }, async (port) => {
-			assert.equal(await isTraceReceiverHealthy(port), false, `body ${JSON.stringify(body)} passed for a trace-agent`);
-		});
-	}
-});
-
-test('a non-2xx or non-JSON /info answer is unhealthy, not an error', async () => {
-	for (const options of [{ status: 503, body: { endpoints: ['/v0.4/traces'] } }, { raw: '<html>It works!</html>' }]) {
-		await withReceiver(options, async (port) => {
-			assert.equal(await isTraceReceiverHealthy(port), false);
-		});
-	}
-});
-
-test('a listener that accepts and never answers times out to unhealthy', async () => {
-	// A bare TCP socket is exactly what a stray port-forward looks like. The
-	// accepted sockets are destroyed by hand: the aborted probe can leave its
-	// server side open, and net.Server.close() waits on it forever.
-	const sockets = new Set();
-	const server = net.createServer((socket) => {
-		sockets.add(socket);
-		socket.on('close', () => sockets.delete(socket));
-	});
-	await withServer(server, async (port) => {
-		try {
-			assert.equal(await isTraceReceiverHealthy(port, 250), false);
-		} finally {
-			for (const socket of sockets) socket.destroy();
-		}
-	});
-});
-
-test('waitForReceiver() gives up on a port nothing binds, and says so through the latch', async () => {
-	const watch = { port: await findFreePort(), bound: false };
-	assert.equal(await waitForReceiver(watch, 500), false);
-	assert.equal(watch.bound, false, 'the latch onExit() reads must stay false');
-});
-
-test('waitForReceiver() is not satisfied by a listener that is not a receiver', () =>
-	// A stray port-forward or a health-check stub answers; neither takes a span.
-	withReceiver({ body: { endpoints: ['/health'] } }, async (port) => {
-		const watch = { port, bound: false };
-		assert.equal(await waitForReceiver(watch, 500), false);
-		assert.equal(watch.bound, false);
-	}));
-
-test('waitForReceiver() keeps polling while the agent is still coming up', async () => {
-	// A single probe at spawn time finds nothing and would call a cold start a
-	// failure, which is the one way this check could refuse a working launch.
-	const port = await findFreePort();
-	const watch = { port, bound: false };
-	const server = createReceiverStub({ body: { endpoints: ['/v0.4/traces'] } });
-	const late = setTimeout(() => server.listen(port, '127.0.0.1'), 600);
-	try {
-		assert.equal(await waitForReceiver(watch, 10000), true);
-		assert.equal(watch.bound, true);
-	} finally {
-		clearTimeout(late);
-		await new Promise((resolve) => server.close(resolve));
-	}
 });
 
 test('NEGATIVE: a trace-agent that exits 0 having never bound is a failed launch', async () => {

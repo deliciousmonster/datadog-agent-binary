@@ -6,6 +6,15 @@ import * as path from 'node:path';
 import { BinaryManager } from './binary-manager.js';
 import { errorMessage, logger, BUILD_FROM_SOURCE_HINT } from './logger.js';
 import { Platform } from './platform.js';
+import {
+	DEFAULT_RECEIVER_PORT,
+	RECEIVER_DISABLED,
+	RECEIVER_DISABLED_WARNING,
+	describeUnboundReceiver,
+	receiverAdvertisesTraces,
+	resolveReceiverPort,
+	waitForReceiver,
+} from './trace-receiver.js';
 import { AgentBinaryKind } from './types.js';
 
 /**
@@ -17,22 +26,6 @@ import { AgentBinaryKind } from './types.js';
  * on every terminal path, because an unhandled rejection in a launcher is the
  * silent-death mode this package exists to avoid.
  */
-
-/** `apm_config.receiver_port` default. dd-trace targets the same port by default. */
-const DEFAULT_RECEIVER_PORT = 8126;
-
-/** `apm_config.receiver_port: 0` is upstream's spelling for "serve no HTTP receiver". */
-const RECEIVER_DISABLED = 0;
-
-/**
- * How long a freshly spawned trace-agent gets to answer /info before the launch is called
- * a failure. Generous on purpose: the receiver check in .github/workflows/build-verify.yml
- * already treats 30s as the cold-start bound, and a deadline that fires early would refuse
- * a launch that was about to work.
- */
-const RECEIVER_BIND_TIMEOUT_MS = 30_000;
-
-const RECEIVER_POLL_INTERVAL_MS = 250;
 
 /** Raised by preflight checks, to distinguish "misconfigured" from "binary not found". */
 export class LaunchPreflightError extends Error {}
@@ -213,32 +206,6 @@ export function preflightTraceAgentConfig(args: string[], binaryPath?: string): 
 }
 
 /**
- * Receiver port the trace-agent will bind, matching `apm_config.receiver_port`.
- *
- * `0` is returned as itself. Upstream reads it as "serve no HTTP receiver" (the UDS-only
- * setup), so rewriting it to 8126 would make every probe here interrogate a port the
- * agent was told not to bind. Every other unparseable value is a typo, and the fallback
- * is announced rather than taken in silence: the agent reads the same variable and will
- * not agree with the guess, which is how a launcher comes to probe one port while the
- * receiver binds another.
- */
-function receiverPort(): number {
-	const raw = process.env.DD_APM_RECEIVER_PORT;
-	if (!raw) return DEFAULT_RECEIVER_PORT;
-	// The raw string, not the parsed value: parseInt("0abc") is also 0, and that is a
-	// typo rather than a request to turn the receiver off.
-	if (raw.trim() === '0') return RECEIVER_DISABLED;
-	const parsed = Number.parseInt(raw, 10);
-	if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) return parsed;
-	logger.warn(
-		`DD_APM_RECEIVER_PORT="${raw}" is not a port in 1-65535. Falling back to ` +
-			`${DEFAULT_RECEIVER_PORT}, the port dd-trace dials, but the agent reads the same ` +
-			`variable and will not resolve it the same way. Fix or unset it.`
-	);
-	return DEFAULT_RECEIVER_PORT;
-}
-
-/**
  * Global flags that consume the argument after them, per `trace-agent --help`. Without
  * this set, `-c <path> run` reads <path> as the subcommand, and every receiver check
  * keyed on `run` skips itself while saying nothing.
@@ -271,32 +238,6 @@ function isRunSubcommand(args: string[]): boolean {
 		if (!arg.includes('=') && VALUE_FLAGS.has(arg)) i++;
 	}
 	return true;
-}
-
-/**
- * True if a real trace-agent is serving this port.
- *
- * A bare TCP connect is not sufficient evidence: any leftover socket, container port
- * forward, or health-check stub accepts connections, and treating that as "APM is already
- * handled" reproduces the exact failure this package fixes. `/info` is served only by the
- * trace-agent and lists the endpoints it accepts.
- */
-async function isTraceReceiverHealthy(port: number, timeoutMs = 1000): Promise<boolean> {
-	try {
-		const response = await fetch(`http://127.0.0.1:${port}/info`, {
-			signal: AbortSignal.timeout(timeoutMs),
-		});
-		if (!response.ok) return false;
-		const body = (await response.json()) as { endpoints?: unknown };
-		// Without the endpoint dd-trace submits to, whatever is answering is not a
-		// trace-agent we can rely on.
-		return (
-			Array.isArray(body.endpoints) &&
-			body.endpoints.some((endpoint) => typeof endpoint === 'string' && endpoint.includes('/traces'))
-		);
-	} catch {
-		return false;
-	}
 }
 
 /**
@@ -355,61 +296,52 @@ function describeSpawnFailure(error: unknown, binaryPath: string): string | null
 
 /**
  * Whether the receiver this launch is responsible for has ever been seen answering.
- * Written by waitForReceiver() and read by onExit(), because a trace-agent that exits 0
- * having never bound is indistinguishable, from the exit code alone, from one that served
- * spans for an hour and was then asked to stop.
+ * Written by requireReceiverBound() and read by onExit(), because a trace-agent that exits
+ * 0 having never bound is indistinguishable, from the exit code alone, from one that
+ * served spans for an hour and was then asked to stop.
  */
 interface ReceiverWatch {
 	port: number;
 	bound: boolean;
 }
 
-/** Poll until a real receiver answers on the watched port, or the deadline passes. */
-async function waitForReceiver(watch: ReceiverWatch, timeoutMs = RECEIVER_BIND_TIMEOUT_MS): Promise<boolean> {
-	const deadline = Date.now() + timeoutMs;
-	for (;;) {
-		if (await isTraceReceiverHealthy(watch.port)) {
-			watch.bound = true;
-			return true;
-		}
-		if (Date.now() >= deadline) return false;
-		await new Promise((resolve) => setTimeout(resolve, RECEIVER_POLL_INTERVAL_MS));
-	}
-}
-
 /**
  * Hold the launch open until the receiver answers, and fail it loudly if it never does.
  *
- * The probe above runs before the spawn, to decide whether to start at all. Nothing used
- * to check afterwards, so a trace-agent that started and never bound was reported as a
- * success: `child process started (pid=N)`, then silence, then every span dropped. That
- * is the original defect with green output. Measured against the shipped 7.82.1 binary,
+ * The pre-spawn probe only decides whether to start at all. Nothing used to check
+ * afterwards, so a trace-agent that started and never bound was reported as a success:
+ * `child process started (pid=N)`, then silence, then every span dropped. That is the
+ * original defect with green output. Measured against the shipped 7.82.1 binary,
  * `trace-agent run` with DD_APM_ENABLED=false exits 0 having bound nothing.
  *
  * The assertion is on the observed socket, never on the config, so a configuration this
  * launcher does not understand cannot be refused as long as a receiver comes up.
+ *
+ * Exits the process on failure. example/dd-supervisor.js reaches the same verdict from
+ * the same probe and keeps its node running instead; a component that took a launcher's
+ * exit would lose the database with the agent.
  */
 async function requireReceiverBound(
 	watch: ReceiverWatch,
 	child: ChildProcess,
 	context: { processName: string; args: string[]; binaryPath: string; ownsChild: boolean }
 ): Promise<void> {
-	if (await waitForReceiver(watch)) {
+	watch.bound = await waitForReceiver(watch.port);
+	if (watch.bound) {
 		logger.info(`${context.processName} is serving the APM receiver on 127.0.0.1:${watch.port}.`);
 		return;
 	}
 
 	const { configPath, explicit } = resolveConfigPath(context.args, context.binaryPath);
 	logger.error(
-		`${context.processName} is running (pid=${child.pid}) but nothing answered the ` +
-			`trace-agent /info endpoint on 127.0.0.1:${watch.port} within ` +
-			`${RECEIVER_BIND_TIMEOUT_MS / 1000}s, so dd-trace has nowhere to send spans. It ` +
-			`reports a successful flush either way, which is why an empty APM view is the only ` +
-			`symptom this produces on its own. Config ` +
-			`${explicit ? 'passed on the command line' : 'derived from the binary location'}: ` +
-			`${configPath}. Check apm_config.enabled there, DD_APM_ENABLED=${
-				process.env.DD_APM_ENABLED ?? '(unset)'
-			} which overrides it, and then the agent's own log.`
+		describeUnboundReceiver({
+			subject: context.processName,
+			pid: child.pid,
+			port: watch.port,
+			// The provenance rides along because an inferred path is a guess, and an
+			// operator editing the wrong datadog.yaml gets the same silence either way.
+			configPath: `${configPath} (${explicit ? 'passed on the command line' : 'derived from the binary location'})`,
+		})
 	);
 
 	// Only the thread that started it. Exiting otherwise leaves an agent alive that serves
@@ -465,19 +397,15 @@ export async function launchAgent(
 			// Only the invocations that bind the receiver: a `version` query has to keep
 			// working while one is already up.
 			if (isRunSubcommand(args)) {
-				const port = receiverPort();
+				const { port, warning } = resolveReceiverPort();
+				if (warning) logger.warn(warning);
 				if (port === RECEIVER_DISABLED) {
 					// Deliberate, so it is not refused, and no watch is set: there is no socket
 					// to assert on. It is still the state where dd-trace's default target goes
 					// unserved, which nothing else here would report.
-					logger.warn(
-						`DD_APM_RECEIVER_PORT=0 turns the trace-agent's HTTP receiver off, so ` +
-							`nothing will listen on 127.0.0.1:${DEFAULT_RECEIVER_PORT} and dd-trace will ` +
-							`drop every span unless it has been pointed at a Unix socket. Starting ` +
-							`the agent and skipping the receiver checks.`
-					);
+					logger.warn(`${RECEIVER_DISABLED_WARNING} Starting the agent and skipping the receiver checks.`);
 				} else {
-					if (await isTraceReceiverHealthy(port)) {
+					if (await receiverAdvertisesTraces(port)) {
 						logger.info(
 							`A trace-agent receiver is already listening on 127.0.0.1:${port} and ` +
 								`answered /info; not starting a second one. dd-trace will reach the ` +
@@ -622,14 +550,14 @@ async function onExit(
 		process.exit(signum ? 128 + signum : 1);
 	}
 
-	const port = watch?.port ?? receiverPort();
+	const port = watch?.port ?? resolveReceiverPort().port;
 
 	// A trace-agent that exits rc=1 because the receiver port was already taken is benign:
 	// the port is served, so APM works. But rc=1 is also what a misconfigured agent
 	// returns, and a bare port check cannot tell the two apart, so an unrelated listener
 	// would turn every startup failure into a reported success. Require a healthy /info
 	// response, which only a real trace-agent serves.
-	if (kind === 'trace' && code === 1 && port !== RECEIVER_DISABLED && (await isTraceReceiverHealthy(port))) {
+	if (kind === 'trace' && code === 1 && port !== RECEIVER_DISABLED && (await receiverAdvertisesTraces(port))) {
 		logger.info(
 			`${processName} exited immediately while a healthy trace-agent receiver ` +
 				`answered on 127.0.0.1:${port}, which means another instance already owns ` +
@@ -665,9 +593,6 @@ async function onExit(
  */
 export const internalsForTesting = {
 	describeSpawnFailure,
-	receiverPort,
 	isRunSubcommand,
-	isTraceReceiverHealthy,
-	waitForReceiver,
 	onExit,
 };

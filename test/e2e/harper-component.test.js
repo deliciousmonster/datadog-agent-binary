@@ -298,6 +298,20 @@ test('NEGATIVE: end-to-end, a trace-agent that never binds exits the shim non-ze
 	assert.match(stderr, new RegExp(`127\\.0\\.0\\.1:${port}`), 'the failure must name the port that stayed unbound');
 });
 
+test('DD_APM_RECEIVER_PORT=0 is a receiver turned off, not a launch to fail', { skip: SHIM_SKIP }, async () => {
+	// Upstream's UDS-only setup. The launch is not held open and not refused: with
+	// no receiver to wait for there is nothing to assert on, and waiting out the
+	// 30s bind deadline before failing would refuse a configuration that works.
+	const started = Date.now();
+	const { code, stderr } = await runShim('trace-agent', ['-c', traceConfigPath, 'run'], {
+		...process.env,
+		DD_APM_RECEIVER_PORT: '0',
+	});
+	assert.equal(code, 0, `a deliberate receiver_port 0 must not fail the launch; stderr: ${stderr}`);
+	assert.ok(Date.now() - started < 10_000, 'the bind deadline was waited out on a port nothing was told to bind');
+	assert.match(stderr, /Unix socket/, 'the one way spans still reach Datadog has to be named');
+});
+
 test('end-to-end: a binary without its exec bit is reported as that, not as a bad argument', async (t) => {
 	if (isWindows) {
 		t.skip('POSIX mode bits do not gate execution on Windows');
