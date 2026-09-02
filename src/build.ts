@@ -51,9 +51,11 @@ function run(
 	});
 }
 
-function buildArgs(binary: AgentBinary): string[] {
-	const override = process.env[binary.argsOverride]?.trim();
-	return override ? override.split(/\s+/) : [...binary.args];
+// The override adds flags; it cannot remove one. Letting it replace the list would let a CI
+// variable ship an agent with embedded Python, which only runs on the machine that built it.
+export function buildArgs(binary: AgentBinary): string[] {
+	const extra = process.env[binary.argsOverride]?.trim();
+	return [...binary.mandatoryArgs, ...(extra ? extra.split(/\s+/) : [])];
 }
 
 async function ensureDda(cwd: string, env: NodeJS.ProcessEnv): Promise<void> {

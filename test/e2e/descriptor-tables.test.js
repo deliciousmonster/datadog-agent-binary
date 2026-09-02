@@ -106,18 +106,44 @@ test("an unknown binary name throws rather than returning a path that does not e
 	assert.throws(() => pkg.getBinaryPath("datadog-nonesuch"), /Unknown binary/);
 });
 
+// A relocatable npm artifact and Python integrations are mutually exclusive: the python tag links
+// an embedded CPython and rpaths librtloader into the build tree. The flag is policy, not tuning.
+test("the override adds flags and cannot drop the python exclusion", () => {
+	const { buildArgs } = require(path.join(REPO_ROOT, "dist", "build.js"));
+	const core = BINARIES.find((b) => b.shipsAs === "datadog-agent");
+	assert.ok(core.mandatoryArgs.includes("--build-exclude=systemd,python"));
+
+	process.env[core.argsOverride] = "--some-experiment";
+	try {
+		const args = buildArgs(core);
+		assert.ok(
+			args.includes("--build-exclude=systemd,python"),
+			"an override dropped the python exclusion"
+		);
+		assert.ok(
+			args.includes("--some-experiment"),
+			"the override contributed nothing"
+		);
+	} finally {
+		delete process.env[core.argsOverride];
+	}
+});
+
 // The trace-agent's build() has no rtloader parameter, so the core agent's excludes are rejected
-// rather than ignored. Sharing one arg list would break the build that this whole package exists for.
-test("each binary carries its own build args and its own override variable", () => {
+// rather than ignored. Sharing one arg list would break the build this package exists for.
+test("each binary carries its own mandatory args and its own override variable", () => {
 	const overrides = BINARIES.map((b) => b.argsOverride);
 	assert.equal(
 		new Set(overrides).size,
 		overrides.length,
 		"two binaries share an override variable"
 	);
-	assert.deepEqual(BINARIES.find((b) => b.shipsAs === "trace-agent").args, []);
+	assert.deepEqual(
+		BINARIES.find((b) => b.shipsAs === "trace-agent").mandatoryArgs,
+		[]
+	);
 	assert.ok(
-		BINARIES.find((b) => b.shipsAs === "datadog-agent").args.includes(
+		BINARIES.find((b) => b.shipsAs === "datadog-agent").mandatoryArgs.includes(
 			"--exclude-rtloader"
 		)
 	);
