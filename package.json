@@ -22,7 +22,7 @@
 		"prepare": "husky",
 		"version": "npm run build && npm run update-optional-deps",
 		"prepublishOnly": "npm run build",
-		"test": "npm run build && node --test test/e2e/build-preconditions.test.js test/e2e/dda-install.test.js test/e2e/descriptor-tables.test.js test/e2e/harper-component.test.js test/e2e/platform-packages.test.js"
+		"test": "npm run build && node --test test/e2e/build-preconditions.test.js test/e2e/dda-install.test.js test/e2e/descriptor-tables.test.js test/e2e/release-workflow.test.js test/e2e/harper-component.test.js test/e2e/platform-packages.test.js"
 	},
 	"keywords": [
 		"datadog",
