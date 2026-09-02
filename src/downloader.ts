@@ -7,7 +7,6 @@ export interface DownloadConfig {
 	readonly extractTo: string;
 }
 import { logger } from "./logger.js";
-import { Target } from "./targets.js";
 
 const DATADOG_AGENT_REPO = "https://github.com/DataDog/datadog-agent";
 const GITHUB_API_BASE = "https://api.github.com/repos/DataDog/datadog-agent";
@@ -111,35 +110,5 @@ export class DatadogAgentDownloader {
 
 		logger.info(`Source extracted to: ${extractPath}`);
 		return extractPath;
-	}
-
-	async checkBuildDependencies(target: Target): Promise<void> {
-		logger.info(`Checking build dependencies for ${target.name}...`);
-
-		const requirements: Record<string, string[]> = {
-			linux: ["go", "make", "gcc", "git"],
-			macos: ["go", "make", "gcc", "git", "xcode-select"],
-			windows: ["go", "make", "gcc", "git"],
-		};
-
-		const platformRequirements = requirements[target.os] || [];
-		const missing: string[] = [];
-
-		logger.debug(`checkBuildDependencies PATH: ${process.env.PATH}`);
-		for (const tool of platformRequirements) {
-			try {
-				const { execSync } = await import("child_process");
-				execSync(`which ${tool}`, { stdio: "ignore" });
-			} catch {
-				missing.push(tool);
-			}
-		}
-
-		if (missing.length > 0) {
-			logger.warn(`Missing build dependencies: ${missing.join(", ")}`);
-			logger.warn("Please install missing dependencies before building");
-		} else {
-			logger.info("All build dependencies satisfied");
-		}
 	}
 }

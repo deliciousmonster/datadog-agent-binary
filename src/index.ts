@@ -38,7 +38,6 @@ export async function buildAgents(
 	logger.info(`Building Datadog Agent ${resolved} for ${target.name}`);
 	await downloader.downloadSource({ version: resolved, extractTo: sourceDir });
 	await linkIntoGoPath(join(buildDir, "go"), sourceDir);
-	await downloader.checkBuildDependencies(target);
 
 	return build({ target, sourceDir, outputDir });
 }
