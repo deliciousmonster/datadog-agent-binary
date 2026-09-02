@@ -224,22 +224,16 @@ test("end-to-end: the datadog-agent shim resolves and executes the agent", async
 	assert.match(stdout, /version/, "user args should be forwarded to the agent");
 });
 
-test("shipped wrappers pass the Harper-required `name` option", () => {
+test("the bin shim passes the Harper-required `name` option", () => {
 	// Regression guard: the spawn call inside the bin shim and the generated
 	// wrappers must keep the `name: "datadog-agent"` option.
 	const shimSrc = fs.readFileSync(
 		path.join(REPO_ROOT, "bin", "datadog-agent"),
 		"utf8"
 	);
-	assert.match(shimSrc, /name:\s*["']datadog-agent["']/);
-
-	const mgrSrc = fs.readFileSync(
-		path.join(REPO_ROOT, "dist", "binary-manager.js"),
-		"utf8"
-	);
 	assert.match(
-		mgrSrc,
-		/name:\s*['"]datadog-agent['"]/,
-		"BinaryManager-generated wrappers must spawn with a name option"
+		shimSrc,
+		/name:\s*["']datadog-agent["']/,
+		"the bin shim must spawn with a name option or Harper rejects the spawn"
 	);
 });

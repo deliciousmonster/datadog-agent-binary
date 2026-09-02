@@ -75,12 +75,9 @@ program
 program
 	.command("install")
 	.description("Install Datadog Agent binary for current platform")
-	.option("-v, --version <version>", "Specific version to install")
 	.action(
-		run(async (options: { version?: string }) => {
-			logger.info(
-				`Installed: ${await new BinaryManager().ensureBinary(options.version)}`
-			);
+		run(async () => {
+			logger.info(`Installed: ${await new BinaryManager().ensureBinary()}`);
 		}, "Build from source instead with: datadog-agent-build build")
 	);
 
