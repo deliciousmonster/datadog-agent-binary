@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { AgentBinary, BINARIES } from "./binaries.js";
@@ -142,6 +142,70 @@ async function cacheHome(): Promise<NodeJS.ProcessEnv> {
 	return { XDG_CACHE_HOME: dir };
 }
 
+// Upstream's .bazelrc names chocolatey's MSYS2 path; the GitHub image installs to the first entry.
+// BAZEL_SH leads, since that is the name upstream already gives this setting.
+export function windowsShellCandidates(): string[] {
+	const drive = (process.env.SystemDrive || "C:").replace(/[\\/]+$/, "");
+	const configured = process.env.BAZEL_SH?.trim();
+	return [
+		...(configured ? [configured] : []),
+		`${drive}/msys64/usr/bin/bash.exe`,
+		`${drive}/tools/msys64/usr/bin/bash.exe`,
+	];
+}
+
+export async function resolveWindowsShell(
+	candidates: readonly string[]
+): Promise<string> {
+	for (const candidate of candidates) {
+		try {
+			await stat(candidate);
+			return candidate;
+		} catch {
+			continue;
+		}
+	}
+	throw new Error(
+		`No MSYS2 bash found for bazel. Looked at: ${candidates.join(", ")}. ` +
+			"Install MSYS2 or set BAZEL_SH to an existing bash.exe; without one bazel uses the " +
+			"C:/tools/msys64 path hardcoded in upstream .bazelrc and dies on the first shell action."
+	);
+}
+
+/**
+ * `try-import %workspace%/user.bazelrc` is .bazelrc's last line and the file is gitignored at the
+ * tag, so the override patches nothing of upstream's. Bazel reads a backslash in an rc file as an escape.
+ */
+export async function writeBazelShellOverride(
+	sourceDir: string,
+	shell: string
+): Promise<void> {
+	const posix = shell.replace(/\\/g, "/");
+	await writeFile(
+		join(sourceDir, "user.bazelrc"),
+		"# Written by @harperfast/datadog-agent-binary. .bazelrc points both of these at\n" +
+			"# C:/tools/msys64, which the GitHub Windows image does not have.\n" +
+			`common:windows --repo_env=BAZEL_SH=${posix}\n` +
+			`common:windows --shell_executable=${posix}\n`,
+		"utf8"
+	);
+	logger.debug(`Pointed bazel's Windows shell at ${posix}`);
+}
+
+// tools/bazel.bat exits 2 when %TEMP% is on a volume where NTFS creates no 8.3 short name, which is
+// every volume but the profile's; GitHub puts the workspace and RUNNER_TEMP on D:.
+async function windowsPreconditions(
+	sourceDir: string
+): Promise<NodeJS.ProcessEnv> {
+	await writeBazelShellOverride(
+		sourceDir,
+		await resolveWindowsShell(windowsShellCandidates())
+	);
+	const temp = join(homedir(), "AppData", "Local", "Temp");
+	await mkdir(temp, { recursive: true });
+	return { TEMP: temp, TMP: temp };
+}
+
 /** Creates what upstream's build assumes already exists, and reports the variables naming it. */
 export async function prepareHost(
 	target: Target,
@@ -149,6 +213,7 @@ export async function prepareHost(
 ): Promise<NodeJS.ProcessEnv> {
 	return {
 		...(await cacheHome()),
+		...(target.os === "windows" ? await windowsPreconditions(sourceDir) : {}),
 	};
 }
 
