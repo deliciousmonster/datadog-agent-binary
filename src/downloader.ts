@@ -1,6 +1,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as tar from "tar";
+import { execFileSync } from "node:child_process";
 export interface DownloadConfig {
 	readonly version: string;
 	readonly extractTo: string;
@@ -41,20 +42,26 @@ export class DatadogAgentDownloader {
 		// Clone the repository instead of downloading tarball to preserve git history
 		logger.info("Cloning Datadog Agent repository...");
 
-		const { execSync } = await import("child_process");
-
 		try {
 			// Clone with specific tag
-			execSync(
-				`git clone --depth 1 --branch ${version} ${DATADOG_AGENT_REPO} "${extractPath}"`,
-				{
-					stdio: ["inherit", "pipe", "inherit"],
-				}
+			execFileSync(
+				"git",
+				[
+					"clone",
+					"--depth",
+					"1",
+					"--branch",
+					version,
+					DATADOG_AGENT_REPO,
+					extractPath,
+				],
+				{ stdio: ["inherit", "pipe", "inherit"] }
 			);
 
 			// Ensure we have the correct version information
-			const gitOutput = execSync(
-				`git -C "${extractPath}" describe --tags --always`,
+			const gitOutput = execFileSync(
+				"git",
+				["-C", extractPath, "describe", "--tags", "--always"],
 				{ encoding: "utf8", stdio: ["inherit", "pipe", "inherit"] }
 			);
 			logger.info(`Repository cloned at version: ${gitOutput.trim()}`);
@@ -93,8 +100,10 @@ export class DatadogAgentDownloader {
 
 			// Initialize git repo and set version manually for ldflags
 			try {
-				execSync(`git -C "${extractPath}" init`, { stdio: "ignore" });
-				execSync(`git -C "${extractPath}" tag ${version}`, { stdio: "ignore" });
+				execFileSync("git", ["-C", extractPath, "init"], { stdio: "ignore" });
+				execFileSync("git", ["-C", extractPath, "tag", version], {
+					stdio: "ignore",
+				});
 			} catch {
 				// Ignore git errors, version will be set via environment
 			}

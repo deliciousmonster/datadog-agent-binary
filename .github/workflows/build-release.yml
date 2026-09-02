@@ -111,26 +111,32 @@ jobs:
       - name: Build TypeScript
         run: npm run build
 
+      # The dispatch input reaches bash as an environment value, never as source. Spliced through
+      # ${{ }} it is shell text, and `7.0.0 ; touch pwned ; #` executes on the runner.
       - name: Extract version from tag (Unix)
         if: runner.os != 'Windows'
         id: extract_version_unix
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.datadog_version }}
         run: |
-          if [ -n "${{ github.event.inputs.datadog_version }}" ]; then
-            echo "version=${{ github.event.inputs.datadog_version }}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          if [ -n "$INPUT_VERSION" ]; then
+            echo "version=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
           else
-            echo "version=" >> $GITHUB_OUTPUT
+            echo "version=" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Extract version from tag (Windows)
         if: runner.os == 'Windows'
         id: extract_version_windows
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.datadog_version }}
         run: |
-          if ("${{ github.event.inputs.datadog_version }}" -ne "") {
-            echo "version=${{ github.event.inputs.datadog_version }}" >> $env:GITHUB_OUTPUT
-          } elseif ("${{ github.ref }}" -like "refs/tags/v*") {
-            $version = "${{ github.ref }}" -replace "refs/tags/v", ""
+          if ($env:INPUT_VERSION -ne "") {
+            echo "version=$env:INPUT_VERSION" >> $env:GITHUB_OUTPUT
+          } elseif ($env:GITHUB_REF -like "refs/tags/v*") {
+            $version = $env:GITHUB_REF -replace "refs/tags/v", ""
             echo "version=$version" >> $env:GITHUB_OUTPUT
           } else {
             echo "version=" >> $env:GITHUB_OUTPUT
