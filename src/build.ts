@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { AgentBinary, BINARIES } from "./binaries.js";
 import { logger } from "./logger.js";
@@ -130,22 +131,45 @@ async function ensureDda(cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
 	}
 }
 
+// Upstream's tools/bazel exits 2 when CI is set and XDG_CACHE_HOME does not already name a
+// directory, and derives GOCACHE from it. Off CI the same wrapper prints a hint and carries on.
+async function cacheHome(): Promise<NodeJS.ProcessEnv> {
+	if (!process.env.CI) return {};
+	const configured = process.env.XDG_CACHE_HOME?.trim();
+	const dir = configured ? resolve(configured) : join(homedir(), ".cache");
+	await mkdir(dir, { recursive: true });
+	logger.debug(`Using XDG_CACHE_HOME ${dir}`);
+	return { XDG_CACHE_HOME: dir };
+}
+
+/** Creates what upstream's build assumes already exists, and reports the variables naming it. */
+export async function prepareHost(
+	target: Target,
+	sourceDir: string
+): Promise<NodeJS.ProcessEnv> {
+	return {
+		...(await cacheHome()),
+	};
+}
+
 /** Builds every binary for one target and returns their shipped paths. Throws on the first failure. */
 export async function build({
 	target,
 	sourceDir,
 	outputDir,
 }: BuildOptions): Promise<string[]> {
-	const env = environment(target);
+	const base = environment(target);
 	if (target.precondition) {
 		const [command, ...args] = target.precondition.split(" ");
-		await run(command, args, sourceDir, env).catch(() => {
+		await run(command, args, sourceDir, base).catch(() => {
 			throw new Error(
 				`${target.os} requires \`${target.precondition}\` to succeed first`
 			);
 		});
 	}
 
+	// Before dda, since install-tools and every build task run under this environment.
+	const env = { ...base, ...(await prepareHost(target, sourceDir)) };
 	await mkdir(outputDir, { recursive: true });
 	await ensureDda(sourceDir, env);
 	await run(
