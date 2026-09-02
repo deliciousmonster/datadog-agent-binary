@@ -1,7 +1,11 @@
 import { mkdir, stat, symlink } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { build } from "./build.js";
-import { fetchAgentSource, fetchLatestVersion } from "./downloader.js";
+import {
+	fetchAgentSource,
+	fetchLatestVersion,
+	pinnedVersion,
+} from "./downloader.js";
 import { logger } from "./logger.js";
 import { currentTarget, Target } from "./targets.js";
 
@@ -30,7 +34,8 @@ export async function buildAgents(
 	request: BuildRequest = {}
 ): Promise<string[]> {
 	const { target = currentTarget(), version, outputDir = "./build" } = request;
-	const resolved = version ?? (await fetchLatestVersion());
+	const resolved =
+		version ?? (await pinnedVersion()) ?? (await fetchLatestVersion());
 	const buildDir = join(process.cwd(), "build", target.name);
 	const sourceDir = join(buildDir, "src");
 

@@ -127,3 +127,23 @@ test("every target derives goos and goarch rather than restating them", () => {
 test("currentTarget is a member of the supported table", () => {
 	assert.ok(TARGETS.includes(findTarget(currentTarget().name)));
 });
+
+// The pin is what makes a build reproducible, and it is also what keeps CI off an unauthenticated
+// GitHub API that rate-limits at 60 an hour per IP across every runner.
+test("the agent version is pinned in the repo, not resolved from the network", async () => {
+	const { pinnedVersion } = require(
+		path.join(REPO_ROOT, "dist", "downloader.js")
+	);
+	const pin = await pinnedVersion();
+	assert.match(
+		pin ?? "",
+		/^\d+\.\d+\.\d+$/,
+		".datadog-agent-version must hold a release"
+	);
+	assert.equal(
+		fs
+			.readFileSync(path.join(REPO_ROOT, ".datadog-agent-version"), "utf8")
+			.trim(),
+		pin
+	);
+});

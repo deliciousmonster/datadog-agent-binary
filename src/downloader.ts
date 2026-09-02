@@ -1,14 +1,32 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, rm } from "node:fs/promises";
-import { dirname } from "node:path";
+import { mkdir, readFile, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { logger } from "./logger.js";
 
 const REPO = "https://github.com/DataDog/datadog-agent";
 const RELEASES =
 	"https://api.github.com/repos/DataDog/datadog-agent/releases/latest";
 
+/** The pinned release, so a package cannot be labelled one version and built from another. */
+export async function pinnedVersion(): Promise<string | undefined> {
+	try {
+		return (
+			(
+				await readFile(join(process.cwd(), ".datadog-agent-version"), "utf8")
+			).trim() || undefined
+		);
+	} catch {
+		return undefined;
+	}
+}
+
+// GITHUB_TOKEN when the runner has one: unauthenticated this is 60 requests an hour per IP, shared
+// across every runner, and the build fails on "rate limit exceeded" rather than anything real.
 export async function fetchLatestVersion(): Promise<string> {
-	const response = await fetch(RELEASES);
+	const token = process.env.GITHUB_TOKEN;
+	const response = await fetch(RELEASES, {
+		headers: token ? { authorization: `Bearer ${token}` } : {},
+	});
 	if (!response.ok) {
 		throw new Error(`Failed to fetch latest version: ${response.statusText}`);
 	}
