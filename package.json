@@ -22,7 +22,7 @@
 		"prepare": "husky",
 		"version": "npm run build && npm run update-optional-deps",
 		"prepublishOnly": "npm run build",
-		"test": "npm run build && node --test \"test/e2e/**/*.test.js\""
+		"test": "npm run build && node --test test/e2e/descriptor-tables.test.js test/e2e/harper-component.test.js test/e2e/platform-packages.test.js"
 	},
 	"keywords": [
 		"datadog",
@@ -31,7 +31,7 @@
 		"cross-platform"
 	],
 	"author": "",
-	"license": "MIT",
+	"license": "Apache-2.0",
 	"dependencies": {
 		"commander": "^11.1.0",
 		"tar": "^6.2.0"
@@ -52,7 +52,7 @@
 		"README.md"
 	],
 	"engines": {
-		"node": ">=18.0.0"
+		"node": ">=20.12.0"
 	},
 	"repository": {
 		"type": "git",

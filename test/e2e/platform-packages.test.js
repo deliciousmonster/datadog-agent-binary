@@ -105,3 +105,11 @@ test("every supported target has a matrix leg that builds it, and vice versa", (
 	const { targetNames } = require(path.join(REPO_ROOT, "dist", "targets.js"));
 	assert.deepEqual(legs.slice().sort(), targetNames().slice().sort());
 });
+
+// npm force-ships LICENSE whatever `files` says, so the declared licence and the shipped text are
+// two statements of one fact and a reader who checks either has to get the same answer.
+test("the declared licence matches the licence file that ships", () => {
+	const licence = fs.readFileSync(path.join(REPO_ROOT, "LICENSE"), "utf8");
+	assert.match(licence, /Apache License/);
+	assert.equal(mainPkg.license, "Apache-2.0");
+});

@@ -34,7 +34,7 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
-      # `npm test` runs the TypeScript build and then the hermetic Harper
-      # component contract test (no network, no real agent binary required).
+      # Suites are listed rather than globbed: --test learned glob positionals in Node 22, and a
+      # directory positional works on 20 but not 22+, so no single positional form spans the matrix.
       - name: Run tests
         run: npm test
