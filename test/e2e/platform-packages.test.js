@@ -41,11 +41,13 @@ before(() => {
 		path.join(REPO_ROOT, "scripts", "create-platform-packages.js"),
 		path.join(workDir, "scripts", "create-platform-packages.js")
 	);
-	// The generator only requires dist/platform.js (type imports are erased).
-	fs.copyFileSync(
-		path.join(REPO_ROOT, "dist", "platform.js"),
-		path.join(workDir, "dist", "platform.js")
-	);
+	// The generator requires the two descriptor tables; type imports are erased.
+	for (const table of ["targets.js", "binaries.js"]) {
+		fs.copyFileSync(
+			path.join(REPO_ROOT, "dist", table),
+			path.join(workDir, "dist", table)
+		);
+	}
 	fs.copyFileSync(
 		path.join(REPO_ROOT, "package.json"),
 		path.join(workDir, "package.json")

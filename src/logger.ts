@@ -1,5 +1,10 @@
-import chalk from "chalk";
-import { Logger } from "./types.js";
+import { styleText } from "node:util";
+export interface Logger {
+	info: (message: string) => void;
+	warn: (message: string) => void;
+	error: (message: string) => void;
+	debug: (message: string) => void;
+}
 
 export class ConsoleLogger implements Logger {
 	private prefix: string;
@@ -9,20 +14,23 @@ export class ConsoleLogger implements Logger {
 	}
 
 	info(message: string): void {
-		console.log(chalk.blue(this.prefix), message);
+		console.log(styleText("blue", this.prefix), message);
 	}
 
 	warn(message: string): void {
-		console.warn(chalk.yellow(this.prefix), chalk.yellow(message));
+		console.warn(
+			styleText("yellow", this.prefix),
+			styleText("yellow", message)
+		);
 	}
 
 	error(message: string): void {
-		console.error(chalk.red(this.prefix), chalk.red(message));
+		console.error(styleText("red", this.prefix), styleText("red", message));
 	}
 
 	debug(message: string): void {
 		if (process.env.DEBUG) {
-			console.log(chalk.gray(this.prefix), chalk.gray(message));
+			console.log(styleText("gray", this.prefix), styleText("gray", message));
 		}
 	}
 }

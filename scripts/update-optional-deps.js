@@ -6,8 +6,8 @@ const path = require("path");
 const packageJsonPath = path.join(__dirname, "..", "package.json");
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
 
-const { getAllSupportedPlatforms } = require("../dist/platform.js");
-const platforms = getAllSupportedPlatforms();
+const { targetNames } = require("../dist/targets.js");
+const platforms = targetNames();
 
 // Update optionalDependencies to use the same version as the main package
 packageJson.optionalDependencies = {};

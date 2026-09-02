@@ -1,12 +1,12 @@
 import * as fs from "fs/promises";
 import * as path from "path";
-import fetch from "node-fetch";
 import { logger } from "./logger.js";
-import { Platform } from "./platform.js";
+import { AgentBinary, BINARIES } from "./binaries.js";
+import { currentTarget, Target } from "./targets.js";
 
 export interface BinaryInfo {
 	version: string;
-	platform: Platform;
+	target: Target;
 	downloadUrl: string;
 	fileName: string;
 	checksum?: string;
@@ -22,16 +22,16 @@ export class BinaryManager {
 	}
 
 	async ensureBinary(version?: string): Promise<string> {
-		const platform = Platform.current();
+		const target = currentTarget();
 		logger.info(
-			`Resolving Datadog Agent binary for platform ${platform.getName()} ` +
+			`Resolving Datadog Agent binary for platform ${target.name} ` +
 				`(process.platform=${process.platform}, process.arch=${process.arch})`
 		);
 
 		// Prefer a prebuilt binary shipped via the optional platform package
 		// (e.g. @harperfast/datadog-agent-binary-linux-x86_64). This is the
 		// path used when the package is installed from npm.
-		const packagedBinary = await this.resolveFromPlatformPackage(platform);
+		const packagedBinary = await this.resolveFromPlatformPackage(target);
 		if (packagedBinary) {
 			logger.info(`Using packaged Datadog Agent binary: ${packagedBinary}`);
 			return packagedBinary;
@@ -39,14 +39,18 @@ export class BinaryManager {
 
 		// Fall back to a locally built binary (build-from-source workflow).
 		logger.warn(
-			`No packaged binary resolved for ${platform.getName()}; falling back to ` +
+			`No packaged binary resolved for ${target.name}; falling back to ` +
 				`the build-from-source lookup. This needs a network call to GitHub and ` +
 				`a binary under ${this.buildDir}. In a Harper runtime this almost always ` +
 				`means the optional platform package ` +
-				`@harperfast/datadog-agent-binary-${platform.getName()} was not installed.`
+				`@harperfast/datadog-agent-binary-${target.name} was not installed.`
 		);
 		const targetVersion = version || (await this.getLatestVersion());
-		const binaryPath = await this.getBinaryPath(platform, targetVersion);
+		const binaryPath = await this.getBinaryPath(
+			BINARIES[0],
+			target,
+			targetVersion
+		);
 
 		if (await this.binaryExists(binaryPath)) {
 			logger.info(`Using locally built Datadog Agent binary: ${binaryPath}`);
@@ -54,9 +58,9 @@ export class BinaryManager {
 		}
 
 		throw new Error(
-			`Datadog Agent binary not found for ${platform.getName()}. Checked the ` +
+			`Datadog Agent binary not found for ${target.name}. Checked the ` +
 				`optional platform package ` +
-				`@harperfast/datadog-agent-binary-${platform.getName()} and the local ` +
+				`@harperfast/datadog-agent-binary-${target.name} and the local ` +
 				`build path ${binaryPath}; neither resolved a runnable binary.`
 		);
 	}
@@ -67,14 +71,14 @@ export class BinaryManager {
 	 * installed and the binary exists, otherwise null.
 	 */
 	private async resolveFromPlatformPackage(
-		platform: Platform
+		target: Target
 	): Promise<string | null> {
-		const packageName = `@harperfast/datadog-agent-binary-${platform.getName()}`;
+		const packageName = `@harperfast/datadog-agent-binary-${target.name}`;
 		logger.debug(`Attempting to resolve platform package ${packageName}`);
 		try {
 			const pkg = (await import(packageName)) as {
-				default?: { getBinaryPath?: () => string };
-				getBinaryPath?: () => string;
+				default?: { getBinaryPath?: (name?: string) => string };
+				getBinaryPath?: (name?: string) => string;
 			};
 			const getBinaryPath = pkg.getBinaryPath || pkg.default?.getBinaryPath;
 			if (typeof getBinaryPath !== "function") {
@@ -84,7 +88,7 @@ export class BinaryManager {
 				);
 				return null;
 			}
-			const binaryPath = getBinaryPath();
+			const binaryPath = getBinaryPath(BINARIES[0].shipsAs);
 			logger.debug(`${packageName} reports binary path: ${binaryPath}`);
 			if (await this.binaryExists(binaryPath)) {
 				return binaryPath;
@@ -108,15 +112,12 @@ export class BinaryManager {
 	}
 
 	private async getBinaryPath(
-		platform: Platform,
+		binary: AgentBinary,
+		target: Target,
 		version: string
 	): Promise<string> {
-		const fileName = platform.getBinaryName();
-		return path.join(
-			this.buildDir,
-			`${version}-${platform.getName()}`,
-			fileName
-		);
+		const fileName = `${binary.shipsAs}${target.exe}`;
+		return path.join(this.buildDir, `${version}-${target.name}`, fileName);
 	}
 
 	private async binaryExists(binaryPath: string): Promise<boolean> {
@@ -142,11 +143,11 @@ export class BinaryManager {
 
 	async createBinaryWrapper(): Promise<void> {
 		const wrapperPath = path.join(this.binDir, "datadog-agent");
-		const platform = Platform.current();
+		const target = currentTarget();
 
 		let wrapperContent: string;
 
-		if (platform.getOS() === "windows") {
+		if (target.os === "windows") {
 			wrapperContent = this.createWindowsWrapper();
 			await fs.writeFile(wrapperPath + ".cmd", wrapperContent);
 		} else {
@@ -218,8 +219,8 @@ node -e "const path=require('path');const{spawn}=require('child_process');(async
 	}
 
 	async installForCurrentPlatform(): Promise<void> {
-		const platform = Platform.current();
-		logger.info(`Installing Datadog Agent binary for ${platform.getName()}...`);
+		const target = currentTarget();
+		logger.info(`Installing Datadog Agent binary for ${target.name}...`);
 
 		try {
 			await this.ensureBinary();

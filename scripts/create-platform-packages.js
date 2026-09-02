@@ -3,7 +3,8 @@
 const fs = require("fs");
 const path = require("path");
 const { argv } = require("process");
-const { SUPPORTED_PLATFORMS, Platform } = require("../dist/platform.js");
+const { TARGETS, currentTarget } = require("../dist/targets.js");
+const { BINARIES } = require("../dist/binaries.js");
 
 function getParentVersion() {
 	const parentPackageJson = JSON.parse(
@@ -13,15 +14,15 @@ function getParentVersion() {
 }
 
 function getSupportedPlatforms() {
-	return SUPPORTED_PLATFORMS;
+	return TARGETS;
 }
 
 function getCurrentPlatform() {
-	return Platform.current();
+	return currentTarget();
 }
 
 function getPackageDir(platform) {
-	const platformName = platform.getName();
+	const platformName = platform.name;
 	return path.join(__dirname, "..", "npm", platformName);
 }
 
@@ -34,22 +35,24 @@ function copyPlatformBinary(platform) {
 	const packageDir = getPackageDir(platform);
 	fs.mkdirSync(path.join(packageDir, "bin"), { recursive: true });
 
-	const binaryName = platform.getBinaryName();
-	const binaryPath = path.join(
-		__dirname,
-		"..",
-		"build",
-		platform.getName(),
-		"bin",
-		binaryName
-	);
-	if (!fs.existsSync(binaryPath)) {
-		throw new Error(`Binary not found at ${binaryPath}`);
+	for (const binary of BINARIES) {
+		const fileName = `${binary.shipsAs}${platform.exe}`;
+		const from = path.join(
+			__dirname,
+			"..",
+			"build",
+			platform.name,
+			"bin",
+			fileName
+		);
+		if (!fs.existsSync(from)) {
+			throw new Error(`Binary not found at ${from}`);
+		}
+		const to = path.join(packageDir, "bin", fileName);
+		fs.copyFileSync(from, to);
+		// Ensure the executable bit is set so it survives `npm publish`/`npm install`.
+		fs.chmodSync(to, 0o755);
 	}
-	const destPath = path.join(packageDir, "bin", binaryName);
-	fs.copyFileSync(binaryPath, destPath);
-	// Ensure the executable bit is set so it survives `npm publish`/`npm install`.
-	fs.chmodSync(destPath, 0o755);
 }
 
 // npm filters optionalDependencies using Node's `process.platform` and
@@ -103,18 +106,22 @@ const packageTemplate = {
 
 const indexTemplate = `const path = require('path');
 
+const BINARIES = __BINARIES__;
+
 module.exports = {
-  getBinaryPath() {
-    return path.join(__dirname, 'bin', 'BINARY_NAME');
+  getBinaryPath(name = '__DEFAULT__') {
+    const file = BINARIES[name];
+    if (!file) throw new Error(\`Unknown binary: \${name}\`);
+    return path.join(__dirname, 'bin', file);
   }
 };`;
 
 function writePlatformPackageJson(platform) {
-	const os = platform.getOS();
-	const arch = platform.getArch();
+	const os = platform.os;
+	const arch = platform.arch;
 	const packageJson = {
 		...packageTemplate,
-		name: `@harperfast/datadog-agent-binary-${platform.getName()}`,
+		name: `@harperfast/datadog-agent-binary-${platform.name}`,
 		description: `Datadog Agent binary for ${os} ${arch}`,
 		os: [npmOS(os)],
 		cpu: [npmCPU(arch)],
@@ -130,8 +137,12 @@ function writePlatformPackageJson(platform) {
 }
 
 function writePlatformIndexJs(platform) {
-	const binaryName = platform.getBinaryName();
-	const indexContent = indexTemplate.replace("BINARY_NAME", binaryName);
+	const files = Object.fromEntries(
+		BINARIES.map((b) => [b.shipsAs, `${b.shipsAs}${platform.exe}`])
+	);
+	const indexContent = indexTemplate
+		.replace("__BINARIES__", JSON.stringify(files, null, 2))
+		.replace("__DEFAULT__", BINARIES[0].shipsAs);
 	fs.writeFileSync(
 		path.join(getPackageDir(platform), "index.js"),
 		indexContent
@@ -139,9 +150,9 @@ function writePlatformIndexJs(platform) {
 }
 
 function writePlatformReadme(platform) {
-	const name = `@harperfast/datadog-agent-binary-${platform.getName()}`;
-	const os = platform.getOS();
-	const arch = platform.getArch();
+	const name = `@harperfast/datadog-agent-binary-${platform.name}`;
+	const os = platform.os;
+	const arch = platform.arch;
 	const readme = `# ${name}
 
 Pre-built Datadog Agent binary for **${os} ${arch}**.
@@ -181,7 +192,7 @@ platforms.forEach((platform) => {
 			copyPlatformBinary(platform);
 		} catch (err) {
 			if (tolerateMissing) {
-				console.warn(`Skipping ${platform.getName()}: ${err.message}`);
+				console.warn(`Skipping ${platform.name}: ${err.message}`);
 				return;
 			}
 			throw err;

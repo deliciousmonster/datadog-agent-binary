@@ -1,112 +1,51 @@
-import * as path from "path";
+import { mkdir, stat, symlink } from "node:fs/promises";
+import { join, relative } from "node:path";
+import { build } from "./build.js";
 import { DatadogAgentDownloader } from "./downloader.js";
-import { createBuilder } from "./builders/index.js";
 import { logger } from "./logger.js";
-import { BuildConfig, BuildResult } from "./types.js";
-import { Platform } from "./platform.js";
+import { currentTarget, Target } from "./targets.js";
 
-export class DatadogAgentBuilder {
-	private downloader: DatadogAgentDownloader;
-
-	constructor() {
-		this.downloader = new DatadogAgentDownloader();
-	}
-
-	getLatestVersion(): Promise<string> {
-		return this.downloader.getLatestVersion();
-	}
-
-	async buildForPlatform(
-		platform: Platform,
-		options: {
-			version?: string;
-			outputDir?: string;
-			buildArgs?: string[];
-		} = {}
-	): Promise<BuildResult> {
-		const version =
-			options.version || (await this.downloader.getLatestVersion());
-		const platformName = platform.getName();
-		const outputDir = options.outputDir || "./build";
-
-		// Platform-specific directories
-		const platformBuildDir = path.join(process.cwd(), "build", platformName);
-		const sourceDir = path.join(platformBuildDir, "src");
-		const platformGoPath = path.join(platformBuildDir, "go");
-
-		logger.info(`Building Datadog Agent ${version} for ${platformName}`);
-
-		await this.downloader.downloadSource({
-			version,
-			platform,
-			extractTo: sourceDir,
-		});
-
-		// Create GOPATH structure with symlink
-		await this.setupGoPathStructure(platformGoPath, sourceDir);
-
-		await this.downloader.checkBuildDependencies(platform);
-
-		const config: BuildConfig = {
-			platform,
-			version,
-			outputDir,
-			sourceDir,
-			buildArgs: options.buildArgs,
-		};
-
-		const builder = createBuilder(config);
-		return await builder.build();
-	}
-
-	private async setupGoPathStructure(
-		goPath: string,
-		sourceDir: string
-	): Promise<void> {
-		const { mkdir, symlink, stat } = await import("fs/promises");
-
-		// Create GOPATH structure
-		const goSrcDir = path.join(goPath, "src", "github.com", "DataDog");
-		await mkdir(goSrcDir, { recursive: true });
-
-		// Create symlink to source directory
-		const symlinkPath = path.join(goSrcDir, "datadog-agent");
-		const relativePath = path.relative(goSrcDir, sourceDir);
-
-		try {
-			// Check if symlink already exists and is valid
-			await stat(symlinkPath);
-			logger.debug(`GOPATH symlink already exists: ${symlinkPath}`);
-		} catch {
-			// Create symlink if it doesn't exist
-			try {
-				await symlink(relativePath, symlinkPath, "dir");
-				logger.debug(
-					`Created GOPATH symlink: ${symlinkPath} -> ${relativePath}`
-				);
-			} catch (error: any) {
-				logger.error(`Failed to create symlink: ${error.message}`);
-				throw error;
-			}
-		}
-	}
-
-	async buildForCurrentPlatform(
-		options: {
-			version?: string;
-			outputDir?: string;
-			sourceDir?: string;
-			buildArgs?: string[];
-		} = {}
-	): Promise<BuildResult> {
-		const platform = Platform.current();
-		return await this.buildForPlatform(platform, options);
-	}
+export interface BuildRequest {
+	readonly target?: Target;
+	readonly version?: string;
+	readonly outputDir?: string;
 }
 
-export * from "./types.js";
-export * from "./platform.js";
-export * from "./downloader.js";
-export * from "./builders/index.js";
-export * from "./logger.js";
+// The Go toolchain resolves the agent by import path, so the source has to appear under
+// GOPATH/src/github.com/DataDog/datadog-agent rather than wherever it happened to unpack.
+async function linkIntoGoPath(
+	goPath: string,
+	sourceDir: string
+): Promise<void> {
+	const goSrcDir = join(goPath, "src", "github.com", "DataDog");
+	await mkdir(goSrcDir, { recursive: true });
+	const link = join(goSrcDir, "datadog-agent");
+	await stat(link).catch(() =>
+		symlink(relative(goSrcDir, sourceDir), link, "dir")
+	);
+}
+
+/** Fetches the source, prepares GOPATH, and builds every binary for one target. Throws on failure. */
+export async function buildAgents(
+	request: BuildRequest = {}
+): Promise<string[]> {
+	const { target = currentTarget(), version, outputDir = "./build" } = request;
+	const downloader = new DatadogAgentDownloader();
+	const resolved = version ?? (await downloader.getLatestVersion());
+	const buildDir = join(process.cwd(), "build", target.name);
+	const sourceDir = join(buildDir, "src");
+
+	logger.info(`Building Datadog Agent ${resolved} for ${target.name}`);
+	await downloader.downloadSource({ version: resolved, extractTo: sourceDir });
+	await linkIntoGoPath(join(buildDir, "go"), sourceDir);
+	await downloader.checkBuildDependencies(target);
+
+	return build({ target, sourceDir, outputDir });
+}
+
+export * from "./binaries.js";
 export * from "./binary-manager.js";
+export * from "./build.js";
+export * from "./downloader.js";
+export * from "./logger.js";
+export * from "./targets.js";

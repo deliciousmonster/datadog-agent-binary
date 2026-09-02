@@ -22,7 +22,7 @@ APP_DIR="$REPO_ROOT/test/e2e/harper-app"
 WORK_DIR="${RUNNER_TEMP:-$(mktemp -d)}"
 
 # Derive the platform name from the package itself so this isn't hard-coded.
-PLATFORM="$(node -e "console.log(require('$REPO_ROOT/dist/platform.js').Platform.current().getName())")"
+PLATFORM="$(node -e "console.log(require('$REPO_ROOT/dist/targets.js').currentTarget().name)")"
 PLATFORM_PKG="@harperfast/datadog-agent-binary-$PLATFORM"
 
 export TC_AGREEMENT=yes

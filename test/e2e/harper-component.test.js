@@ -18,14 +18,15 @@ function findRepoRoot(start) {
 }
 
 const REPO_ROOT = findRepoRoot(__dirname);
-const { Platform } = require(path.join(REPO_ROOT, "dist", "platform.js"));
+const { currentTarget } = require(path.join(REPO_ROOT, "dist", "targets.js"));
+const { BINARIES } = require(path.join(REPO_ROOT, "dist", "binaries.js"));
 const { BinaryManager } = require(
 	path.join(REPO_ROOT, "dist", "binary-manager.js")
 );
 
-const platform = Platform.current();
-const platformName = platform.getName(); // e.g. linux-x86_64
-const binaryName = platform.getBinaryName(); // datadog-agent[.exe]
+const platform = currentTarget();
+const platformName = platform.name; // e.g. linux-x86_64
+const binaryName = `${BINARIES[0].shipsAs}${platform.exe}`; // datadog-agent[.exe]
 const isWindows = process.platform === "win32";
 
 // The optional platform package is resolved by `require()` from within
@@ -97,8 +98,8 @@ function createFakePlatformPackage() {
 				name: platformPkgName,
 				version: require(path.join(REPO_ROOT, "package.json")).version,
 				main: "index.js",
-				os: [platform.getOS()],
-				cpu: [platform.getArch()],
+				os: [platform.os],
+				cpu: [platform.arch],
 			},
 			null,
 			"\t"

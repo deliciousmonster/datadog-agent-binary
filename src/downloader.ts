@@ -1,10 +1,12 @@
-import fetch from "node-fetch";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as tar from "tar";
-import { DownloadConfig } from "./types.js";
+export interface DownloadConfig {
+	readonly version: string;
+	readonly extractTo: string;
+}
 import { logger } from "./logger.js";
-import { Platform } from "./platform.js";
+import { Target } from "./targets.js";
 
 const DATADOG_AGENT_REPO = "https://github.com/DataDog/datadog-agent";
 const GITHUB_API_BASE = "https://api.github.com/repos/DataDog/datadog-agent";
@@ -102,8 +104,8 @@ export class DatadogAgentDownloader {
 		return extractPath;
 	}
 
-	async checkBuildDependencies(platform: Platform): Promise<void> {
-		logger.info(`Checking build dependencies for ${platform.getName()}...`);
+	async checkBuildDependencies(target: Target): Promise<void> {
+		logger.info(`Checking build dependencies for ${target.name}...`);
 
 		const requirements: Record<string, string[]> = {
 			linux: ["go", "make", "gcc", "git"],
@@ -111,7 +113,7 @@ export class DatadogAgentDownloader {
 			windows: ["go", "make", "gcc", "git"],
 		};
 
-		const platformRequirements = requirements[platform.getOS()] || [];
+		const platformRequirements = requirements[target.os] || [];
 		const missing: string[] = [];
 
 		logger.debug(`checkBuildDependencies PATH: ${process.env.PATH}`);
