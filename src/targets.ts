@@ -29,10 +29,11 @@ const target = (os: OS, arch: Arch): Target => ({
 	...SYSTEMS[os],
 });
 
+// Must match build-release.yml's matrix exactly. A target listed here but never built publishes an
+// optionalDependency that npm skips in silence, which is how macos-x86_64 shipped uninstallable.
 export const TARGETS: readonly Target[] = [
 	target("linux", "x86_64"),
 	target("linux", "arm64"),
-	target("macos", "x86_64"),
 	target("macos", "arm64"),
 	target("windows", "x86_64"),
 ];

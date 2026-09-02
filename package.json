@@ -65,7 +65,6 @@
 	"optionalDependencies": {
 		"@harperfast/datadog-agent-binary-linux-x86_64": "7.75.5",
 		"@harperfast/datadog-agent-binary-linux-arm64": "7.75.5",
-		"@harperfast/datadog-agent-binary-macos-x86_64": "7.75.5",
 		"@harperfast/datadog-agent-binary-macos-arm64": "7.75.5",
 		"@harperfast/datadog-agent-binary-windows-x86_64": "7.75.5"
 	},

@@ -11,22 +11,13 @@ const REPO_ROOT = path.join(__dirname, "..", "..");
 const { currentTarget, findTarget, TARGETS } = require(
 	path.join(REPO_ROOT, "dist", "targets.js")
 );
-
-const SECOND = {
-	shipsAs: "datadog-trace-agent",
-	task: "trace-agent.build",
-	builtIn: "bin/trace-agent",
-	builtAs: "trace-agent",
-	args: [],
-	argsOverride: "DD_TRACE_AGENT_BUILD_ARGS",
-	requiredSymbol: "pkg/trace/api.",
-};
+const { BINARIES } = require(path.join(REPO_ROOT, "dist", "binaries.js"));
 
 let workDir;
 let packageDir;
 
-// Runs the real generator against a BINARIES table with a second entry appended, which is
-// the only change MOD-2 should need. Anything assuming a single binary fails here.
+// Runs the real generator in an isolated copy. Every assertion below iterates BINARIES, so a
+// code path that assumes one binary fails here rather than at publish.
 before(() => {
 	const target = currentTarget();
 	workDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddab-descriptors-"));
@@ -40,22 +31,18 @@ before(() => {
 		path.join(REPO_ROOT, "scripts", "create-platform-packages.js"),
 		path.join(workDir, "scripts", "create-platform-packages.js")
 	);
-	fs.copyFileSync(
-		path.join(REPO_ROOT, "dist", "targets.js"),
-		path.join(workDir, "dist", "targets.js")
-	);
+	for (const table of ["targets.js", "binaries.js"]) {
+		fs.copyFileSync(
+			path.join(REPO_ROOT, "dist", table),
+			path.join(workDir, "dist", table)
+		);
+	}
 	fs.copyFileSync(
 		path.join(REPO_ROOT, "package.json"),
 		path.join(workDir, "package.json")
 	);
 
-	const { BINARIES } = require(path.join(REPO_ROOT, "dist", "binaries.js"));
-	const table = [...BINARIES, SECOND];
-	fs.writeFileSync(
-		path.join(workDir, "dist", "binaries.js"),
-		`exports.BINARIES = ${JSON.stringify(table)};`
-	);
-	for (const binary of table) {
+	for (const binary of BINARIES) {
 		fs.writeFileSync(
 			path.join(
 				workDir,
@@ -71,23 +58,25 @@ before(() => {
 	execFileSync(
 		process.execPath,
 		[path.join(workDir, "scripts", "create-platform-packages.js")],
-		{ stdio: "ignore" }
+		{
+			stdio: "ignore",
+		}
 	);
 	packageDir = path.join(workDir, "npm", target.name);
 });
 
 after(() => fs.rmSync(workDir, { recursive: true, force: true }));
 
-test("a second BINARIES entry is packaged with no change to the generator", () => {
-	const target = currentTarget();
-	for (const binary of [
-		...require(path.join(REPO_ROOT, "dist", "binaries.js")).BINARIES,
-		SECOND,
-	]) {
+test("every binary in the table is packaged, not just the first", () => {
+	assert.ok(
+		BINARIES.length > 1,
+		"the table has collapsed to one entry; this check is now vacuous"
+	);
+	for (const binary of BINARIES) {
 		const shipped = path.join(
 			packageDir,
 			"bin",
-			`${binary.shipsAs}${target.exe}`
+			`${binary.shipsAs}${currentTarget().exe}`
 		);
 		assert.ok(
 			fs.existsSync(shipped),
@@ -98,28 +87,40 @@ test("a second BINARIES entry is packaged with no change to the generator", () =
 
 test("the platform package resolves each binary by name", () => {
 	const pkg = require(path.join(packageDir, "index.js"));
-	const target = currentTarget();
-	assert.equal(
-		path.basename(pkg.getBinaryPath("datadog-trace-agent")),
-		`datadog-trace-agent${target.exe}`
-	);
-	assert.equal(
-		path.basename(pkg.getBinaryPath("datadog-agent")),
-		`datadog-agent${target.exe}`
-	);
+	for (const binary of BINARIES) {
+		const expected = `${binary.shipsAs}${currentTarget().exe}`;
+		assert.equal(path.basename(pkg.getBinaryPath(binary.shipsAs)), expected);
+	}
 });
 
 test("an unnamed request resolves the first binary, so published packages keep working", () => {
 	const pkg = require(path.join(packageDir, "index.js"));
 	assert.equal(
 		path.basename(pkg.getBinaryPath()),
-		`datadog-agent${currentTarget().exe}`
+		`${BINARIES[0].shipsAs}${currentTarget().exe}`
 	);
 });
 
 test("an unknown binary name throws rather than returning a path that does not exist", () => {
 	const pkg = require(path.join(packageDir, "index.js"));
 	assert.throws(() => pkg.getBinaryPath("datadog-nonesuch"), /Unknown binary/);
+});
+
+// The trace-agent's build() has no rtloader parameter, so the core agent's excludes are rejected
+// rather than ignored. Sharing one arg list would break the build that this whole package exists for.
+test("each binary carries its own build args and its own override variable", () => {
+	const overrides = BINARIES.map((b) => b.argsOverride);
+	assert.equal(
+		new Set(overrides).size,
+		overrides.length,
+		"two binaries share an override variable"
+	);
+	assert.deepEqual(BINARIES.find((b) => b.shipsAs === "trace-agent").args, []);
+	assert.ok(
+		BINARIES.find((b) => b.shipsAs === "datadog-agent").args.includes(
+			"--exclude-rtloader"
+		)
+	);
 });
 
 test("findTarget names the supported set when asked for one that is not", () => {

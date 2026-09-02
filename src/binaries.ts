@@ -18,10 +18,26 @@ export const BINARIES: readonly AgentBinary[] = [
 		task: "agent.build",
 		builtIn: "bin/agent",
 		builtAs: "agent",
-		// Excluding python drops the cgo rtloader bridge, which is the one dependency
-		// that makes the binary non-relocatable off the machine that built it.
-		args: ["--build-exclude=systemd,python"],
+		// The python tag rpaths librtloader and an embedded CPython into the build tree, so the binary
+		// only runs on the machine that built it. Excluding the tag still runs the rtloader install,
+		// whose bazel default extracts an LLVM toolchain that fills a 14 GB runner, hence the other two.
+		args: [
+			"--build-exclude=systemd,python",
+			"--exclude-rtloader",
+			"--no-enable-bazel",
+		],
 		argsOverride: "DD_AGENT_BUILD_ARGS",
 		requiredSymbol: "datadog-agent/pkg/aggregator",
+	},
+	{
+		shipsAs: "trace-agent",
+		task: "trace-agent.build",
+		builtIn: "bin/trace-agent",
+		builtAs: "trace-agent",
+		// Deliberately empty. trace-agent.build has no rtloader parameter, so forwarding the core
+		// agent's excludes is rejected rather than ignored.
+		args: [],
+		argsOverride: "DD_TRACE_AGENT_BUILD_ARGS",
+		requiredSymbol: "datadog-agent/pkg/trace/api.",
 	},
 ];
