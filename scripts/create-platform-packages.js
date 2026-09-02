@@ -75,20 +75,9 @@ function npmCPU(arch) {
 
 const version = getParentVersion();
 
-let platforms;
-let createDummyPackages = false;
 const lastArg = argv[argv.length - 1];
-switch (lastArg) {
-	case "--all":
-		platforms = getSupportedPlatforms();
-		break;
-	case "--dummy":
-		platforms = getSupportedPlatforms();
-		createDummyPackages = true;
-		break;
-	default:
-		platforms = [getCurrentPlatform()];
-}
+const platforms =
+	lastArg === "--all" ? getSupportedPlatforms() : [getCurrentPlatform()];
 
 const packageTemplate = {
 	version: version,
@@ -179,24 +168,20 @@ license per the [Datadog Agent repository](https://github.com/DataDog/datadog-ag
 	fs.writeFileSync(path.join(getPackageDir(platform), "README.md"), readme);
 }
 
-// In --all mode (release), tolerate a platform whose binary didn't build:
-// skip it with a warning rather than aborting the whole release, so the
-// platforms that did build still get published. Single-platform and --dummy
-// modes still fail hard, since a missing binary there is unexpected.
+// In --all mode (release), tolerate a platform whose binary didn't build: skip it with a warning
+// so the platforms that did build still publish. Single-platform mode fails hard instead.
 const tolerateMissing = lastArg === "--all";
 
 platforms.forEach((platform) => {
 	createPackageDir(platform);
-	if (!createDummyPackages) {
-		try {
-			copyPlatformBinary(platform);
-		} catch (err) {
-			if (tolerateMissing) {
-				console.warn(`Skipping ${platform.name}: ${err.message}`);
-				return;
-			}
-			throw err;
+	try {
+		copyPlatformBinary(platform);
+	} catch (err) {
+		if (tolerateMissing) {
+			console.warn(`Skipping ${platform.name}: ${err.message}`);
+			return;
 		}
+		throw err;
 	}
 	const packageJson = writePlatformPackageJson(platform);
 	writePlatformIndexJs(platform);

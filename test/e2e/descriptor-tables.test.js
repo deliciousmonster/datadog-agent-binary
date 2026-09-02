@@ -3,15 +3,15 @@
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
-
-const REPO_ROOT = path.join(__dirname, "..", "..");
-const { currentTarget, findTarget, TARGETS } = require(
-	path.join(REPO_ROOT, "dist", "targets.js")
-);
-const { BINARIES } = require(path.join(REPO_ROOT, "dist", "binaries.js"));
+const {
+	REPO_ROOT,
+	generatePackages,
+	TARGETS,
+	BINARIES,
+	currentTarget,
+} = require("./support/generator.js");
+const { findTarget } = require(path.join(REPO_ROOT, "dist", "targets.js"));
 
 let workDir;
 let packageDir;
@@ -19,50 +19,8 @@ let packageDir;
 // Runs the real generator in an isolated copy. Every assertion below iterates BINARIES, so a
 // code path that assumes one binary fails here rather than at publish.
 before(() => {
-	const target = currentTarget();
-	workDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddab-descriptors-"));
-	fs.mkdirSync(path.join(workDir, "scripts"));
-	fs.mkdirSync(path.join(workDir, "dist"));
-	fs.mkdirSync(path.join(workDir, "build", target.name, "bin"), {
-		recursive: true,
-	});
-
-	fs.copyFileSync(
-		path.join(REPO_ROOT, "scripts", "create-platform-packages.js"),
-		path.join(workDir, "scripts", "create-platform-packages.js")
-	);
-	for (const table of ["targets.js", "binaries.js"]) {
-		fs.copyFileSync(
-			path.join(REPO_ROOT, "dist", table),
-			path.join(workDir, "dist", table)
-		);
-	}
-	fs.copyFileSync(
-		path.join(REPO_ROOT, "package.json"),
-		path.join(workDir, "package.json")
-	);
-
-	for (const binary of BINARIES) {
-		fs.writeFileSync(
-			path.join(
-				workDir,
-				"build",
-				target.name,
-				"bin",
-				`${binary.shipsAs}${target.exe}`
-			),
-			`#!/bin/sh\necho ${binary.shipsAs}\n`
-		);
-	}
-
-	execFileSync(
-		process.execPath,
-		[path.join(workDir, "scripts", "create-platform-packages.js")],
-		{
-			stdio: "ignore",
-		}
-	);
-	packageDir = path.join(workDir, "npm", target.name);
+	({ workDir } = generatePackages({ prefix: "ddab-descriptors-" }));
+	packageDir = path.join(workDir, "npm", currentTarget().name);
 });
 
 after(() => fs.rmSync(workDir, { recursive: true, force: true }));

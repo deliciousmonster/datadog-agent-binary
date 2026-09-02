@@ -3,21 +3,9 @@
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
+const { REPO_ROOT, generatePackages } = require("./support/generator.js");
 
-function findRepoRoot(start) {
-	let dir = start;
-	while (!fs.existsSync(path.join(dir, "package.json"))) {
-		const parent = path.dirname(dir);
-		if (parent === dir) throw new Error("Could not locate package root");
-		dir = parent;
-	}
-	return dir;
-}
-
-const REPO_ROOT = findRepoRoot(__dirname);
 const mainPkg = require(path.join(REPO_ROOT, "package.json"));
 
 // What each generated platform package's os/cpu MUST be (Node's values).
@@ -32,32 +20,10 @@ let workDir;
 let npmDir;
 
 before(() => {
-	// Run the generator in an isolated copy so we don't write into the repo.
-	workDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddab-platform-pkgs-"));
-	fs.mkdirSync(path.join(workDir, "scripts"));
-	fs.mkdirSync(path.join(workDir, "dist"));
-	fs.copyFileSync(
-		path.join(REPO_ROOT, "scripts", "create-platform-packages.js"),
-		path.join(workDir, "scripts", "create-platform-packages.js")
-	);
-	// The generator requires the two descriptor tables; type imports are erased.
-	for (const table of ["targets.js", "binaries.js"]) {
-		fs.copyFileSync(
-			path.join(REPO_ROOT, "dist", table),
-			path.join(workDir, "dist", table)
-		);
-	}
-	fs.copyFileSync(
-		path.join(REPO_ROOT, "package.json"),
-		path.join(workDir, "package.json")
-	);
-
-	execFileSync(
-		process.execPath,
-		[path.join(workDir, "scripts", "create-platform-packages.js"), "--dummy"],
-		{ stdio: "ignore" }
-	);
-	npmDir = path.join(workDir, "npm");
+	({ workDir, npmDir } = generatePackages({
+		prefix: "ddab-platform-pkgs-",
+		args: ["--all"],
+	}));
 });
 
 after(() => {

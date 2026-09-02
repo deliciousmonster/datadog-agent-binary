@@ -121,26 +121,6 @@ function createFakePlatformPackage() {
 	fs.chmodSync(stubBinaryPath, 0o755);
 }
 
-/**
- * A minimal stand-in for Harper v5's spawn *enforcement*. Harper rejects any
- * spawn that lacks a `name` option or whose absolute command isn't listed in
- * applications.allowedSpawnCommands. This is a pure predicate: it throws when
- * the spawn would be rejected and returns otherwise, so we can assert our usage
- * satisfies the contract without actually executing a binary (which is
- * platform-fragile — e.g. spawning a stub `.exe` on Windows throws `UNKNOWN`).
- * Real end-to-end execution is covered separately by the shim test below.
- */
-function assertHarperSpawnAllowed(command, options, allowedSpawnCommands) {
-	if (!options || typeof options.name !== "string" || options.name === "") {
-		throw new Error("Harper v5: spawn requires a non-empty `name` option");
-	}
-	if (!allowedSpawnCommands.includes(command)) {
-		throw new Error(
-			`Harper v5: '${command}' is not in applications.allowedSpawnCommands`
-		);
-	}
-}
-
 function runToCompletion(child) {
 	return new Promise((resolve, reject) => {
 		let stdout = "";
@@ -171,39 +151,6 @@ test("BinaryManager resolves the binary from the installed platform package (no 
 	assert.ok(fs.existsSync(resolved), "resolved binary must exist on disk");
 });
 
-test("Harper allowlist accepts the absolute resolved path, rejects a bare command name", async () => {
-	const binaryPath = await new BinaryManager().ensureBinary();
-	const allowedSpawnCommands = [binaryPath]; // what the app registers in harperdb-config.yaml
-
-	// A bare command name does not match Harper's absolute-path allowlist.
-	assert.throws(
-		() =>
-			assertHarperSpawnAllowed(
-				"datadog-agent",
-				{ name: "datadog-agent" },
-				allowedSpawnCommands
-			),
-		/not in applications\.allowedSpawnCommands/
-	);
-
-	// The exact absolute path is allowed.
-	assert.doesNotThrow(() =>
-		assertHarperSpawnAllowed(
-			binaryPath,
-			{ name: "datadog-agent" },
-			allowedSpawnCommands
-		)
-	);
-});
-
-test("Harper requires a `name` option on spawn", async () => {
-	const binaryPath = await new BinaryManager().ensureBinary();
-	assert.throws(
-		() => assertHarperSpawnAllowed(binaryPath, {}, [binaryPath]),
-		/requires a non-empty `name` option/
-	);
-});
-
 test("end-to-end: the datadog-agent shim resolves and executes the agent", async (t) => {
 	if (isWindows) {
 		t.skip("stub executable is not runnable as a .exe on Windows");
@@ -221,7 +168,11 @@ test("end-to-end: the datadog-agent shim resolves and executes the agent", async
 		new RegExp(STUB_MARKER),
 		"the resolved agent binary should have actually run"
 	);
-	assert.match(stdout, /version/, "user args should be forwarded to the agent");
+	assert.match(
+		stdout,
+		new RegExp(`${STUB_MARKER} version`),
+		"user args should reach the agent, not just the shim's own log line"
+	);
 });
 
 test("the bin shim passes the Harper-required `name` option", () => {
