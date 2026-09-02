@@ -218,7 +218,11 @@ jobs:
         with:
           path: artifacts/
 
+      # Git permits ; $() ` && and | in a tag name, so ref_name spliced into a run body is shell
+      # source. It arrives as a value, like every other untrusted input in this workflow.
       - name: Prepare release assets
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
           mkdir -p release-assets
 
@@ -232,7 +236,7 @@ jobs:
           for arch in x86_64 arm64; do
             if [ -d "agent-linux-${arch}" ]; then
               cd "agent-linux-${arch}"
-              tar -czf "../../release-assets/datadog-agent-${{ github.ref_name }}-linux-${arch}.tar.gz" *
+              tar -czf "../../release-assets/datadog-agent-${REF_NAME}-linux-${arch}.tar.gz" *
               cd ..
             fi
           done
@@ -244,7 +248,7 @@ jobs:
           for arch in x86_64 arm64; do
             if [ -d "agent-macos-${arch}" ]; then
               cd "agent-macos-${arch}"
-              tar -czf "../../release-assets/datadog-agent-${{ github.ref_name }}-macos-${arch}.tar.gz" *
+              tar -czf "../../release-assets/datadog-agent-${REF_NAME}-macos-${arch}.tar.gz" *
               cd ..
             fi
           done
@@ -256,7 +260,7 @@ jobs:
           for arch in x86_64 arm64; do
             if [ -d "agent-windows-${arch}" ]; then
               cd "agent-windows-${arch}"
-              zip -r "../../release-assets/datadog-agent-${{ github.ref_name }}-windows-${arch}.zip" *
+              zip -r "../../release-assets/datadog-agent-${REF_NAME}-windows-${arch}.zip" *
               cd ..
             fi
           done

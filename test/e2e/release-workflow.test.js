@@ -45,8 +45,12 @@ test("no attacker-controlled value is spliced into a workflow script body", () =
 		bodies.length > 3,
 		"found almost no run: blocks; the workflow shape changed and this check is blind"
 	);
+	// ref_name belongs here too: git permits ; $() ` && and | in a tag name, so a tag is
+	// attacker-controlled text wherever a run body interpolates it.
 	const spliced = bodies.filter((body) =>
-		/\$\{\{[^}]*(github\.event\.inputs|steps\.\w+\.outputs)/.test(body)
+		/\$\{\{[^}]*(github\.event\.inputs|steps\.\w+\.outputs|github\.ref_name)/.test(
+			body
+		)
 	);
 	assert.deepEqual(spliced, []);
 
@@ -58,6 +62,7 @@ test("no attacker-controlled value is spliced into a workflow script body", () =
 		WORKFLOW,
 		/VERSION: \$\{\{ steps\.extract_version\.outputs\.version \}\}/
 	);
+	assert.match(WORKFLOW, /REF_NAME: \$\{\{ github\.ref_name \}\}/);
 });
 
 // bash is on windows-latest too, so one step covers every leg. Two spellings of one job drift, which
