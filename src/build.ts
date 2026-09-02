@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { copyFile, mkdir } from "node:fs/promises";
-import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { AgentBinary, BINARIES } from "./binaries.js";
 import { logger } from "./logger.js";
 import { Target } from "./targets.js";
@@ -69,18 +69,6 @@ async function ensureDda(cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
 	}
 }
 
-/** Absolute path the binary ships to, suffixed for the target. */
-export function shippedPath(
-	binary: AgentBinary,
-	target: Target,
-	outputDir: string
-): string {
-	const root = isAbsolute(outputDir)
-		? outputDir
-		: resolve(process.cwd(), outputDir);
-	return join(root, `${binary.shipsAs}${target.exe}`);
-}
-
 /** Builds every binary for one target and returns their shipped paths. Throws on the first failure. */
 export async function build({
 	target,
@@ -116,12 +104,8 @@ export async function build({
 			env
 		);
 
-		const from = join(
-			sourceDir,
-			binary.builtIn,
-			`${binary.builtAs}${target.exe}`
-		);
-		const to = shippedPath(binary, target, outputDir);
+		const from = join(sourceDir, `${binary.builtAt}${target.exe}`);
+		const to = join(resolve(outputDir), `${binary.shipsAs}${target.exe}`);
 		await copyFile(from, to);
 		shipped.push(to);
 	}

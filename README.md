@@ -15,7 +15,7 @@ The repo covers two things:
 - Provides a `datadog-agent` command that resolves the installed binary and runs it, passing arguments and environment through to the agent.
 - Passes the `name` option that Harper v5's spawn enforcement requires, so the agent can be launched from a Harper component. See [Harper v5 compatibility](#harper-v5-lincoln-compatibility).
 - Logs binary resolution, the spawn (path, args, PID), exit status, and which Datadog environment variables are present — useful when diagnosing why no data reaches Datadog. The `DD_API_KEY` value is not logged, only whether it is set. See [Startup logging](#startup-logging).
-- Builds the agent from source for Linux, Windows, and macOS on arm64 and amd64 (the working subset).
+- Builds the agent from source for Linux on x86_64 and arm64, Windows on x86_64, and macOS on arm64.
 
 It does not configure Datadog. API key, site, and collection settings are provided the usual Datadog way — environment variables or `datadog.yaml`. See [Connecting to Datadog](#connecting-to-datadog).
 
@@ -82,10 +82,12 @@ console.log(`Datadog Agent at: ${binaryPath}`);
 | Linux | arm64 | ✅ |
 | Windows | x86_64 | ✅ |
 | Windows | arm64 | 🚫 |
-| macOS | x86_64 | ✅ |
+| macOS | x86_64 | 🚫 |
 | macOS | arm64 | ✅ |
 
 Windows arm64 is blocked by [Chocolatey](https://chocolatey.org) not supporting arm64 natively.
+macOS x86_64 is out because the release matrix has no runner for it; a target with no matrix leg
+publishes an optional dependency npm skips in silence.
 
 ## Harper v5 (Lincoln) compatibility
 
@@ -120,7 +122,7 @@ Harper v5 installs packages with `--ignore-scripts` by default. This package and
 
 ### Build-time tooling is not for the runtime
 
-`DatadogAgentBuilder` (the source-build path that shells out to `dda`, `go`, `pip`, etc.) is for a developer shell or CI runner, not for use inside a Harper-managed process. The supported runtime entry point is `BinaryManager.ensureBinary()` plus the `datadog-agent` launcher.
+`datadog-agent-build` (the source-build path that shells out to `dda`, `go`, `pip`, etc.) is for a developer shell or CI runner, not for use inside a Harper-managed process. The supported runtime entry point is `BinaryManager.ensureBinary()` plus the `datadog-agent` launcher.
 
 ## Building from source (maintainers)
 
@@ -138,17 +140,6 @@ datadog-agent-build install     # (re)install the binary for this platform
 datadog-agent-build platforms   # list supported platforms
 datadog-agent-build version     # latest upstream version
 ```
-
-```typescript
-import { DatadogAgentBuilder } from '@harperfast/datadog-agent-binary';
-
-const result = await new DatadogAgentBuilder().buildForCurrentPlatform({
-  version: '7.50.0',
-  outputDir: './build',
-});
-```
-
-`BuildOptions`: `version?`, `outputDir?`, `sourceDir?`, `buildArgs?`.
 
 ### Build requirements
 
