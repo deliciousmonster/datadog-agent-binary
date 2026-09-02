@@ -10,6 +10,7 @@ const { REPO_ROOT } = require("./support/generator.js");
 const { withEnv, withHome, withTempDir } = require("./support/sandbox.js");
 const { findTarget } = require(path.join(REPO_ROOT, "dist", "targets.js"));
 const {
+	environment,
 	prepareHost,
 	resolveWindowsShell,
 	windowsShellCandidates,
@@ -187,4 +188,11 @@ test("a non-Windows target writes no override file and exports no TEMP", async (
 			assert.ok(!fs.existsSync(path.join(dir, "AppData")));
 		})
 	);
+});
+
+test("a Windows target turns off the PDB linker flag, which nothing here ships", async () => {
+	await withEnv("DD_GO_PDB", undefined, async () => {
+		assert.equal(environment(WINDOWS).DD_GO_PDB, "0");
+		assert.ok(!("DD_GO_PDB" in environment(LINUX)));
+	});
 });

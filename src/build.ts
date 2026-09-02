@@ -24,7 +24,7 @@ interface RunOptions {
 	readonly timeoutMs?: number;
 }
 
-function environment(target: Target): NodeJS.ProcessEnv {
+export function environment(target: Target): NodeJS.ProcessEnv {
 	const goPath = join(process.cwd(), "build", target.name, "go");
 	return {
 		...process.env,
@@ -33,6 +33,7 @@ function environment(target: Target): NodeJS.ProcessEnv {
 		GOOS: target.goos,
 		GOARCH: target.goarch,
 		CGO_ENABLED: "1",
+		...target.env,
 	};
 }
 

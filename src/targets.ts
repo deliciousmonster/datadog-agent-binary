@@ -11,12 +11,16 @@ export interface Target {
 	readonly exe: string;
 	/** Shell command that must succeed before this OS can build. */
 	readonly precondition?: string;
+	/** Build environment this OS needs on top of the toolchain's own. */
+	readonly env?: Readonly<Record<string, string>>;
 }
 
 const SYSTEMS: Record<OS, Omit<Target, "os" | "arch" | "name" | "goarch">> = {
 	linux: { goos: "linux", exe: "" },
 	macos: { goos: "darwin", exe: "", precondition: "xcode-select -p" },
-	windows: { goos: "windows", exe: ".exe" },
+	// 7.82.1 splices `-Wl,--pdb=` into extldflags for Windows unless DD_GO_PDB=0, and CGO_ENABLED=1
+	// sends it to the host's ld. Nothing here ships a PDB, so the flag can only cost a link failure.
+	windows: { goos: "windows", exe: ".exe", env: { DD_GO_PDB: "0" } },
 };
 
 const GOARCH: Record<Arch, string> = { x86_64: "amd64", arm64: "arm64" };
