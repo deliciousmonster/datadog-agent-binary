@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        node: ["20", "22"]
+        node: ["22", "24"]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -34,7 +34,7 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
-      # Suites are listed rather than globbed: --test learned glob positionals in Node 22, and a
-      # directory positional works on 20 but not 22+, so no single positional form spans the matrix.
+      # Suites are listed rather than globbed: the windows legs run cmd.exe, which does not expand
+      # the pattern, and --test only learned glob positionals in Node 22.
       - name: Run tests
         run: npm test
