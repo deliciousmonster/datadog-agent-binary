@@ -8,6 +8,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { REPO_ROOT } = require("./support/generator.js");
 
+const WORKFLOW_DIR = path.join(REPO_ROOT, ".github", "workflows");
+
 const WORKFLOW = fs.readFileSync(
 	path.join(REPO_ROOT, ".github", "workflows", "build-release.yml"),
 	"utf8"
@@ -72,4 +74,18 @@ test("version extraction and the build are each written once, not once per runne
 	assert.equal(matches(/^\s+- name: Build \$\{\{ matrix\.platform \}\}$/gm), 1);
 	assert.equal(matches(/^\s+id: extract_version$/gm), 1);
 	assert.equal(matches(/shell: pwsh$/gm), 0);
+});
+
+// The org refuses a workflow that names an action by tag, and the refusal lands at job setup, so
+// every leg dies before it runs anything. A tag is also mutable; a SHA is what was reviewed.
+test("every action is pinned to a commit SHA", () => {
+	const unpinned = [];
+	for (const file of fs.readdirSync(WORKFLOW_DIR)) {
+		const text = fs.readFileSync(path.join(WORKFLOW_DIR, file), "utf8");
+		for (const [, ref] of text.matchAll(/uses:\s*(\S+)/g)) {
+			if (!/@[0-9a-f]{40}$|@sha256:[0-9a-f]{64}$/.test(ref))
+				unpinned.push(`${file}: ${ref}`);
+		}
+	}
+	assert.deepEqual(unpinned, []);
 });
