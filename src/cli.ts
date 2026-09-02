@@ -6,7 +6,7 @@ import {
 	BinaryManager,
 	buildAgents,
 	currentTarget,
-	DatadogAgentDownloader,
+	fetchLatestVersion,
 	logger,
 	targetNames,
 } from "./index.js";
@@ -67,7 +67,7 @@ program
 	.action(
 		run(async () => {
 			logger.info(
-				`Latest Datadog Agent version: ${await new DatadogAgentDownloader().getLatestVersion()}`
+				`Latest Datadog Agent version: ${await fetchLatestVersion()}`
 			);
 		})
 	);

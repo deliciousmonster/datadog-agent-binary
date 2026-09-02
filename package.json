@@ -33,13 +33,10 @@
 	"author": "",
 	"license": "Apache-2.0",
 	"dependencies": {
-		"commander": "^11.1.0",
-		"tar": "^6.2.0"
+		"commander": "^11.1.0"
 	},
 	"devDependencies": {
 		"@types/node": "^20.10.0",
-		"@types/tar": "^6.1.10",
-		"@types/yauzl": "^2.10.3",
 		"husky": "^9.1.7",
 		"lint-staged": "^16.1.2",
 		"prettier": "^3.6.1",

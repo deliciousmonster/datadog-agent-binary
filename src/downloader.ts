@@ -1,114 +1,45 @@
-import * as fs from "fs/promises";
-import * as path from "path";
-import * as tar from "tar";
 import { execFileSync } from "node:child_process";
-export interface DownloadConfig {
-	readonly version: string;
-	readonly extractTo: string;
-}
+import { mkdir, rm } from "node:fs/promises";
+import { dirname } from "node:path";
 import { logger } from "./logger.js";
 
-const DATADOG_AGENT_REPO = "https://github.com/DataDog/datadog-agent";
-const GITHUB_API_BASE = "https://api.github.com/repos/DataDog/datadog-agent";
+const REPO = "https://github.com/DataDog/datadog-agent";
+const RELEASES =
+	"https://api.github.com/repos/DataDog/datadog-agent/releases/latest";
 
-export class DatadogAgentDownloader {
-	async getLatestVersion(): Promise<string> {
-		logger.info("Fetching latest Datadog Agent version...");
-
-		const response = await fetch(`${GITHUB_API_BASE}/releases/latest`);
-		if (!response.ok) {
-			throw new Error(`Failed to fetch latest version: ${response.statusText}`);
-		}
-
-		const data = (await response.json()) as { tag_name: string };
-		const version = data.tag_name;
-
-		return version;
+export async function fetchLatestVersion(): Promise<string> {
+	const response = await fetch(RELEASES);
+	if (!response.ok) {
+		throw new Error(`Failed to fetch latest version: ${response.statusText}`);
 	}
+	return ((await response.json()) as { tag_name: string }).tag_name;
+}
 
-	async downloadSource(config: DownloadConfig): Promise<string> {
-		const { version, extractTo } = config;
+/** Clones the pinned tag into `into`, replacing whatever was there. Returns the path. */
+export async function fetchAgentSource(
+	version: string,
+	into: string
+): Promise<string> {
+	logger.info(`Cloning Datadog Agent ${version}`);
+	await mkdir(dirname(into), { recursive: true });
+	await rm(into, { recursive: true, force: true });
 
-		logger.info(`Downloading Datadog Agent source version ${version}...`);
-
-		await fs.mkdir(path.dirname(extractTo), { recursive: true });
-
-		const extractPath = extractTo;
-
-		// Remove existing source directory if it exists
-		await fs.rm(extractPath, { recursive: true, force: true });
-
-		// Clone the repository instead of downloading tarball to preserve git history
-		logger.info("Cloning Datadog Agent repository...");
-
-		try {
-			// Clone with specific tag
-			execFileSync(
-				"git",
-				[
-					"clone",
-					"--depth",
-					"1",
-					"--branch",
-					version,
-					DATADOG_AGENT_REPO,
-					extractPath,
-				],
-				{ stdio: ["inherit", "pipe", "inherit"] }
-			);
-
-			// Ensure we have the correct version information
-			const gitOutput = execFileSync(
-				"git",
-				["-C", extractPath, "describe", "--tags", "--always"],
-				{ encoding: "utf8", stdio: ["inherit", "pipe", "inherit"] }
-			);
-			logger.info(`Repository cloned at version: ${gitOutput.trim()}`);
-		} catch (error) {
-			// Fallback to tarball download if git clone fails
-			logger.warn("Git clone failed, falling back to tarball download...");
-
-			const tarballUrl = `${DATADOG_AGENT_REPO}/archive/refs/tags/${version}.tar.gz`;
-			const tarballPath = path.join(
-				path.dirname(extractTo),
-				`datadog-agent-${version}.tar.gz`
-			);
-
-			logger.debug(`Downloading from: ${tarballUrl}`);
-
-			const response = await fetch(tarballUrl);
-			if (!response.ok) {
-				throw new Error(`Failed to download source: ${response.statusText}`);
-			}
-
-			const arrayBuffer = await response.arrayBuffer();
-			const buffer = Buffer.from(arrayBuffer);
-			await fs.writeFile(tarballPath, buffer);
-
-			logger.info("Extracting source code...");
-
-			await fs.mkdir(extractPath, { recursive: true });
-
-			await tar.extract({
-				file: tarballPath,
-				cwd: extractPath,
-				strip: 1,
-			});
-
-			await fs.unlink(tarballPath);
-
-			// Initialize git repo and set version manually for ldflags
-			try {
-				execFileSync("git", ["-C", extractPath, "init"], { stdio: "ignore" });
-				execFileSync("git", ["-C", extractPath, "tag", version], {
-					stdio: "ignore",
-				});
-			} catch {
-				// Ignore git errors, version will be set via environment
-			}
+	// Shallow, and by tag: the build reads the version back out through git describe for ldflags.
+	execFileSync(
+		"git",
+		["clone", "--depth", "1", "--branch", version, REPO, into],
+		{
+			stdio: ["inherit", "pipe", "inherit"],
 		}
-
-		logger.info(`Source extracted to: ${extractPath}`);
-		return extractPath;
-	}
+	);
+	const described = execFileSync(
+		"git",
+		["-C", into, "describe", "--tags", "--always"],
+		{
+			encoding: "utf8",
+			stdio: ["inherit", "pipe", "inherit"],
+		}
+	);
+	logger.info(`Cloned at ${described.trim()}`);
+	return into;
 }

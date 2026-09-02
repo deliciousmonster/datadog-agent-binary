@@ -1,38 +1,19 @@
 import { styleText } from "node:util";
-export interface Logger {
-	info: (message: string) => void;
-	warn: (message: string) => void;
-	error: (message: string) => void;
-	debug: (message: string) => void;
-}
 
-export class ConsoleLogger implements Logger {
-	private prefix: string;
+// One prefix for both entry points. The build CLI and the runtime shim both speak as the package,
+// not as the tool the reader is being told to run next.
+const PREFIX = "[datadog-agent]";
 
-	constructor(prefix = "[datadog-agent-build]") {
-		this.prefix = prefix;
-	}
-
-	info(message: string): void {
-		console.log(styleText("blue", this.prefix), message);
-	}
-
-	warn(message: string): void {
-		console.warn(
-			styleText("yellow", this.prefix),
-			styleText("yellow", message)
-		);
-	}
-
-	error(message: string): void {
-		console.error(styleText("red", this.prefix), styleText("red", message));
-	}
-
-	debug(message: string): void {
+export const logger = {
+	info: (message: string): void =>
+		console.log(styleText("blue", PREFIX), message),
+	warn: (message: string): void =>
+		console.warn(styleText("yellow", PREFIX), styleText("yellow", message)),
+	error: (message: string): void =>
+		console.error(styleText("red", PREFIX), styleText("red", message)),
+	debug: (message: string): void => {
 		if (process.env.DEBUG) {
-			console.log(styleText("gray", this.prefix), styleText("gray", message));
+			console.log(styleText("gray", PREFIX), styleText("gray", message));
 		}
-	}
-}
-
-export const logger = new ConsoleLogger();
+	},
+};
