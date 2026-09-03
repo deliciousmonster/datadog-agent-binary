@@ -89,6 +89,22 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The agent build fills the ubuntu image: 73 GiB root with about 12 GiB free at start, no
+      # second volume to move to. None of these paths is loaded by this build; removing them returns ~18 GiB.
+      - name: Reclaim disk space (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          avail() { df --output=avail -k / | tail -1; }
+          before="$(avail)"
+          for path in /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost; do
+            [ -e "$path" ] || continue
+            sudo rm -rf "$path" || echo "could not remove $path, continuing"
+          done
+          echo "Reclaimed $(( ($(avail) - before) / 1024 )) MiB on /"
+          df -h /
+
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
