@@ -37,19 +37,18 @@ const FAKE_API_KEY = "0".repeat(32);
 
 /**
  * One row per Harper line (and, later, per platform) this tier boots against. `moduleLoader` is
- * per-row because it is tied to a live defect, not a fixed choice: guard/src/identity.js statically
- * imports `execFileSync` from `node:child_process`, and Harper's real `vm-current-context`
- * compartment replaces that module with a stub that does not export it, so the component fails to
- * even link under Harper's shipped default. "native" is Harper's own unconstrained loader escape
- * hatch — it also means this row does not exercise Harper's spawn allowlist. Once
- * harper-process-guard stops importing `execFileSync`, change this cell back to
- * "vm-current-context" rather than editing the runner.
+ * per-row because it is tied to a live defect, not a fixed choice: harper-process-guard used to
+ * statically import `execFileSync` from `node:child_process` and spawn without Harper's required
+ * `name` option, both of which only failed under Harper's real `vm-current-context` compartment
+ * — its constrained child_process stub omits `execFileSync`, and its constrained spawn throws
+ * without a name. Both are fixed upstream now, so this row runs under Harper's actual shipped
+ * default rather than the "native" escape hatch that used to be the only way around them.
  */
 export const DIMENSIONS = [
 	{
 		name: "harper@5.2.8 / guard-bundled supervision",
 		harperLine: "5.2.8",
-		moduleLoader: "native",
+		moduleLoader: "vm-current-context",
 	},
 ];
 
