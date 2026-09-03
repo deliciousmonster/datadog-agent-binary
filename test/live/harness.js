@@ -22,17 +22,18 @@ import { findFreePort } from "../support/loopback.js";
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const COMPONENT_NAME = basename(REPO_ROOT);
 
+// The same table resources.js's own AGENTS array and scripts/create-platform-packages.js build
+// from, so a binary added there is resolved here without this file naming it separately.
+const { BINARIES } = await import(
+	join(REPO_ROOT, "dist", "src", "binaries.js")
+);
+
 const ADMIN_USER = "LIVE_ADMIN";
 const ADMIN_PASS = "live-tier-2026";
 
 // Syntactically valid, not real. A wrong key still makes the trace-agent build and count real
 // payloads before the intake refuses them; an unset key disables the forwarder and proves nothing.
 const FAKE_API_KEY = "0".repeat(32);
-
-const AGENT_DESCRIPTORS = [
-	{ shipsAs: "datadog-agent", title: "core agent" },
-	{ shipsAs: "trace-agent", title: "trace-agent" },
-];
 
 /**
  * One row per Harper line (and, later, per platform) this tier boots against. `moduleLoader` is
@@ -275,7 +276,9 @@ async function bootHarperInto(workDir, row, realHome, onSpawn) {
 		debug: await findFreePort(),
 	};
 	const [corePath, tracePath] = await Promise.all(
-		AGENT_DESCRIPTORS.map((agent) => resolveBinary(agent))
+		BINARIES.map((binary) =>
+			resolveBinary({ shipsAs: binary.shipsAs, title: binary.shipsAs })
+		)
 	);
 
 	// Confirmed against this repo's own runtime/config.js: HOME is what os.homedir() (and so
