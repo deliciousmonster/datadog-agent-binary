@@ -21,7 +21,8 @@
 		"lint:check": "prettier --check .",
 		"prepare": "husky",
 		"version": "npm run build && npm run update-optional-deps",
-		"test": "npm run build && node --test \"test/**/*.test.js\""
+		"test": "npm run build && node --test \"test/component/**/*.test.js\" \"test/e2e/**/*.test.js\"",
+		"test:live": "npm run build && node --test \"test/live/**/*.test.js\""
 	},
 	"keywords": [
 		"datadog",
