@@ -470,6 +470,18 @@ test("where Harper has no processes.start, the bundled guard starts both agents 
 			);
 		}
 
+		// Harper writes these behind its own sweep on the native path; on this one nothing else will, and
+		// an agent started against a config file that is not there collects and forwards nothing.
+		assert.ok(
+			fs.existsSync(status.configFile),
+			`the guard started both agents without writing ${status.configFile}`
+		);
+		assert.match(
+			fs.readFileSync(status.configFile, "utf8"),
+			new RegExp(`receiver_port:\\s*${status.receiverPort}\\b`),
+			"the datadog.yaml the guard path wrote does not pin the receiver port the verifies read"
+		);
+
 		const reaper = lockedPid(pidDir, REAPER);
 		assert.ok(
 			reaper && alive(reaper),

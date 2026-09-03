@@ -92,3 +92,20 @@ test("every action is pinned to a commit SHA", () => {
 	}
 	assert.deepEqual(unpinned, []);
 });
+
+// The guard is a submodule, so a checkout without it leaves guard/ empty and every job that runs the
+// component dies on the import rather than on the missing directory.
+test("every checkout takes the submodules the component imports from", () => {
+	const bare = [];
+	for (const file of fs.readdirSync(WORKFLOW_DIR)) {
+		const text = fs.readFileSync(path.join(WORKFLOW_DIR, file), "utf8");
+		// Each checkout step through to the next step, which is where its own `with:` has to be.
+		const steps = text
+			.split(/^      - /m)
+			.filter((step) => /uses:\s*actions\/checkout@/.test(step));
+		for (const step of steps) {
+			if (!/^\s*submodules:\s*true\s*$/m.test(step)) bare.push(file);
+		}
+	}
+	assert.deepEqual(bare, []);
+});
