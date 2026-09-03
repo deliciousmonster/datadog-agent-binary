@@ -3,8 +3,11 @@
 import { spawn } from "node:child_process";
 
 import { describeExit, describeSpawnFailure } from "../runtime/agent-exit.js";
-import { BinaryManager } from "../dist/binary-manager.js";
+import { resolveBinary } from "../runtime/binary.js";
 import { logger } from "../dist/logger.js";
+
+// The core agent, in the shape the resolver reads. The shim launches this one; the component launches both.
+const CORE_AGENT = { shipsAs: "datadog-agent", title: "core agent" };
 
 // Report which Datadog-relevant environment variables are visible to this
 // process. The agent disables itself (or silently collects nothing) when its
@@ -44,8 +47,7 @@ async function main() {
 	try {
 		logDatadogEnv();
 
-		const manager = new BinaryManager();
-		const binaryPath = await manager.ensureBinary();
+		const binaryPath = await resolveBinary(CORE_AGENT);
 
 		logger.info(
 			`Spawning datadog-agent: ${binaryPath} ${args.join(" ")} ` +

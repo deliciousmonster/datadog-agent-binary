@@ -23,9 +23,7 @@ function findRepoRoot(start) {
 const REPO_ROOT = findRepoRoot(import.meta.dirname);
 const { currentTarget } = require(path.join(REPO_ROOT, "dist", "targets.js"));
 const { BINARIES } = require(path.join(REPO_ROOT, "dist", "binaries.js"));
-const { BinaryManager } = require(
-	path.join(REPO_ROOT, "dist", "binary-manager.js")
-);
+const { resolveBinary } = await import("../../runtime/binary.js");
 
 const platform = currentTarget();
 const platformName = platform.name; // e.g. linux-x86_64
@@ -51,10 +49,8 @@ async function start(scope, componentEnv = {}) {
 const TRACE_AGENT = "datadog-trace-agent";
 const CORE_AGENT = "datadog-agent";
 
-// The optional platform package is resolved by `require()` from within
-// dist/binary-manager.js, so it must live in this repo's node_modules — which
-// is exactly where it would sit as a sibling dependency inside a Harper app's
-// node_modules tree.
+// runtime/binary.js resolves the optional platform package by specifier, so it must live in this repo's
+// node_modules — which is exactly where it would sit as a sibling dependency inside a Harper app's tree.
 const platformPkgName = `@harperfast/datadog-agent-binary-${platformName}`;
 const platformPkgDir = path.join(REPO_ROOT, "node_modules", platformPkgName);
 const stubBinaryPath = path.join(platformPkgDir, "bin", binaryName);
@@ -162,12 +158,15 @@ after(() => {
 	safeRemoveFixture();
 });
 
-test("BinaryManager resolves the binary from the installed platform package (no network, no build)", async () => {
-	const resolved = await new BinaryManager().ensureBinary();
+test("the installed platform package is preferred over a local build (no network, no build)", async () => {
+	const resolved = await resolveBinary({
+		shipsAs: BINARIES[0].shipsAs,
+		title: "core agent",
+	});
 	assert.equal(
 		resolved,
 		stubBinaryPath,
-		"ensureBinary() should return the platform package's getBinaryPath()"
+		"the resolver did not take the platform package's getBinaryPath()"
 	);
 	assert.ok(path.isAbsolute(resolved), "resolved path must be absolute");
 	assert.ok(fs.existsSync(resolved), "resolved binary must exist on disk");

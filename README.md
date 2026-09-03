@@ -64,16 +64,6 @@ The `datadog-agent` launcher emits diagnostics at `info`/`warn` (visible without
 
 This makes the common failure modes ("agent disabling," "no logs flowing," "spawn blocked") diagnosable straight from the container logs.
 
-### Programmatic usage
-
-```typescript
-import { BinaryManager } from '@harperfast/datadog-agent-binary';
-
-// Resolve the platform binary installed via optionalDependencies.
-const binaryPath = await new BinaryManager().ensureBinary();
-console.log(`Datadog Agent at: ${binaryPath}`);
-```
-
 ## Supported platforms
 
 | OS | Architecture | Status |
@@ -97,13 +87,11 @@ Running the agent from inside a Harper v5 application has two requirements; this
 
 Harper v5 only lets a component `spawn`/`exec` an executable that is (a) launched with a `name` option (so Harper can dedupe the child across worker threads) and (b) listed by its **exact absolute path** in `applications.allowedSpawnCommands`.
 
-The `datadog-agent` launcher already passes `name: "datadog-agent"`, so all the consuming app must do is allowlist the resolved binary path. Resolve it the same way the launcher does:
+The `datadog-agent` launcher already passes `name: "datadog-agent"`, so all the consuming app must do is allowlist the resolved binary path. It is the one the platform package installed:
 
-```js
-import { BinaryManager } from '@harperfast/datadog-agent-binary';
-const binaryPath = await new BinaryManager().ensureBinary();
-console.log(binaryPath);
-// e.g. /app/node_modules/@harperfast/datadog-agent-binary-linux-x86_64/bin/datadog-agent
+```sh
+ls node_modules/@harperfast/datadog-agent-binary-*/bin/datadog-agent
+# e.g. /app/node_modules/@harperfast/datadog-agent-binary-linux-x86_64/bin/datadog-agent
 ```
 
 Then add that exact path to `harperdb-config.yaml`:
@@ -150,7 +138,7 @@ Harper v5 installs packages with `--ignore-scripts` by default. This package and
 
 ### Build-time tooling is not for the runtime
 
-`datadog-agent-build` (the source-build path that shells out to `dda`, `go`, `pip`, etc.) is for a developer shell or CI runner, not for use inside a Harper-managed process. The supported runtime entry point is `BinaryManager.ensureBinary()` plus the `datadog-agent` launcher.
+The source-build path shells out to `dda`, `go`, `pip` and the rest. It is for a developer shell or CI runner, not for use inside a Harper-managed process, and it is not in the published tarball. The runtime entry points are the component at `resources.js` and the `datadog-agent` launcher.
 
 ## Building from source (maintainers)
 
@@ -164,7 +152,6 @@ datadog-agent-build build
 datadog-agent-build build --datadog-version 7.50.0 --output ~/my-datadog-agent-build
 
 # Other commands
-datadog-agent-build install     # (re)install the binary for this platform
 datadog-agent-build platforms   # list supported platforms
 datadog-agent-build version     # latest upstream version
 ```
@@ -175,7 +162,7 @@ Go 1.23, Node 18+, Python 3.12, CMake, Git, plus a C toolchain per platform: GCC
 
 ## How it works
 
-1. **Pre-built binaries via optional dependencies.** The main package is platform-agnostic and declares one `optionalDependency` per platform. Each contains the pre-built agent and is tagged with npm `os`/`cpu`, so `npm install` pulls only the matching one. At runtime `BinaryManager.ensureBinary()` resolves the binary from that installed package (falling back to a locally built binary for the source-build workflow).
+1. **Pre-built binaries via optional dependencies.** The main package is platform-agnostic and declares one `optionalDependency` per platform. Each contains the pre-built agent and is tagged with npm `os`/`cpu`, so `npm install` pulls only the matching one. At runtime `runtime/binary.js` resolves the binary from that installed package, falling back to a locally built binary for the source-build workflow. It checks the resolved basename: a platform package published before the trace-agent answers every request with the core agent at a path that exists, so an unchecked resolve starts two core agents and no receiver.
 2. **Release process.** GitHub Actions builds the agent for all platforms from Datadog source, smoke-tests that each binary runs standalone, publishes each as its own npm package, and publishes the main package referencing them as optional dependencies. Standalone archives are also attached to the GitHub Release.
 
 ## Development

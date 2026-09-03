@@ -3,7 +3,6 @@
 import { Command } from "commander";
 import { join } from "node:path";
 import {
-	BinaryManager,
 	buildAgents,
 	currentTarget,
 	fetchLatestVersion,
@@ -70,15 +69,6 @@ program
 				`Latest Datadog Agent version: ${await fetchLatestVersion()}`
 			);
 		})
-	);
-
-program
-	.command("install")
-	.description("Install Datadog Agent binary for current platform")
-	.action(
-		run(async () => {
-			logger.info(`Installed: ${await new BinaryManager().ensureBinary()}`);
-		}, "Build from source instead with: datadog-agent-build build")
 	);
 
 program.parse();
