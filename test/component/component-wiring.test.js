@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
+import { resolveBinary } from "../../runtime/binary.js";
 import { loadComponent, REPO_ROOT } from "../support/component.js";
 import { withEnvs, withHome, withTempDir } from "../support/sandbox.js";
 import { captureLogs } from "../support/loopback.js";
@@ -35,19 +36,47 @@ test("NEGATIVE: config.yaml carries pluginModule, without which the plugin is ne
 	);
 });
 
+/** Every local file reachable from `entry` by import, as repo-relative posix paths. */
+function importedFrom(entry) {
+	const seen = new Set();
+	const walk = (file) => {
+		const relative = path.relative(REPO_ROOT, file).split(path.sep).join("/");
+		if (seen.has(relative)) return;
+		seen.add(relative);
+		for (const [, specifier] of fs
+			.readFileSync(file, "utf8")
+			.matchAll(/from\s+["'](\.[^"']+)["']/g)) {
+			walk(path.resolve(path.dirname(file), specifier));
+		}
+	};
+	walk(path.join(REPO_ROOT, entry));
+	return [...seen];
+}
+
+/** Whether `files` ships this path: an exact entry, or a directory entry above it. */
+const ships = (files, relative) =>
+	files.some((entry) =>
+		entry.endsWith("/") ? relative.startsWith(entry) : entry === relative
+	);
+
 test("every file the component reads at runtime is in the published package", () => {
-	const shipped = new Set(manifest.files);
-	for (const file of [
-		"config.yaml",
-		"resources.js",
-		"probe.js",
-		"agent-exit.js",
-		"conf.d/",
-		"guard/src/",
-	]) {
+	for (const file of ["config.yaml", "conf.d/"]) {
 		assert.ok(
-			shipped.has(file),
+			manifest.files.includes(file),
 			`${file} is read at runtime and would not be in the tarball`
+		);
+	}
+	// Walked rather than listed: a helper added under runtime/ is covered by the directory entry, and one
+	// added beside resources.js is not, which is the move a list of known names cannot catch.
+	const imported = importedFrom("resources.js");
+	assert.ok(
+		imported.length > 6 && imported.includes("guard/src/index.js"),
+		`the walk reached ${imported.length} files and cannot have followed the component's imports: ${JSON.stringify(imported)}`
+	);
+	for (const file of imported) {
+		assert.ok(
+			ships(manifest.files, file),
+			`${file} is imported at runtime and would not be in the tarball`
 		);
 	}
 	// A submodule is a gitlink, so a clone without `submodules: true` leaves guard/ present and empty and
@@ -72,8 +101,7 @@ test("every file the component reads at runtime is in the published package", ()
 });
 
 test("NEGATIVE: the platform package the component resolves is derived from this package's name", async () => {
-	const { resolveBinary } = await loadComponent();
-	// A scope rename that missed resources.js resolves a package that does not exist, and the component
+	// A scope rename that missed the resolver looks for a package that does not exist, and the component
 	// reports no binary on a node where the binary is installed.
 	await assert.rejects(
 		() => resolveBinary({ shipsAs: "no-such-agent", title: "nothing" }),

@@ -51,8 +51,7 @@
 		"conf.d/",
 		"config.yaml",
 		"resources.js",
-		"probe.js",
-		"agent-exit.js",
+		"runtime/",
 		"guard/src/",
 		"guard/package.json",
 		"README.md"

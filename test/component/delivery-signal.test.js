@@ -5,12 +5,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import { deliveryVerdict } from "../../runtime/delivery.js";
 import { loadComponent, REPO_ROOT } from "../support/component.js";
 import { createStub, findFreePort, withServer } from "../support/loopback.js";
 import { withEnvs, withTempDir } from "../support/sandbox.js";
 
-const { deliveryVerdict, readDeliverySignal, DatadogStatus } =
-	await loadComponent();
+// The verdict is a pure read of expvar and is taken from the module that computes it; the two below carry
+// this instance's ports, which is what the last test in this file is about.
+const { readDeliverySignal, DatadogStatus } = await loadComponent();
 
 // `receiver` is an array upstream, one entry per language and tracer version reaching this agent, so it is one
 // here too: a node running two runtimes reports two, and reading only the first under-counts every hop.

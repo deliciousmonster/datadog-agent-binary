@@ -30,6 +30,15 @@ export function untraceAgentProbes(tracer, blocklist) {
 	tracer.use("fetch", { blocklist }); // its own plugin extending the http client; use('http') never reaches it
 }
 
+/** A probe body as JSON, or null. Never throws: these bodies come off a socket and pollEndpoint's own contract is the same. */
+export function parseJson(body) {
+	try {
+		return body === null ? null : JSON.parse(body);
+	} catch {
+		return null;
+	}
+}
+
 /** GET over https accepting a self-signed certificate. Loopback only: never point this off 127.0.0.1. */
 function fetchInsecure(url, timeoutMs) {
 	return new Promise((resolve) => {

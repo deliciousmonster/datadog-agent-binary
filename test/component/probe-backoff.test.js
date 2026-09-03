@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 
-import { pollEndpoint } from "../../probe.js";
+import { pollEndpoint } from "../../runtime/probe.js";
 import { createStub, findFreePort, withServer } from "../support/loopback.js";
 
 /** The sleeps pollEndpoint asks for, read off the clock rather than waited out. */

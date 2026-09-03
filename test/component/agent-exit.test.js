@@ -3,7 +3,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeExit, describeSpawnFailure } from "../../agent-exit.js";
+import {
+	describeExit,
+	describeSpawnFailure,
+} from "../../runtime/agent-exit.js";
 
 const errnoError = (code) => Object.assign(new Error("spawn EAGAIN"), { code });
 

@@ -109,7 +109,7 @@ test("NEGATIVE: a quiet boot exports no span for the plugin's own probes or its 
 			HTTPS_PROBE_URL: httpsProbeUrl,
 			DELIVERY_PORT: String(deliveryPort),
 			CONTROL_URL: `http://127.0.0.1:${controlPort}/control`,
-			PROBE_FILE: path.join(REPO_ROOT, "probe.js"),
+			PROBE_FILE: path.join(REPO_ROOT, "runtime", "probe.js"),
 			RESOURCES_FILE: path.join(REPO_ROOT, "resources.js"),
 		})
 	);

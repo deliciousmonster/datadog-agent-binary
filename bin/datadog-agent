@@ -2,7 +2,7 @@
 
 import { spawn } from "node:child_process";
 
-import { describeExit, describeSpawnFailure } from "../agent-exit.js";
+import { describeExit, describeSpawnFailure } from "../runtime/agent-exit.js";
 import { BinaryManager } from "../dist/binary-manager.js";
 import { logger } from "../dist/logger.js";
 
