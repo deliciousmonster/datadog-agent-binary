@@ -1,0 +1,4 @@
+# Windows has no load average, and the check is a stub there
+# (pkg/collector/corechecks/system/cpu/load/stub.go). Upstream deletes load.d from the Windows
+# package for the same reason.
+linux darwin

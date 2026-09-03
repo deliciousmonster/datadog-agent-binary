@@ -1,0 +1,15 @@
+# system.disk.* and system.fs.inodes.*, one set of series per partition.
+#
+# use_mount tags by mount point instead of device; false is what upstream ships and what the
+# Datadog integration tile expects.
+#
+# The defaults enumerate every partition the platform reports, pseudo-filesystems included, so
+# in a container this covers the overlay and the tmpfs mounts as well as the data volume. That
+# is upstream's behaviour and the series are cheap, but if the tag cardinality matters, the
+# knobs are include_all_devices, mount_point_exclude, and file_system_exclude. The full option
+# list is cmd/agent/dist/conf.d/disk.d/conf.yaml.default in the Datadog source.
+
+init_config:
+
+instances:
+  - use_mount: false

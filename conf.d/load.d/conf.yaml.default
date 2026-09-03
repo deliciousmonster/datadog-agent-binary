@@ -1,0 +1,6 @@
+# system.load.1/5/15 and the .norm variants, divided by core count.
+
+init_config:
+
+instances:
+  - {}

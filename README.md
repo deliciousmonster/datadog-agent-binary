@@ -116,6 +116,31 @@ applications:
 
 A bare command name will not match — the full absolute path is required. The path has no version number in it, so it does not change when you upgrade the package.
 
+### Running it as a Harper component
+
+The package is also a Harper component. Installed and named in the node's root config, it starts and
+supervises both agents itself, renders their `datadog.yaml`, ships the core-check configuration that
+host metrics need, and holds the launch open until the APM receiver actually answers.
+
+Naming it in the root config is not optional. Harper hands a component a `Scope` only for one its root
+`harper-config.yaml` names, and discards the module of a component it found by scanning
+`componentsRoot`. A scanned copy loads, serves its resources, and supervises nothing.
+
+```yaml
+# The file settings_path names in ~/.harperdb/hdb_boot_properties.file. The key is the component
+# directory's own name, because a root entry resolves to <componentsRoot>/<key>.
+datadog-agent-binary: { package: "@harperfast/datadog-agent-binary" }
+```
+
+`DD_API_KEY` and `DD_SITE` are read from the environment and are deliberately never written to the
+rendered `datadog.yaml`. `DD_APM_RECEIVER_PORT` and `DD_EXPVAR_PORT` move the two ports the component
+pins and polls. `GET /DatadogStatus/` reports what startup did on the thread that answers it; verify
+the agents themselves with `curl` from a shell rather than through that endpoint, which is inside the
+traced request path it would be reporting on.
+
+This needs a Harper build whose `Scope` carries the process sidecar API. Where it does not, the
+component refuses to start rather than spawning one trace-agent per worker thread, and says so.
+
 ### Install scripts
 
 Harper v5 installs packages with `--ignore-scripts` by default. This package and its platform sub-packages **do not** rely on install scripts — the right binary is selected through `optionalDependencies`. You do **not** need `applications.allowInstallScripts: true`.

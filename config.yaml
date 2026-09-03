@@ -1,0 +1,11 @@
+# Replaces Harper's component defaults outright; there is no merge. `jsResource` makes resources.js the
+# entry the application loader compiles, and `pluginModule` is what hands that same module a Scope.
+
+rest: true
+
+jsResource:
+  files: resources.js
+
+# handleApplication(scope) is the only path that starts an agent, and Harper calls it only for a component
+# the node's root harper-config.yaml names. A directory found by scanning componentsRoot has its module discarded.
+pluginModule: resources.js

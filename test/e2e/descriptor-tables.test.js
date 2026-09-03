@@ -13,7 +13,7 @@ const {
 	TARGETS,
 	BINARIES,
 	currentTarget,
-} = require("./support/generator.js");
+} = require("../support/generator.js");
 const { findTarget } = require(path.join(REPO_ROOT, "dist", "targets.js"));
 
 let workDir;

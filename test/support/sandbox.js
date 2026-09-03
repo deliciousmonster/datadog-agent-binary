@@ -19,6 +19,15 @@ async function withEnv(name, value, run) {
 	}
 }
 
+/** Several at once, applied left to right and unwound the same way. */
+const withEnvs = (vars, run) =>
+	Object.entries(vars).reduceRight(
+		(next, [name, value]) =>
+			() =>
+				withEnv(name, value, next),
+		run
+	)();
+
 /** os.homedir() reads HOME on POSIX and USERPROFILE on Windows. */
 const withHome = (home, run) =>
 	withEnv("HOME", home, () => withEnv("USERPROFILE", home, run));
@@ -32,4 +41,4 @@ async function withTempDir(prefix, run) {
 	}
 }
 
-export { withEnv, withHome, withTempDir };
+export { withEnv, withEnvs, withHome, withTempDir };

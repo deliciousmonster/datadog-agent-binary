@@ -7,7 +7,7 @@ const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { REPO_ROOT, generatePackages } = require("./support/generator.js");
+const { REPO_ROOT, generatePackages } = require("../support/generator.js");
 
 const mainPkg = require(path.join(REPO_ROOT, "package.json"));
 

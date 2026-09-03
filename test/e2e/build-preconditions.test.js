@@ -9,8 +9,8 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { REPO_ROOT } = require("./support/generator.js");
-const { withEnv, withHome, withTempDir } = require("./support/sandbox.js");
+const { REPO_ROOT } = require("../support/generator.js");
+const { withEnv, withHome, withTempDir } = require("../support/sandbox.js");
 const { findTarget } = require(path.join(REPO_ROOT, "dist", "targets.js"));
 const {
 	environment,
