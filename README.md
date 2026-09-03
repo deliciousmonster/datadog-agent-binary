@@ -138,8 +138,11 @@ pins and polls. `GET /DatadogStatus/` reports what startup did on the thread tha
 the agents themselves with `curl` from a shell rather than through that endpoint, which is inside the
 traced request path it would be reporting on.
 
-This needs a Harper build whose `Scope` carries the process sidecar API. Where it does not, the
-component refuses to start rather than spawning one trace-agent per worker thread, and says so.
+A Harper build whose `Scope` carries the process sidecar API supervises both agents itself. Where it
+does not, the bundled guard supervises instead: one lock per agent under `<harper root>/datadog/pids/`,
+its own rather than the node's, plus a detached reaper that stops them when the node goes. Either way
+a PID lock is what holds it to one agent pair per node instead of one trace-agent per worker thread;
+only who holds the lock changes. `GET /DatadogStatus/` reports which of the two ran, as `supervision`.
 
 ### Install scripts
 
