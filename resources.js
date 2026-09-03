@@ -1,19 +1,25 @@
 // handleApplication(scope) is the only path that starts an agent. Harper hands a Scope only to a component
 // its root config names, and only because config.yaml carries `pluginModule` beside `jsResource`.
 
+import { spawn } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
+	renameSync,
 	rmSync,
+	writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { threadId } from "node:worker_threads";
 
 import { describeExit, describeSpawnFailure } from "./agent-exit.js";
+// A submodule, imported by path: a bare specifier would make the guard an install, and the install is what
+// left a dangling symlink that broke `npm ci` on every fresh checkout.
+import { fingerprint, guard } from "./guard/src/index.js";
 import { pollEndpoint, untraceAgentProbes } from "./probe.js";
 
 /** Harper seeds every component compartment with `logger` and `Resource`; stubs keep the module importable in tests. */
@@ -205,10 +211,15 @@ export function prepareRuntime(componentDir) {
 		ipcCert: join(runtimeDir, "run", "ipc_cert.pem"),
 		coreLog: join(runtimeDir, "logs", "agent.log"),
 		traceLog: join(runtimeDir, "logs", "trace-agent.log"),
+		// Not Harper's own pids/: the guard's reaper stops every guard-written lock it finds in the directory
+		// it watches, and a shared one would hold locks this component never wrote.
+		pidDir: join(runtimeDir, "pids"),
+		reaperLog: join(runtimeDir, "logs", "reaper.log"),
 	};
 	mkdirSync(paths.run, { recursive: true });
 	mkdirSync(join(runtimeDir, "logs"), { recursive: true });
 	mkdirSync(paths.confd, { recursive: true });
+	mkdirSync(paths.pidDir, { recursive: true });
 
 	const configFiles = { [paths.configFile]: renderDatadogYaml(paths) };
 	let checks = [];
@@ -404,31 +415,142 @@ const NOT_STARTED = {
 };
 
 // Released Harper's Scope has no `processes` at all, so its absence is the whole version check and no config
-// selects between the two. One binary per node comes from Harper's PID lock, not from this module.
+// selects between the two. One agent per node comes from a PID lock either way; only who holds it changes.
 const supervisesNatively = (scope) =>
 	typeof scope?.processes?.start === "function";
 
-const UNSUPERVISED =
-	`this Harper's Scope has no processes.start, so there is nothing that can hold one agent per node. ` +
-	`Every worker thread would spawn its own trace-agent and all but one would fail to bind ` +
-	`127.0.0.1:${RECEIVER_PORT}, so nothing was started at all. Upgrade Harper to a build with the ` +
-	`process sidecar API`;
+/** The state a supervisor never reached, in the shape both of them report. */
+const unstarted = (agent, error) => ({
+	name: agent.name,
+	title: agent.title,
+	kind: agent.kind,
+	started: false,
+	error,
+});
+
+/** Harper's own sidecar, one call per process. It writes the config files behind its own sweep. */
+const harperSupervisor = (scope) => ({
+	kind: "harper",
+	async start(agents, { configFiles, fingerprintParts }) {
+		const processes = await Promise.all(
+			agents.map((agent) =>
+				scope.processes
+					.start({
+						name: agent.name,
+						title: agent.title,
+						command: agent.command,
+						args: agent.args,
+						// On BOTH: start() writes after its own sweep, so naming them on one alone lets the
+						// other spawn before the files exist.
+						configFiles,
+						fingerprint: fingerprintParts,
+						exitHint: agent.exitHint,
+						verify: agent.verify,
+					})
+					.then((state) => ({
+						name: agent.name,
+						title: agent.title,
+						...state,
+						kind: agent.kind,
+					}))
+					.then((state) => {
+						// Only here: the guard reports its own verdicts through the log it was handed.
+						if (state.verified !== true) {
+							log.error(
+								`Datadog supervisor: the ${agent.title} started but did not verify: ${state.verifyDetail ?? "no detail"}`
+							);
+						}
+						return state;
+					})
+					.catch((error) =>
+						unstarted(agent, describeSpawnFailure(error, agent.command))
+					)
+			)
+		);
+		return { processes, reaper: scope.processes.reaper, report: [] };
+	},
+});
+
+// The reaper takes its own lock beside the agents', so its name is what a second component sharing the
+// directory would collide on; this one names the package rather than taking the guard's generic default.
+const REAPER_NAME = "datadog-agent-reaper";
+
+/** The bundled guard, one call for both agents. `spawn` is this module's own, which is the one Harper constrains. */
+const guardSupervisor = () => ({
+	kind: "guard",
+	async start(agents, { runtime, configFiles, fingerprintParts }) {
+		// Harper's start() writes these itself; on this path nothing else will, and both agents read them.
+		writeConfigFiles(configFiles);
+		const result = await guard({
+			pidDir: runtime.paths.pidDir,
+			spawn,
+			log,
+			version: fingerprint(...fingerprintParts),
+			processes: agents.map((agent) => ({
+				name: agent.name,
+				title: agent.title,
+				binaryPath: agent.command,
+				args: agent.args,
+				exitHint: agent.exitHint,
+				verify: agent.verify,
+			})),
+			reaper: {
+				name: REAPER_NAME,
+				logFile: runtime.paths.reaperLog,
+				// Harper records its own pid here, so a restart inside the grace window keeps the agents
+				// running for the replacement node to adopt.
+				...(runtime.root
+					? { replacementPidFile: join(runtime.root, "hdb.pid") }
+					: {}),
+			},
+		});
+		return {
+			processes: result.processes.map((state, index) => ({
+				...state,
+				kind: agents[index].kind,
+			})),
+			reaper: result.reaper && {
+				name: result.reaper.name,
+				adopted: result.reaper.adopted,
+				...(result.reaper.error ? { error: result.reaper.error } : {}),
+			},
+			report: result.report,
+		};
+	},
+});
+
+// The one place either supervisor is chosen. Everything below takes what this returns and never reads
+// `scope.processes` again, so a second reading cannot disagree with the first.
+const supervisorFor = (scope) =>
+	supervisesNatively(scope) ? harperSupervisor(scope) : guardSupervisor();
+
+/** Temp-and-rename, because every worker thread writes these and a rereading agent must see old or new, never torn. */
+function writeConfigFiles(configFiles) {
+	for (const [target, contents] of Object.entries(configFiles)) {
+		try {
+			mkdirSync(dirname(target), { recursive: true });
+			const temp = `${target}.${process.pid}.${threadId}.tmp`;
+			writeFileSync(temp, contents, "utf-8");
+			renameSync(temp, target);
+		} catch (error) {
+			log.error(
+				`Datadog supervisor: could not write ${target}: ${error.message}`
+			);
+		}
+	}
+}
 
 // Never rejects: a throw out of handleApplication plants an ErrorResource at the component's root path,
 // which is worse than running without telemetry and saying so.
 async function startAgents(scope) {
+	const supervisor = supervisorFor(scope);
 	const status = {
-		supervision: supervisesNatively(scope) ? "harper" : "unavailable",
+		supervision: supervisor.kind,
 		receiverPort: RECEIVER_PORT,
 		apiKey: process.env.DD_API_KEY ? "set" : "MISSING",
 		processes: [],
 	};
 	try {
-		if (!supervisesNatively(scope)) {
-			status.error = UNSUPERVISED;
-			log.error(`Datadog supervisor: ${UNSUPERVISED}.`);
-			return status;
-		}
 		if (!process.env.DD_API_KEY) {
 			log.warn(
 				"Datadog supervisor: DD_API_KEY is not set. Both agents will start and the trace-agent will " +
@@ -459,7 +581,7 @@ async function startAgents(scope) {
 
 		// The credentials ride in the inherited environment, invisible to the config contents, so a rotated
 		// key must be folded in here or the old one is posted forever.
-		const fingerprint = [
+		const fingerprintParts = [
 			...Object.values(runtime.configFiles),
 			process.env.DD_API_KEY ?? "",
 			process.env.DD_SITE ?? "",
@@ -467,57 +589,38 @@ async function startAgents(scope) {
 			...binaries,
 		];
 
-		status.processes = await Promise.all(
-			AGENTS.map((agent, index) =>
-				startAgent(scope, agent, binaries[index], failures[index], {
+		const declared = AGENTS.map((agent, index) => ({
+			...agent,
+			command: binaries[index],
+			args: agent.args(runtime.paths),
+			verify: (state) => verifyFor(agent, state, runtime.paths),
+		}));
+
+		// Reported here rather than inside a supervisor, so the two of them cannot describe the same
+		// unresolvable binary in different words.
+		const startable = declared.filter((agent) => agent.command);
+		const started = startable.length
+			? await supervisor.start(startable, {
 					runtime,
-					fingerprint,
+					configFiles: runtime.configFiles,
+					fingerprintParts,
 				})
-			)
+			: { processes: [], report: [] };
+
+		const states = new Map(
+			startable.map((agent, index) => [agent.name, started.processes[index]])
 		);
-		// Harper forks one reaper per node and names it itself; a name here would be a second lock nothing sweeps.
-		status.reaper = scope.processes.reaper;
+		status.processes = declared.map(
+			(agent, index) =>
+				states.get(agent.name) ?? unstarted(agent, failures[index])
+		);
+		if (started.reaper) status.reaper = started.reaper;
+		if (started.report?.length) status.supervisionReport = started.report;
 	} catch (error) {
 		status.error = error.message;
 		log.error(`Datadog supervisor: startup failed: ${error.message}`);
 	}
 	return status;
-}
-
-// Started together rather than in sequence: start() awaits its own verify, and an awaited trace-agent holds
-// the core agent behind it for as long as the receiver takes to bind.
-function startAgent(scope, agent, command, failure, { runtime, fingerprint }) {
-	const unstarted = (error) => ({
-		name: agent.name,
-		title: agent.title,
-		kind: agent.kind,
-		started: false,
-		error,
-	});
-	if (!command) return Promise.resolve(unstarted(failure));
-	return scope.processes
-		.start({
-			name: agent.name,
-			title: agent.title,
-			command,
-			args: agent.args(runtime.paths),
-			// On BOTH: start() writes after its own sweep, so naming them on one alone lets the other spawn
-			// before the files exist.
-			configFiles: runtime.configFiles,
-			fingerprint,
-			exitHint: agent.exitHint,
-			verify: (state) => verifyFor(agent, state, runtime.paths),
-		})
-		.then((state) => Object.assign(state, { kind: agent.kind }))
-		.then((state) => {
-			if (state.verified !== true) {
-				log.error(
-					`Datadog supervisor: the ${agent.title} started but did not verify: ${state.verifyDetail ?? "no detail"}`
-				);
-			}
-			return state;
-		})
-		.catch((error) => unstarted(describeSpawnFailure(error, command)));
 }
 
 // 60s because handleApplication runs behind scope.ready and waitForDeployCompletion, then behind a per-plugin

@@ -6,3 +6,4 @@ source/
 release/
 *.md
 package-lock.json
+guard/

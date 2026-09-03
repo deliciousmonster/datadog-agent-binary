@@ -6,11 +6,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import {
 	loadComponent,
 	recordingScope,
 	startFor,
+	STAYS_UP,
 	withBuiltBinaries,
 } from "../support/component.js";
 import { withEnvs, withTempDir } from "../support/sandbox.js";
@@ -114,42 +116,6 @@ test("NEGATIVE: a deploy validation load starts nothing", async () => {
 				scope.starts,
 				[],
 				"every `harper deploy` would re-enter the spawn path against the live node"
-			);
-		}
-	);
-});
-
-test("NEGATIVE: a Harper without the process sidecar refuses to start rather than spawning per thread", async () => {
-	await withAgentsAnswering(
-		{ info: SERVING, expvar: CORE_EXPVAR },
-		async () => {
-			const logs = [];
-			const result = await captureLogs(async () => {
-				logs.push(await start({ processes: {} }));
-			});
-			const { status } = logs[0];
-
-			assert.deepEqual(
-				status.processes,
-				[],
-				"nothing may be spawned where no lock can hold one agent per node"
-			);
-			assert.equal(status.supervision, "unavailable");
-			// Refused before anything is written, not on the way through: reaching start() and failing there
-			// leaves the same empty process list behind, so the runtime tree is what separates the two.
-			assert.equal(
-				status.runtimeDir,
-				undefined,
-				"the runtime tree was written for a start that cannot happen"
-			);
-			assert.match(
-				status.error,
-				/processes\.start[\s\S]*one agent per node/,
-				`the refusal has to name what is missing and what it costs, not read as a TypeError: ${status.error}`
-			);
-			assert.ok(
-				result.some((line) => line.includes("processes.start")),
-				`the refusal has to reach the log too; logged: ${JSON.stringify(result)}`
 			);
 		}
 	);
@@ -405,4 +371,198 @@ test("a binary that resolves to the wrong agent is refused rather than started t
 			"only the agent whose binary actually resolved may be handed to Harper"
 		);
 	});
+});
+
+// Who supervises, driven from both sides. The guard half spawns for real and reads the locks off disk,
+// because a fallback exercised through a stub is a fallback nobody has run.
+
+const REAPER = "datadog-agent-reaper";
+const BOTH_AGENTS = [TRACE_AGENT, CORE_AGENT];
+
+const lockFile = (pidDir, name) => path.join(pidDir, `${name}.pid`);
+
+const alive = (pid) => {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+};
+
+// SIGTERM rather than SIGKILL: the guard reads a signalled stop as deliberate and releases the lock instead
+// of restarting, so teardown cannot race the supervision the test just started.
+const halt = (pid) => {
+	try {
+		process.kill(pid, "SIGTERM");
+	} catch {
+		// Already gone, which is the outcome asked for.
+	}
+};
+
+/** The pid a guard lock records, or null where there is no lock. Line 1 is the pid; a host reading only that still reads it. */
+function lockedPid(pidDir, name) {
+	try {
+		const first = fs
+			.readFileSync(lockFile(pidDir, name), "utf-8")
+			.split("\n")[0];
+		return Number.parseInt(first, 10);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The guard path, with everything it spawned stopped before the runtime tree goes. Waiting for the locks to
+ * clear is what keeps a release still in flight from writing into a deleted directory.
+ */
+async function withGuardStarted(run) {
+	return withAgentsAnswering(
+		{ info: SERVING, expvar: CORE_EXPVAR },
+		async ({ root }) => {
+			const pidDir = path.join(root, "datadog", "pids");
+			let status;
+			try {
+				// A Scope with no `processes` is what released Harper hands a plugin, and it used to be refused.
+				({ status } = await withBuiltBinaries(() => start({}), STAYS_UP));
+				return await run({ pidDir, status });
+			} finally {
+				for (const state of status?.processes ?? []) halt(state.pid);
+				halt(lockedPid(pidDir, REAPER));
+				for (let i = 0; i < 300; i++) {
+					if (
+						BOTH_AGENTS.every((name) => !fs.existsSync(lockFile(pidDir, name)))
+					) {
+						break;
+					}
+					await delay(10);
+				}
+			}
+		}
+	);
+}
+
+test("where Harper has no processes.start, the bundled guard starts both agents and locks each one", async () => {
+	await withGuardStarted(({ pidDir, status }) => {
+		assert.equal(
+			status.supervision,
+			"guard",
+			"a Harper without the sidecar API has to reach the bundled guard, not a refusal"
+		);
+
+		for (const name of BOTH_AGENTS) {
+			const state = status.processes.find((entry) => entry.name === name);
+			assert.equal(
+				state.started,
+				true,
+				`the guard did not start ${name}: ${state.error}`
+			);
+			assert.ok(
+				Number.isInteger(state.pid) && alive(state.pid),
+				`${name} reports pid ${state.pid}, which is not a live process`
+			);
+			// The lock is the whole arbitration: without one every worker thread starts its own pair and all
+			// but one fails to bind the receiver.
+			assert.equal(
+				lockedPid(pidDir, name),
+				state.pid,
+				`the guard started ${name} without recording it under ${pidDir}, so a second thread would start another`
+			);
+		}
+
+		const reaper = lockedPid(pidDir, REAPER);
+		assert.ok(
+			reaper && alive(reaper),
+			"no reaper is running, so both agents outlive the node that started them"
+		);
+		assert.equal(status.reaper.name, REAPER);
+
+		// The pid the guard really spawned is the one the verify was handed; a state assembled from the
+		// declaration rather than from the spawn would name something else here.
+		const core = status.processes.find((entry) => entry.name === CORE_AGENT);
+		assert.match(
+			core.verifyDetail,
+			new RegExp(`\\b${core.pid}\\b`),
+			`the core agent verdict does not carry the pid that was spawned: ${core.verifyDetail}`
+		);
+	});
+});
+
+test("a deliberate stop releases the lock, so the next boot starts rather than adopting a corpse", async () => {
+	const { pidDir, pids } = await withGuardStarted(({ pidDir, status }) => ({
+		pidDir,
+		pids: status.processes.map((entry) => entry.pid),
+	}));
+
+	// Stopped and waited for inside withGuardStarted, which is the behaviour under test: a lock kept across
+	// a deliberate stop is one the next boot adopts, finding a pid that is gone or has been reused.
+	for (const name of BOTH_AGENTS) {
+		assert.equal(
+			fs.existsSync(lockFile(pidDir, name)),
+			false,
+			`${name} kept its lock after a deliberate stop`
+		);
+	}
+	for (const pid of pids) {
+		assert.equal(alive(pid), false, `pid ${pid} survived the stop`);
+	}
+});
+
+test("NEGATIVE: where Harper has processes.start, the guard never runs", async () => {
+	await withAgentsAnswering(
+		{ info: SERVING, expvar: CORE_EXPVAR },
+		async ({ root }) => {
+			const scope = recordingScope();
+			const { status } = await withBuiltBinaries(() => start(scope), STAYS_UP);
+
+			assert.equal(status.supervision, "harper");
+			assert.deepEqual(
+				scope.starts.map((options) => options.name).sort(),
+				[...BOTH_AGENTS].sort(),
+				"Harper's own sidecar was not given both agents"
+			);
+			// The guard writes a lock before it spawns, so an empty pid directory is what separates "the
+			// native path ran" from "both of them did", which no assertion on the native path can tell apart.
+			assert.deepEqual(
+				fs.readdirSync(path.join(root, "datadog", "pids")),
+				[],
+				"the guard took a lock under a Harper that supervises natively, so two supervisors hold one pair of agents"
+			);
+		}
+	);
+});
+
+test("both supervisors report the same agents, started, under the same names", async () => {
+	const identity = (status) =>
+		status.processes.map(({ name, title, kind, started }) => ({
+			name,
+			title,
+			kind,
+			started,
+		}));
+
+	const guarded = await withGuardStarted(({ status }) => identity(status));
+	const native = await withAgentsAnswering(
+		{ info: SERVING, expvar: CORE_EXPVAR },
+		async () => {
+			const { status } = await withBuiltBinaries(
+				() => start(recordingScope()),
+				STAYS_UP
+			);
+			return identity(status);
+		}
+	);
+
+	// The fallback is only a fallback if what it reports can be read the same way: the status endpoint and
+	// the delivery signal both index this list by name and kind.
+	assert.deepEqual(
+		guarded,
+		native,
+		"the two supervision paths report different agents for the same node"
+	);
+	assert.deepEqual(
+		guarded.map((entry) => entry.started),
+		[true, true],
+		"a path that starts nothing would satisfy an equality check against another that starts nothing"
+	);
 });

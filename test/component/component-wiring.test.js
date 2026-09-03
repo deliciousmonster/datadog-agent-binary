@@ -43,12 +43,20 @@ test("every file the component reads at runtime is in the published package", ()
 		"probe.js",
 		"agent-exit.js",
 		"conf.d/",
+		"guard/src/",
 	]) {
 		assert.ok(
 			shipped.has(file),
 			`${file} is read at runtime and would not be in the tarball`
 		);
 	}
+	// A submodule is a gitlink, so a clone without `submodules: true` leaves guard/ present and empty and
+	// every boot fails on the import instead of here, which is the failure this gate exists to move forward.
+	const guardEntry = path.join(REPO_ROOT, "guard", "src", "index.js");
+	assert.ok(
+		fs.existsSync(guardEntry) && fs.statSync(guardEntry).size > 0,
+		"guard/src/index.js is missing or empty: run `git submodule update --init`, or the fallback supervisor cannot be imported at all"
+	);
 	// The core checks are the difference between an agent that collects host metrics and one that reports
 	// healthy and collects nothing, so an empty conf.d/ ships as silently as a missing one.
 	const checks = fs

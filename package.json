@@ -53,6 +53,8 @@
 		"resources.js",
 		"probe.js",
 		"agent-exit.js",
+		"guard/src/",
+		"guard/package.json",
 		"README.md"
 	],
 	"engines": {

@@ -20,12 +20,18 @@ export function loadComponent() {
 	return import(`${url}?instance=${instance++}`);
 }
 
+/** A binary that exits at once, which is all a suite driving a recorded Harper ever runs. */
+export const EXITS_AT_ONCE = "#!/bin/sh\nexit 0\n";
+
+/** A binary that stays up, so a suite spawning for real has a live pid to find behind the lock. */
+export const STAYS_UP = "#!/bin/sh\nexec sleep 15\n";
+
 /**
  * Both agent binaries where resources.js looks for a dev checkout's build output, for the duration of
  * `run`. The installed platform package predates the trace-agent and answers every request with the core
  * agent, so without these nothing that needs a trace-agent path can be driven at all.
  */
-export async function withBuiltBinaries(run) {
+export async function withBuiltBinaries(run, body = EXITS_AT_ONCE) {
 	const target = currentTarget();
 	const binDir = path.join(REPO_ROOT, "build", target.name, "bin");
 	fs.mkdirSync(binDir, { recursive: true });
@@ -33,7 +39,7 @@ export async function withBuiltBinaries(run) {
 		path.join(binDir, `${binary.shipsAs}${target.exe}`)
 	);
 	for (const file of files) {
-		fs.writeFileSync(file, "#!/bin/sh\nexit 0\n");
+		fs.writeFileSync(file, body);
 		fs.chmodSync(file, 0o755);
 	}
 	try {
