@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+
 const fs = require("fs");
 const path = require("path");
 const { argv } = require("process");
@@ -8,7 +12,10 @@ const { BINARIES } = require("../dist/binaries.js");
 
 function getParentVersion() {
 	const parentPackageJson = JSON.parse(
-		fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")
+		fs.readFileSync(
+			path.join(import.meta.dirname, "..", "package.json"),
+			"utf8"
+		)
 	);
 	return parentPackageJson.version;
 }
@@ -23,7 +30,7 @@ function getCurrentPlatform() {
 
 function getPackageDir(platform) {
 	const platformName = platform.name;
-	return path.join(__dirname, "..", "npm", platformName);
+	return path.join(import.meta.dirname, "..", "npm", platformName);
 }
 
 function createPackageDir(platform) {
@@ -38,7 +45,7 @@ function copyPlatformBinary(platform) {
 	for (const binary of BINARIES) {
 		const fileName = `${binary.shipsAs}${platform.exe}`;
 		const from = path.join(
-			__dirname,
+			import.meta.dirname,
 			"..",
 			"build",
 			platform.name,

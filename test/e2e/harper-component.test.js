@@ -1,6 +1,9 @@
-"use strict";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
 
 const { test, before, after } = require("node:test");
+
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -17,7 +20,7 @@ function findRepoRoot(start) {
 	return dir;
 }
 
-const REPO_ROOT = findRepoRoot(__dirname);
+const REPO_ROOT = findRepoRoot(import.meta.dirname);
 const { currentTarget } = require(path.join(REPO_ROOT, "dist", "targets.js"));
 const { BINARIES } = require(path.join(REPO_ROOT, "dist", "binaries.js"));
 const { BinaryManager } = require(

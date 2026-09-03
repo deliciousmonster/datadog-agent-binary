@@ -1,6 +1,9 @@
-"use strict";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
 
 const { test, before, after } = require("node:test");
+
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");

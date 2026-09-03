@@ -1,4 +1,6 @@
-"use strict";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -15,7 +17,7 @@ function findRepoRoot(start) {
 	return dir;
 }
 
-const REPO_ROOT = findRepoRoot(__dirname);
+const REPO_ROOT = findRepoRoot(import.meta.dirname);
 const { TARGETS, currentTarget } = require(
 	path.join(REPO_ROOT, "dist", "targets.js")
 );
@@ -63,10 +65,4 @@ function generatePackages({ prefix, args = [] }) {
 	return { workDir, npmDir: path.join(workDir, "npm") };
 }
 
-module.exports = {
-	REPO_ROOT,
-	generatePackages,
-	TARGETS,
-	BINARIES,
-	currentTarget,
-};
+export { REPO_ROOT, generatePackages, TARGETS, BINARIES, currentTarget };

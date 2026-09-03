@@ -1,4 +1,6 @@
-"use strict";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -30,4 +32,4 @@ async function withTempDir(prefix, run) {
 	}
 }
 
-module.exports = { withEnv, withHome, withTempDir };
+export { withEnv, withHome, withTempDir };

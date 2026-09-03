@@ -2,6 +2,7 @@
 	"name": "@harperfast/datadog-agent-binary",
 	"version": "7.75.5",
 	"description": "TypeScript package to download and build Datadog Agent from source for multiple platforms",
+	"type": "module",
 	"main": "dist/index.js",
 	"bin": {
 		"datadog-agent-build": "dist/cli.js",
@@ -22,7 +23,7 @@
 		"prepare": "husky",
 		"version": "npm run build && npm run update-optional-deps",
 		"prepublishOnly": "npm run build",
-		"test": "npm run build && node --test test/e2e/build-preconditions.test.js test/e2e/dda-install.test.js test/e2e/descriptor-tables.test.js test/e2e/release-workflow.test.js test/e2e/harper-component.test.js test/e2e/platform-packages.test.js"
+		"test": "npm run build && node --test \"test/**/*.test.js\""
 	},
 	"keywords": [
 		"datadog",
@@ -37,6 +38,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "^20.10.0",
+		"dd-trace": "^5.69.0",
 		"husky": "^9.1.7",
 		"lint-staged": "^16.1.2",
 		"prettier": "^3.6.1",
@@ -46,6 +48,11 @@
 	"files": [
 		"dist/",
 		"bin/",
+		"conf.d/",
+		"config.yaml",
+		"resources.js",
+		"probe.js",
+		"agent-exit.js",
 		"README.md"
 	],
 	"engines": {

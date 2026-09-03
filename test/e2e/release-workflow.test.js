@@ -1,6 +1,9 @@
-"use strict";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
 
 // Whether the release workflow builds is a runner's answer, not this file's. What is checkable here
+
 // is the shape: one step per job rather than a Unix and a pwsh copy, and no input reaching a script.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");

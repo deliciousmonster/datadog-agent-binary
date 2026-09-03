@@ -1,6 +1,9 @@
-"use strict";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
 
 // pipx builds each venv with the interpreter pipx was installed under, so ubuntu-22.04's 3.10 pipx
+
 // rejected every published dda against upstream's 3.12 pin and twelve nightly builds died on it.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");

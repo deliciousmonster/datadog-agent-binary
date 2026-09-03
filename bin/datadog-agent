@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-const { BinaryManager } = require("../dist/binary-manager.js");
-const { spawn } = require("child_process");
-const { logger } = require("../dist/logger.js");
+import { spawn } from "node:child_process";
+
+import { BinaryManager } from "../dist/binary-manager.js";
+import { logger } from "../dist/logger.js";
 
 // Report which Datadog-relevant environment variables are visible to this
 // process. The agent disables itself (or silently collects nothing) when its
