@@ -21,8 +21,12 @@ function findRepoRoot(start) {
 }
 
 const REPO_ROOT = findRepoRoot(import.meta.dirname);
-const { currentTarget } = require(path.join(REPO_ROOT, "dist", "targets.js"));
-const { BINARIES } = require(path.join(REPO_ROOT, "dist", "binaries.js"));
+const { currentTarget } = require(
+	path.join(REPO_ROOT, "dist", "src", "targets.js")
+);
+const { BINARIES } = require(
+	path.join(REPO_ROOT, "dist", "src", "binaries.js")
+);
 const { resolveBinary } = await import("../../runtime/binary.js");
 
 const platform = currentTarget();

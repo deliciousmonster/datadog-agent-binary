@@ -2,11 +2,11 @@
 
 import { Command } from "commander";
 import { join } from "node:path";
+import { logger } from "../runtime/log.js";
 import {
 	buildAgents,
 	currentTarget,
 	fetchLatestVersion,
-	logger,
 	targetNames,
 } from "./index.js";
 

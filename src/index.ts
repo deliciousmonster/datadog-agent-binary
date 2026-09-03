@@ -6,7 +6,7 @@ import {
 	fetchLatestVersion,
 	pinnedVersion,
 } from "./downloader.js";
-import { logger } from "./logger.js";
+import { logger } from "../runtime/log.js";
 import { currentTarget, Target } from "./targets.js";
 
 export interface BuildRequest {
@@ -49,5 +49,4 @@ export async function buildAgents(
 export * from "./binaries.js";
 export * from "./build.js";
 export * from "./downloader.js";
-export * from "./logger.js";
 export * from "./targets.js";

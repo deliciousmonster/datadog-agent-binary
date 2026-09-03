@@ -105,7 +105,9 @@ test("every supported target has a matrix leg that builds it, and vice versa", (
 		"extracted no matrix legs; the workflow shape changed and this check is now blind"
 	);
 
-	const { targetNames } = require(path.join(REPO_ROOT, "dist", "targets.js"));
+	const { targetNames } = require(
+		path.join(REPO_ROOT, "dist", "src", "targets.js")
+	);
 	assert.deepEqual(legs.slice().sort(), targetNames().slice().sort());
 });
 

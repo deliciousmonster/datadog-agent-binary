@@ -3,18 +3,16 @@
 	"version": "7.75.5",
 	"description": "TypeScript package to download and build Datadog Agent from source for multiple platforms",
 	"type": "module",
-	"main": "dist/index.js",
 	"bin": {
-		"datadog-agent-build": "dist/cli.js",
 		"datadog-agent": "bin/datadog-agent"
 	},
 	"scripts": {
 		"build": "tsc",
 		"dev": "tsc --watch",
-		"start": "node dist/cli.js",
+		"start": "node dist/src/cli.js",
 		"typecheck": "tsc --noEmit",
 		"clean": "rm -rf dist/ build/ release/ source/ go/ npm/",
-		"build-agent": "npm run build && node dist/cli.js build",
+		"build-agent": "npm run build && node dist/src/cli.js build",
 		"all-platform-packages": "npm run build && node scripts/create-platform-packages.js --all",
 		"platform-package": "npm run build && npm run build-agent && node scripts/create-platform-packages.js",
 		"update-optional-deps": "npm run build && node scripts/update-optional-deps.js",
@@ -22,7 +20,6 @@
 		"lint:check": "prettier --check .",
 		"prepare": "husky",
 		"version": "npm run build && npm run update-optional-deps",
-		"prepublishOnly": "npm run build",
 		"test": "npm run build && node --test \"test/**/*.test.js\""
 	},
 	"keywords": [
@@ -46,7 +43,6 @@
 		"typescript": "^5.3.0"
 	},
 	"files": [
-		"dist/",
 		"bin/",
 		"conf.d/",
 		"config.yaml",

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { logger } from "./logger.js";
+import { logger } from "../runtime/log.js";
 
 const REPO = "https://github.com/DataDog/datadog-agent";
 const RELEASES =

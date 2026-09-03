@@ -3,7 +3,7 @@ import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { AgentBinary, BINARIES } from "./binaries.js";
-import { logger } from "./logger.js";
+import { logger } from "../runtime/log.js";
 import { Target } from "./targets.js";
 
 export interface BuildOptions {

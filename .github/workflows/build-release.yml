@@ -155,7 +155,7 @@ jobs:
         run: |
           args=()
           if [ -n "$VERSION" ]; then args=(--datadog-version "$VERSION"); fi
-          node dist/cli.js build "${args[@]}"
+          node dist/src/cli.js build "${args[@]}"
           ls -l "build/${{ matrix.platform }}/bin/"
 
       # Prove the binary actually runs as a standalone file BEFORE we ship it.

@@ -14,7 +14,9 @@ const {
 	BINARIES,
 	currentTarget,
 } = require("../support/generator.js");
-const { findTarget } = require(path.join(REPO_ROOT, "dist", "targets.js"));
+const { findTarget } = require(
+	path.join(REPO_ROOT, "dist", "src", "targets.js")
+);
 
 let workDir;
 let packageDir;
@@ -70,7 +72,9 @@ test("an unknown binary name throws rather than returning a path that does not e
 // A relocatable npm artifact and Python integrations are mutually exclusive: the python tag links
 // an embedded CPython and rpaths librtloader into the build tree. The flag is policy, not tuning.
 test("the override adds flags and cannot drop the python exclusion", () => {
-	const { buildArgs } = require(path.join(REPO_ROOT, "dist", "build.js"));
+	const { buildArgs } = require(
+		path.join(REPO_ROOT, "dist", "src", "build.js")
+	);
 	const core = BINARIES.find((b) => b.shipsAs === "datadog-agent");
 	assert.ok(core.mandatoryArgs.includes("--build-exclude=systemd,python"));
 
@@ -135,7 +139,7 @@ test("currentTarget is a member of the supported table", () => {
 // GitHub API that rate-limits at 60 an hour per IP across every runner.
 test("the agent version is pinned in the repo, not resolved from the network", async () => {
 	const { pinnedVersion } = require(
-		path.join(REPO_ROOT, "dist", "downloader.js")
+		path.join(REPO_ROOT, "dist", "src", "downloader.js")
 	);
 	const pin = await pinnedVersion();
 	assert.match(

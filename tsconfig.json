@@ -4,7 +4,10 @@
 		"module": "node16",
 		"lib": ["ES2020"],
 		"outDir": "./dist",
-		"rootDir": "./src",
+		// The repo root, not src/: the build half imports runtime/log.js, and every input must sit under
+		// rootDir. Output mirrors the tree, so the CLI compiles to dist/src/cli.js.
+		"rootDir": ".",
+		"allowJs": true,
 		"strict": true,
 		"esModuleInterop": true,
 		"skipLibCheck": true,

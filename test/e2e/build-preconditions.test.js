@@ -11,14 +11,16 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { REPO_ROOT } = require("../support/generator.js");
 const { withEnv, withHome, withTempDir } = require("../support/sandbox.js");
-const { findTarget } = require(path.join(REPO_ROOT, "dist", "targets.js"));
+const { findTarget } = require(
+	path.join(REPO_ROOT, "dist", "src", "targets.js")
+);
 const {
 	environment,
 	prepareHost,
 	resolveWindowsShell,
 	windowsShellCandidates,
 	writeBazelShellOverride,
-} = require(path.join(REPO_ROOT, "dist", "build.js"));
+} = require(path.join(REPO_ROOT, "dist", "src", "build.js"));
 
 const LINUX = findTarget("linux-x86_64");
 const WINDOWS = findTarget("windows-x86_64");

@@ -19,16 +19,19 @@ function findRepoRoot(start) {
 
 const REPO_ROOT = findRepoRoot(import.meta.dirname);
 const { TARGETS, currentTarget } = require(
-	path.join(REPO_ROOT, "dist", "targets.js")
+	path.join(REPO_ROOT, "dist", "src", "targets.js")
 );
-const { BINARIES } = require(path.join(REPO_ROOT, "dist", "binaries.js"));
+const { BINARIES } = require(
+	path.join(REPO_ROOT, "dist", "src", "binaries.js")
+);
 
 // Runs the real generator in a throwaway copy, over real files on disk. `args` selects the mode,
 // so a caller can exercise the single-platform default as well as --all.
 function generatePackages({ prefix, args = [] }) {
 	const workDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 	fs.mkdirSync(path.join(workDir, "scripts"));
-	fs.mkdirSync(path.join(workDir, "dist"));
+	// The compiled tree mirrors the source tree, so the copy has to nest the same way the generator requires.
+	fs.mkdirSync(path.join(workDir, "dist", "src"), { recursive: true });
 
 	fs.copyFileSync(
 		path.join(REPO_ROOT, "scripts", "create-platform-packages.js"),
@@ -36,8 +39,8 @@ function generatePackages({ prefix, args = [] }) {
 	);
 	for (const table of ["targets.js", "binaries.js"]) {
 		fs.copyFileSync(
-			path.join(REPO_ROOT, "dist", table),
-			path.join(workDir, "dist", table)
+			path.join(REPO_ROOT, "dist", "src", table),
+			path.join(workDir, "dist", "src", table)
 		);
 	}
 	fs.copyFileSync(

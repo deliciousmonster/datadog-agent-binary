@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 
 import { describeExit, describeSpawnFailure } from "../runtime/agent-exit.js";
 import { resolveBinary } from "../runtime/binary.js";
-import { logger } from "../dist/logger.js";
+import { logger } from "../runtime/log.js";
 
 // The core agent, in the shape the resolver reads. The shim launches this one; the component launches both.
 const CORE_AGENT = { shipsAs: "datadog-agent", title: "core agent" };

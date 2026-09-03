@@ -10,7 +10,7 @@ const path = require("path");
 const packageJsonPath = path.join(import.meta.dirname, "..", "package.json");
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
 
-const { targetNames } = require("../dist/targets.js");
+const { targetNames } = require("../dist/src/targets.js");
 const platforms = targetNames();
 
 // Update optionalDependencies to use the same version as the main package

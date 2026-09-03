@@ -36,20 +36,23 @@ test("NEGATIVE: config.yaml carries pluginModule, without which the plugin is ne
 	);
 });
 
-/** Every local file reachable from `entry` by import, as repo-relative posix paths. */
-function importedFrom(entry) {
+/** Every local file reachable from `entries` by import, as repo-relative posix paths. */
+function importedFrom(...entries) {
 	const seen = new Set();
 	const walk = (file) => {
 		const relative = path.relative(REPO_ROOT, file).split(path.sep).join("/");
 		if (seen.has(relative)) return;
 		seen.add(relative);
+		// A specifier resolving to nothing is still recorded, so it is reported as unshipped rather than
+		// thrown as a read error that names no cause.
+		if (!fs.existsSync(file)) return;
 		for (const [, specifier] of fs
 			.readFileSync(file, "utf8")
 			.matchAll(/from\s+["'](\.[^"']+)["']/g)) {
 			walk(path.resolve(path.dirname(file), specifier));
 		}
 	};
-	walk(path.join(REPO_ROOT, entry));
+	for (const entry of entries) walk(path.join(REPO_ROOT, entry));
 	return [...seen];
 }
 
@@ -59,16 +62,17 @@ const ships = (files, relative) =>
 		entry.endsWith("/") ? relative.startsWith(entry) : entry === relative
 	);
 
-test("every file the component reads at runtime is in the published package", () => {
+test("every file the component and the shim read at runtime is in the published package", () => {
 	for (const file of ["config.yaml", "conf.d/"]) {
 		assert.ok(
 			manifest.files.includes(file),
 			`${file} is read at runtime and would not be in the tarball`
 		);
 	}
-	// Walked rather than listed: a helper added under runtime/ is covered by the directory entry, and one
-	// added beside resources.js is not, which is the move a list of known names cannot catch.
-	const imported = importedFrom("resources.js");
+	// Walked rather than listed, from both shipped entries: a helper added under runtime/ is covered by the
+	// directory entry, one added beside resources.js is not, and an import of dist/ reaches build output the
+	// tarball no longer carries. A list of known names catches none of the three.
+	const imported = importedFrom("resources.js", "bin/datadog-agent");
 	assert.ok(
 		imported.length > 6 && imported.includes("guard/src/index.js"),
 		`the walk reached ${imported.length} files and cannot have followed the component's imports: ${JSON.stringify(imported)}`

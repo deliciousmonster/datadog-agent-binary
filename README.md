@@ -142,18 +142,18 @@ The source-build path shells out to `dda`, `go`, `pip` and the rest. It is for a
 
 ## Building from source (maintainers)
 
-Most consumers never need this — it's how the published binaries are produced.
+Most consumers never need this — it's how the published binaries are produced. The build CLI is not published, so it runs from a checkout:
 
 ```bash
 # Build for the current platform
-datadog-agent-build build
+npm run build-agent
 
 # Pin a version and output directory
-datadog-agent-build build --datadog-version 7.50.0 --output ~/my-datadog-agent-build
+npm run build && node dist/src/cli.js build --datadog-version 7.50.0 --output ~/my-datadog-agent-build
 
 # Other commands
-datadog-agent-build platforms   # list supported platforms
-datadog-agent-build version     # latest upstream version
+node dist/src/cli.js platforms   # list supported platforms
+node dist/src/cli.js version     # latest upstream version
 ```
 
 ### Build requirements
