@@ -24,7 +24,7 @@ const once = (extra) => ({ timeoutMs: 2000, giveUp: () => true, ...extra });
 (async () => {
 	const { pollEndpoint } = await import(pathToFileURL(process.env.PROBE_FILE).href);
 	// Importing the module is what installs the blocklist; calling the export by hand would test a path Harper never takes.
-	await import(pathToFileURL(process.env.RESOURCES_FILE).href);
+	const resources = await import(pathToFileURL(process.env.RESOURCES_FILE).href);
 
 	const probeBoth = async () => {
 		await pollEndpoint(once({ url: process.env.FETCH_PROBE_URL }));
@@ -40,6 +40,11 @@ const once = (extra) => ({ timeoutMs: 2000, giveUp: () => true, ...extra });
 	tracer.use('fetch', { headers: ['x-request-id'] });
 	mark('reconfigured');
 	await probeBoth();
+
+	// The delivery read, on a port the blocklist does not carry, and after the reconfigure that empties it.
+	mark('delivery');
+	await resources.readDeliverySignal(Number(process.env.DELIVERY_PORT));
+	await settle();
 
 	mark('control');
 	await fetch(process.env.CONTROL_URL).catch(() => {});
@@ -87,19 +92,22 @@ function runChild(env) {
 	});
 }
 
-test("NEGATIVE: a quiet boot exports no span for the plugin's own probes, and a later tracer.use does not put them back", async () => {
+test("NEGATIVE: a quiet boot exports no span for the plugin's own probes or its delivery read, and a later tracer.use does not put them back", async () => {
 	// The receiver port resources.js really polls, so the blocklist it installs at import covers this one.
 	const fetchProbeUrl = "http://127.0.0.1:8126/info";
 	// Deliberately not a blocklisted URL: a refused https read emits a ROOT tcp.connect error span from the
 	// net plugin, with no http.request sibling for any blocklist entry to match. Only the store reaches it.
 	const httpsProbePort = await findFreePort();
 	const httpsProbeUrl = `https://127.0.0.1:${httpsProbePort}/debug/vars`;
+	// The delivery signal's own port, likewise off the blocklist, so what covers it is the store and nothing else.
+	const deliveryPort = await findFreePort();
 	const controlPort = await findFreePort();
 
 	const phases = spansByPhase(
 		runChild({
 			FETCH_PROBE_URL: fetchProbeUrl,
 			HTTPS_PROBE_URL: httpsProbeUrl,
+			DELIVERY_PORT: String(deliveryPort),
 			CONTROL_URL: `http://127.0.0.1:${controlPort}/control`,
 			PROBE_FILE: path.join(REPO_ROOT, "probe.js"),
 			RESOURCES_FILE: path.join(REPO_ROOT, "resources.js"),
@@ -115,14 +123,14 @@ test("NEGATIVE: a quiet boot exports no span for the plugin's own probes, and a 
 
 	// By resource rather than by total: a real Harper emits dns.lookup, graphql.parse and getconf of its own
 	// on a quiet boot, so "no spans at all" is the wrong assertion to carry into one.
+	const ports = [8126, httpsProbePort, deliveryPort].map(String);
 	const probeSpans = (phase) =>
 		phases
 			.get(phase)
 			.filter(
 				(span) =>
-					String(span.resource ?? "").includes("8126") ||
-					String(span.resource ?? "").includes(String(httpsProbePort)) ||
-					span.name === "tcp.connect"
+					span.name === "tcp.connect" ||
+					ports.some((port) => String(span.resource ?? "").includes(port))
 			);
 
 	assert.deepEqual(
@@ -135,11 +143,18 @@ test("NEGATIVE: a quiet boot exports no span for the plugin's own probes, and a 
 		[],
 		"the probes are traced again once another caller reconfigures the http and fetch plugins, which is what a blocklist alone cannot survive"
 	);
+	assert.deepEqual(
+		probeSpans("delivery"),
+		[],
+		"reading the delivery signal put the plugin's own request into the customer's APM, which is the thing the endpoint measures"
+	);
 	// The child does nothing else, so in this process the two readings agree; a divergence would mean the
 	// filter above is quietly discarding a plugin span rather than there being none.
 	assert.deepEqual(
-		[phases.get("boot").length, phases.get("reconfigured").length],
-		[0, 0],
+		["boot", "reconfigured", "delivery"].map(
+			(phase) => phases.get(phase).length
+		),
+		[0, 0, 0],
 		"spans were exported during the probe phases that the resource filter did not attribute to the probes"
 	);
 });
