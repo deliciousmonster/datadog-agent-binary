@@ -11,6 +11,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
 	loadComponent,
 	recordingScope,
+	REPO_ROOT,
 	startFor,
 	STAYS_UP,
 	withBuiltBinaries,
@@ -25,6 +26,8 @@ import {
 
 const TRACE_AGENT = "datadog-trace-agent";
 const CORE_AGENT = "datadog-agent";
+// prepareRuntime nests the runtime tree under the component's own directory name.
+const APP_NAME = path.basename(REPO_ROOT);
 
 /** A receiver answering /info, an expvar endpoint answering /debug/vars, and the component pointed at both. */
 async function withAgentsAnswering({ info, expvar }, run) {
@@ -129,7 +132,7 @@ test("the rendered datadog.yaml keeps the credentials off disk and pins what the
 			await withBuiltBinaries(() => start(scope));
 
 			const traceStart = startFor(scope, TRACE_AGENT);
-			const configFile = path.join(root, "datadog", "datadog.yaml");
+			const configFile = path.join(root, "datadog", APP_NAME, "datadog.yaml");
 			const rendered = traceStart.configFiles[configFile];
 			assert.ok(rendered, `no datadog.yaml was written for ${configFile}`);
 
@@ -173,7 +176,7 @@ test("NEGATIVE: without the core-check configs the agent collects no host metric
 		async ({ root }) => {
 			const scope = recordingScope();
 			const { status } = await withBuiltBinaries(() => start(scope));
-			const confd = path.join(root, "datadog", "conf.d");
+			const confd = path.join(root, "datadog", APP_NAME, "conf.d");
 			const written = Object.keys(
 				startFor(scope, CORE_AGENT).configFiles
 			).filter((file) => file.startsWith(confd));
@@ -207,7 +210,7 @@ test("a conf.yaml.default this start does not own is removed, and an operator's 
 	await withAgentsAnswering(
 		{ info: SERVING, expvar: CORE_EXPVAR },
 		async ({ root }) => {
-			const confd = path.join(root, "datadog", "conf.d");
+			const confd = path.join(root, "datadog", APP_NAME, "conf.d");
 			const stale = path.join(confd, "retired_check.d");
 			const operator = path.join(confd, "operator_check.d");
 			fs.mkdirSync(stale, { recursive: true });
@@ -397,7 +400,7 @@ async function withGuardStarted(run, { stalePid } = {}) {
 		pid: stalePid ?? (taken ? lockedPid(taken, CORE_AGENT) : 0),
 	});
 	return withAgentsAnswering({ info: SERVING, expvar }, async ({ root }) => {
-		const pidDir = path.join(root, "datadog", "pids");
+		const pidDir = path.join(root, "datadog", APP_NAME, "pids");
 		taken = pidDir;
 		let status;
 		try {
@@ -522,7 +525,7 @@ test("NEGATIVE: where Harper has processes.start, the guard never runs", async (
 			// The guard writes a lock before it spawns, so an empty pid directory is what separates "the
 			// native path ran" from "both of them did", which no assertion on the native path can tell apart.
 			assert.deepEqual(
-				fs.readdirSync(path.join(root, "datadog", "pids")),
+				fs.readdirSync(path.join(root, "datadog", APP_NAME, "pids")),
 				[],
 				"the guard took a lock under a Harper that supervises natively, so two supervisors hold one pair of agents"
 			);

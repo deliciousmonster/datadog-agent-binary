@@ -121,10 +121,13 @@ test("NEGATIVE: the platform package the component resolves is derived from this
 
 test("the runtime tree comes from Harper, not from a variable this package invents", async () => {
 	const { prepareRuntime } = await loadComponent();
+	// Named by the component's own directory, so two installs of this plugin under different
+	// component names get different pidDirs instead of fighting over one guard lock.
+	const appName = path.basename(REPO_ROOT);
 
 	await withTempDir("dd-root-", async (root) => {
 		const fromEnv = await withEnvs({ ROOTPATH: root }, () => prepareRuntime());
-		assert.equal(fromEnv.paths.runtimeDir, path.join(root, "datadog"));
+		assert.equal(fromEnv.paths.runtimeDir, path.join(root, "datadog", appName));
 	});
 
 	// Harper's own chain: hdb_boot_properties.file names the settings file, which carries rootPath.
@@ -141,7 +144,10 @@ test("the runtime tree comes from Harper, not from a variable this package inven
 		const runtime = await withEnvs({ ROOTPATH: undefined }, () =>
 			withHome(home, () => prepareRuntime())
 		);
-		assert.equal(runtime.paths.runtimeDir, path.join(declared, "datadog"));
+		assert.equal(
+			runtime.paths.runtimeDir,
+			path.join(declared, "datadog", appName)
+		);
 
 		// Harper's own defaultConfig.yaml ships `rootPath: null`, which is not a path.
 		fs.writeFileSync(settings, "rootPath: null\n");
@@ -150,7 +156,7 @@ test("the runtime tree comes from Harper, not from a variable this package inven
 		);
 		assert.notEqual(
 			nulled.paths.runtimeDir,
-			path.join("null", "datadog"),
+			path.join("null", "datadog", appName),
 			"`rootPath: null` was taken for a directory name"
 		);
 	});

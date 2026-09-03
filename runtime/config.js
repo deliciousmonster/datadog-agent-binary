@@ -11,7 +11,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { threadId } from "node:worker_threads";
 
 // Read here rather than taken from an environment variable this package invents: Harper reads the same chain
@@ -115,12 +115,13 @@ function removeStaleDefaults(confd, owned) {
 }
 
 // The runtime tree lives under Harper's root, never the component directory, which `harper deploy` replaces
-// under a live agent.
+// under a live agent. Named by the component's own directory, not just "datadog": two installs of this
+// plugin under different component names must not share one pidDir, or their guards fight over one lock.
 export function prepareRuntime(componentDir, { ports, log }) {
 	const root = harperRoot();
 	const runtimeDir = root
-		? join(root, "datadog")
-		: join(homedir(), ".harper-datadog");
+		? join(root, "datadog", basename(componentDir))
+		: join(homedir(), ".harper-datadog", basename(componentDir));
 	const paths = {
 		runtimeDir,
 		configFile: join(runtimeDir, "datadog.yaml"),
