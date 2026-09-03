@@ -12,7 +12,7 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { TARGETS } = require("../dist/src/targets.js");
-const { BINARIES } = require("../dist/src/binaries.js");
+const { BINARIES, binaryFilename } = require("../dist/src/binaries.js");
 
 const REPO_ROOT = path.join(import.meta.dirname, "..");
 
@@ -57,7 +57,18 @@ function verifyGuard() {
 // regression test for the entire project, so it has to see exactly what a customer's install sees.
 function verifyPlatformPackage(dirName) {
 	const dir = path.join(REPO_ROOT, "npm", dirName);
-	if (!fs.existsSync(path.join(dir, "package.json"))) return;
+	if (!fs.existsSync(path.join(dir, "package.json"))) {
+		// copyPlatformBinary mkdirs bin/ before copying, so a throw mid-copy leaves bin/ populated with
+		// no package.json; left alone that surfaces only later as a bare `npm publish` error with no manifest.
+		const binDir = path.join(dir, "bin");
+		if (fs.existsSync(binDir) && fs.readdirSync(binDir).length > 0) {
+			failures.push(
+				`${dirName}: bin/ has content but no package.json - a partial build was left behind, ` +
+					"re-run npm run all-platform-packages from clean"
+			);
+		}
+		return;
+	}
 
 	const shipped = packedPaths(dir);
 	const binFiles = shipped.filter((p) => p.startsWith("bin/"));
@@ -73,7 +84,7 @@ function verifyPlatformPackage(dirName) {
 	}
 
 	for (const binary of BINARIES) {
-		const relPath = `bin/${binary.shipsAs}${target.exe}`;
+		const relPath = `bin/${binaryFilename(binary, target)}`;
 		if (!binFiles.includes(relPath)) {
 			failures.push(
 				`${dirName}: ${binary.shipsAs} is missing from the packed tarball`

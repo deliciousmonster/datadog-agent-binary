@@ -196,10 +196,9 @@ test("NEGATIVE: /DatadogStatus/ carries the delivery signal on a thread that sta
 	// report; a verdict computed and then not wired into the response is the whole ticket going missing.
 	const status = await DatadogStatus.get();
 	assert.equal(status.delivery.signalVersion, 1);
-	assert.ok(
-		status.delivery.verdict,
-		`the endpoint answered without a delivery verdict: ${JSON.stringify(status.delivery)}`
-	);
+	// No agent has started on this thread, so the debug port readDeliverySignal dials (5012 by default) has
+	// nothing listening: the read comes back unavailable, deterministically.
+	assert.equal(status.delivery.verdict, "unavailable");
 	// The shell form, because reading the signal through an endpoint inside the traced pipeline perturbs it.
 	assert.match(status.verify.delivery, /^curl -sk https:\/\/127\.0\.0\.1:\d+/);
 });

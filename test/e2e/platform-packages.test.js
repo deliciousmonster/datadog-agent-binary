@@ -97,7 +97,24 @@ test("every supported target has a matrix leg that builds it, and vice versa", (
 		path.join(REPO_ROOT, ".github", "workflows", "build-release.yml"),
 		"utf8"
 	);
-	const legs = [...workflow.matchAll(/^\s*platform:\s*(\S+)\s*$/gm)].map(
+	// Scoped to jobs.build.strategy.matrix.include, not the whole file: `include:` opens the block and
+	// the job's `runs-on:` closes it, which is enough to avoid a full YAML parse.
+	const includeAt = workflow.search(/^\s*include:\s*$/m);
+	assert.notEqual(
+		includeAt,
+		-1,
+		"found no matrix include: block; the workflow shape changed and this check is now blind"
+	);
+	const afterInclude = workflow.slice(includeAt);
+	const endAt = afterInclude.search(/^\s*runs-on:/m);
+	assert.notEqual(
+		endAt,
+		-1,
+		"found no runs-on: after the matrix include block; the workflow shape changed"
+	);
+	const matrixBlock = afterInclude.slice(0, endAt);
+
+	const legs = [...matrixBlock.matchAll(/^\s*platform:\s*(\S+)\s*$/gm)].map(
 		(m) => m[1]
 	);
 	assert.ok(

@@ -14,7 +14,7 @@ import {
 } from "./runtime/delivery.js";
 import { untraceAgentProbes } from "./runtime/probe.js";
 import { supervisorFor, unstarted } from "./runtime/supervisor.js";
-import { verifyLaunch } from "./runtime/verify.js";
+import { expvarUrl, receiverInfoUrl, verifyLaunch } from "./runtime/verify.js";
 
 /** Harper seeds every component compartment with `logger` and `Resource`; stubs keep the module importable in tests. */
 const log = typeof logger === "undefined" ? console : logger;
@@ -51,8 +51,8 @@ const ports = {
 // Every URL this module polls. probe.js already suppresses these at the call site; this is the public half,
 // and it only holds until some other caller reconfigures the same plugins.
 const PROBE_URLS = [
-	`http://127.0.0.1:${ports.receiver}/info`,
-	`http://127.0.0.1:${ports.expvar}/debug/vars`,
+	receiverInfoUrl(ports.receiver),
+	expvarUrl(ports.expvar),
 	debugVarsUrl(ports.debug),
 ];
 
@@ -95,12 +95,15 @@ export const prepareRuntime = () =>
 /** The trace-agent's delivery counters, off the debug port this instance rendered into datadog.yaml. */
 export const readDeliverySignal = (port = ports.debug) => readSignal(port);
 
+/** Never the value itself, so the status endpoint cannot become a second place the key leaks. */
+const apiKeyStatus = () => (process.env.DD_API_KEY ? "set" : "MISSING");
+
 /** Per worker thread, set by handleApplication; a request that beats it, or a thread that never ran it, reads NOT_STARTED. */
 let supervisor;
 
 const NOT_STARTED = {
 	receiverPort: ports.receiver,
-	apiKey: process.env.DD_API_KEY ? "set" : "MISSING",
+	apiKey: apiKeyStatus(),
 	processes: [],
 	detail:
 		`nothing has started on this thread. Check first that the node's harper-config.yaml carries ` +
@@ -116,7 +119,7 @@ async function startAgents(scope) {
 	const status = {
 		supervision: supervisor.kind,
 		receiverPort: ports.receiver,
-		apiKey: process.env.DD_API_KEY ? "set" : "MISSING",
+		apiKey: apiKeyStatus(),
 		processes: [],
 	};
 	try {
@@ -245,8 +248,8 @@ export class DatadogStatus extends ResourceBase {
 			// Run these from a shell, not from inside this process: an endpoint reached through the tracing
 			// pipeline is itself traced, and reading it changes what it reports.
 			verify: {
-				receiver: `curl -s 127.0.0.1:${status.receiverPort}/info`,
-				coreAgent: `curl -s 127.0.0.1:${ports.expvar}/debug/vars`,
+				receiver: `curl -s ${receiverInfoUrl(status.receiverPort)}`,
+				coreAgent: `curl -s ${expvarUrl(ports.expvar)}`,
 				delivery: `curl -sk ${debugVarsUrl(ports.debug)}`,
 			},
 		};

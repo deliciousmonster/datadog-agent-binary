@@ -25,24 +25,30 @@ const { BINARIES } = require(
 	path.join(REPO_ROOT, "dist", "src", "binaries.js")
 );
 
-// Runs the real generator in a throwaway copy, over real files on disk. `args` selects the mode,
-// so a caller can exercise the single-platform default as well as --all.
-function generatePackages({ prefix, args = [] }) {
+// The tree shape every fixture built from this repo's compiled output needs: a scripts/ dir plus
+// dist/src/{targets,binaries}.js, since a caller's copied script resolves those tables relative to itself.
+function scaffoldWorkDir(prefix) {
 	const workDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 	fs.mkdirSync(path.join(workDir, "scripts"));
-	// The compiled tree mirrors the source tree, so the copy has to nest the same way the generator requires.
 	fs.mkdirSync(path.join(workDir, "dist", "src"), { recursive: true });
-
-	fs.copyFileSync(
-		path.join(REPO_ROOT, "scripts", "create-platform-packages.js"),
-		path.join(workDir, "scripts", "create-platform-packages.js")
-	);
 	for (const table of ["targets.js", "binaries.js"]) {
 		fs.copyFileSync(
 			path.join(REPO_ROOT, "dist", "src", table),
 			path.join(workDir, "dist", "src", table)
 		);
 	}
+	return workDir;
+}
+
+// Runs the real generator in a throwaway copy, over real files on disk. `args` selects the mode,
+// so a caller can exercise the single-platform default as well as --all.
+function generatePackages({ prefix, args = [] }) {
+	const workDir = scaffoldWorkDir(prefix);
+
+	fs.copyFileSync(
+		path.join(REPO_ROOT, "scripts", "create-platform-packages.js"),
+		path.join(workDir, "scripts", "create-platform-packages.js")
+	);
 	fs.copyFileSync(
 		path.join(REPO_ROOT, "package.json"),
 		path.join(workDir, "package.json")
@@ -68,4 +74,11 @@ function generatePackages({ prefix, args = [] }) {
 	return { workDir, npmDir: path.join(workDir, "npm") };
 }
 
-export { REPO_ROOT, generatePackages, TARGETS, BINARIES, currentTarget };
+export {
+	REPO_ROOT,
+	scaffoldWorkDir,
+	generatePackages,
+	TARGETS,
+	BINARIES,
+	currentTarget,
+};

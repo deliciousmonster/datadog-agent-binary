@@ -20,11 +20,11 @@ const WORKFLOW = fs.readFileSync(
 
 const matches = (pattern) => [...WORKFLOW.matchAll(pattern)].length;
 
-/** Every `run:` block body, keyed by nothing but its own indentation. */
-function scriptBodies() {
+/** Every `run:` block body in `text`, keyed by nothing but its own indentation. */
+function scriptBodies(text) {
 	const bodies = [];
 	let indent = null;
-	for (const line of WORKFLOW.split("\n")) {
+	for (const line of text.split("\n")) {
 		if (indent !== null) {
 			const width = line.search(/\S/);
 			if (width === -1 || width > indent) {
@@ -45,7 +45,11 @@ function scriptBodies() {
 // `7.0.0 ; touch pwned ; #` as a dispatch input is shell source once it is spliced through ${{ }},
 // and the step output carries the same string back out, so both have to arrive as an env value.
 test("no attacker-controlled value is spliced into a workflow script body", () => {
-	const bodies = scriptBodies();
+	const bodies = fs
+		.readdirSync(WORKFLOW_DIR)
+		.flatMap((file) =>
+			scriptBodies(fs.readFileSync(path.join(WORKFLOW_DIR, file), "utf8"))
+		);
 	assert.ok(
 		bodies.length > 3,
 		"found almost no run: blocks; the workflow shape changed and this check is blind"

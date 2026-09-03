@@ -88,9 +88,10 @@ function reportRetries(onRetried, attempts, waitedMs) {
 	}
 }
 
-/** GET until something answers: the body text, or null on deadline or giveUp(). Never throws. */
-// `intervalMs` is the first wait and every later one doubles up to MAX_INTERVAL_MS. The core agent binds its
-// expvar port six to seven seconds after spawn, which a fixed 250ms retry pays for with ~120 probes a thread.
+/**
+ * GET until something answers: the body text, or null on deadline or giveUp(). Never throws. `intervalMs`
+ * doubles every retry up to MAX_INTERVAL_MS: a flat 250ms wait costs ~120 probes over a ~6-7s expvar bind.
+ */
 export async function pollEndpoint({
 	url,
 	timeoutMs = 30_000,

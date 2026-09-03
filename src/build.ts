@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import { AgentBinary, BINARIES } from "./binaries.js";
+import { AgentBinary, BINARIES, binaryFilename } from "./binaries.js";
 import { logger } from "../runtime/log.js";
 import { Target } from "./targets.js";
 
@@ -256,7 +256,7 @@ export async function build({
 		);
 
 		const from = join(sourceDir, `${binary.builtAt}${target.exe}`);
-		const to = join(resolve(outputDir), `${binary.shipsAs}${target.exe}`);
+		const to = join(resolve(outputDir), binaryFilename(binary, target));
 		await copyFile(from, to);
 		shipped.push(to);
 	}

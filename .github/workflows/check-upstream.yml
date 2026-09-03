@@ -13,6 +13,8 @@ env:
 jobs:
   check-upstream:
     runs-on: ubuntu-latest
+    # GitHub's release API and a git push are the only external calls here; they don't hang for hours.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

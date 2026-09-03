@@ -7,12 +7,12 @@ import {
 	pinnedVersion,
 } from "./downloader.js";
 import { logger } from "../runtime/log.js";
-import { currentTarget, Target } from "./targets.js";
+import { Target } from "./targets.js";
 
 export interface BuildRequest {
-	readonly target?: Target;
+	readonly target: Target;
 	readonly version?: string;
-	readonly outputDir?: string;
+	readonly outputDir: string;
 }
 
 // The Go toolchain resolves the agent by import path, so the source has to appear under
@@ -30,10 +30,8 @@ async function linkIntoGoPath(
 }
 
 /** Fetches the source, prepares GOPATH, and builds every binary for one target. Throws on failure. */
-export async function buildAgents(
-	request: BuildRequest = {}
-): Promise<string[]> {
-	const { target = currentTarget(), version, outputDir = "./build" } = request;
+export async function buildAgents(request: BuildRequest): Promise<string[]> {
+	const { target, version, outputDir } = request;
 	const resolved =
 		version ?? (await pinnedVersion()) ?? (await fetchLatestVersion());
 	const buildDir = join(process.cwd(), "build", target.name);

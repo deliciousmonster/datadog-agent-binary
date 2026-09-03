@@ -19,9 +19,8 @@ env:
 
 jobs:
   build:
-    # Legs flagged `experimental` are allowed to fail so they don't block
-    # `release`/`publish`, which depend on this job. The publish step skips any
-    # platform whose binary is missing.
+    # No leg below sets `experimental`, so this is always false: a real failure fails the job
+    # outright, taking release/publish down with it; the publish loop only skips an artifact that never arrived.
     continue-on-error: ${{ matrix.experimental || false }}
     # Cap each leg so a runner that never gets scheduled (e.g. a retired runner
     # image) can't stall the whole build — and therefore the publish — for the
@@ -168,11 +167,15 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           set -e
-          bin="build/${{ matrix.platform }}/bin/datadog-agent"
+          # Derived, not hardcoded: a second binary added to BINARIES is covered here automatically.
+          bins=$(node -e "console.log(require('./dist/src/binaries.js').BINARIES.map(b=>b.shipsAs).join(' '))")
           src="build/${{ matrix.platform }}/src"
           [ -d "$src" ] && mv "$src" "${src}.hidden" || true
-          echo "Running: $bin version (build tree hidden)"
-          "$bin" version
+          for name in $bins; do
+            bin="build/${{ matrix.platform }}/bin/${name}"
+            echo "Running: $bin version (build tree hidden)"
+            "$bin" version
+          done
           [ -d "${src}.hidden" ] && mv "${src}.hidden" "$src" || true
 
       # Guard against the symbol floor creeping back up. The Harper Pro runtime
@@ -191,26 +194,30 @@ jobs:
         shell: bash
         run: |
           set -e
-          bin="build/${{ matrix.platform }}/bin/datadog-agent"
+          # Derived, not hardcoded: a second binary added to BINARIES is covered here automatically.
+          bins=$(node -e "console.log(require('./dist/src/binaries.js').BINARIES.map(b=>b.shipsAs).join(' '))")
 
           check() {
-            label="$1"; prefix="$2"; limit="$3"
+            bin="$1"; label="$2"; prefix="$3"; limit="$4"
             # GLIBC_ won't match GLIBCXX_ (char after GLIBC is X, not _), so the
             # two families are counted independently.
             max=$(strings -a "$bin" | grep -o "${prefix}_[0-9.]\+" | sed "s/${prefix}_//" | sort -uV | tail -1)
             echo "${label}: binary references up to ${prefix}_${max:-<none>}; image provides ${prefix}_${limit}"
             if [ -n "$max" ] && [ "$(printf '%s\n%s\n' "$limit" "$max" | sort -V | tail -1)" != "$limit" ]; then
-              echo "::error::Binary requires ${prefix}_${max} but the Harper Pro runtime image only provides ${prefix}_${limit}. Build on an older toolchain (glibc <= 2.36, GCC <= 12) so the agent loads on the image."
+              echo "::error::${bin} requires ${prefix}_${max} but the Harper Pro runtime image only provides ${prefix}_${limit}. Build on an older toolchain (glibc <= 2.36, GCC <= 12) so the agent loads on the image."
               return 1
             fi
             return 0
           }
 
           rc=0
-          check "glibc"     "GLIBC"    "2.36"   || rc=1
-          check "libstdc++" "GLIBCXX"  "3.4.30" || rc=1
+          for name in $bins; do
+            bin="build/${{ matrix.platform }}/bin/${name}"
+            check "$bin" "${name} glibc"     "GLIBC"   "2.36"   || rc=1
+            check "$bin" "${name} libstdc++" "GLIBCXX" "3.4.30" || rc=1
+          done
           if [ "$rc" -eq 0 ]; then
-            echo "OK: binary stays within the Harper Pro image's glibc and libstdc++ versions."
+            echo "OK: all binaries stay within the Harper Pro image's glibc and libstdc++ versions."
           fi
           exit "$rc"
 
@@ -225,6 +232,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    # GitHub's release-creation API is the only external call here; it doesn't hang for hours.
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -335,6 +344,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    # npm publish is the only external call here; it doesn't hang for hours.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

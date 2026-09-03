@@ -9,18 +9,13 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 
-// Walk up from this file to the package root
-function findRepoRoot(start) {
-	let dir = start;
-	while (!fs.existsSync(path.join(dir, "package.json"))) {
-		const parent = path.dirname(dir);
-		if (parent === dir) throw new Error("Could not locate package root");
-		dir = parent;
-	}
-	return dir;
-}
+// Lives here, not beside the other supervisor tests, because it needs the platform-package fixture
+// this file plants in the repo's real node_modules. That fixture is global, so it cannot be shared.
+const { loadComponent, recordingScope, REPO_ROOT } =
+	await import("../support/component.js");
+const { findFreePort } = await import("../support/loopback.js");
+const { withEnvs, withTempDir } = await import("../support/sandbox.js");
 
-const REPO_ROOT = findRepoRoot(import.meta.dirname);
 const { currentTarget } = require(
 	path.join(REPO_ROOT, "dist", "src", "targets.js")
 );
@@ -33,13 +28,6 @@ const platform = currentTarget();
 const platformName = platform.name; // e.g. linux-x86_64
 const binaryName = `${BINARIES[0].shipsAs}${platform.exe}`; // datadog-agent[.exe]
 const isWindows = process.platform === "win32";
-
-// Lives here, not beside the other supervisor tests, because it needs the platform-package fixture
-// this file plants in the repo's real node_modules. That fixture is global, so it cannot be shared.
-const { loadComponent, recordingScope } =
-	await import("../support/component.js");
-const { findFreePort } = await import("../support/loopback.js");
-const { withEnvs, withTempDir } = await import("../support/sandbox.js");
 
 /** Start the component against a scope and hand back the status resource. */
 async function start(scope, componentEnv = {}) {

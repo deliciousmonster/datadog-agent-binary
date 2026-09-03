@@ -58,7 +58,6 @@ export function recordingScope({ state = {} } = {}) {
 	return {
 		starts,
 		processes: {
-			reaper: { name: "harper-reaper", adopted: false },
 			async start(options) {
 				starts.push(options);
 				const processState = {

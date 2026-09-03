@@ -1,3 +1,5 @@
+import { Target } from "./targets.js";
+
 export interface AgentBinary {
 	/** Name the binary ships under, before the platform's executable suffix. */
 	readonly shipsAs: string;
@@ -8,9 +10,9 @@ export interface AgentBinary {
 	readonly mandatoryArgs: readonly string[];
 	/** Environment variable supplying extra flags, so CI can iterate without a code change. */
 	readonly argsOverride: string;
-	/** Symbol that must be present in the shipped binary. MOD-3 gates publish on it. */
+	/** Symbol that must be present in the shipped binary. scripts/verify-package.js gates publish on it. */
 	readonly requiredSymbol: string;
-	/** Symbol whose presence means a shipping constraint was violated. MOD-3 gates on it. */
+	/** Symbol whose presence means a shipping constraint was violated. scripts/verify-package.js gates on it. */
 	readonly forbiddenSymbol?: string;
 }
 
@@ -44,3 +46,8 @@ export const BINARIES: readonly AgentBinary[] = [
 		requiredSymbol: "datadog-agent/pkg/trace/api.",
 	},
 ];
+
+/** The name a binary is shipped and copied under for one target, e.g. `datadog-agent.exe`. */
+export function binaryFilename(binary: AgentBinary, target: Target): string {
+	return `${binary.shipsAs}${target.exe}`;
+}

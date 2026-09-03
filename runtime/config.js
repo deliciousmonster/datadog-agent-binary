@@ -136,7 +136,7 @@ export function prepareRuntime(componentDir, { ports, log }) {
 		reaperLog: join(runtimeDir, "logs", "reaper.log"),
 	};
 	mkdirSync(paths.run, { recursive: true });
-	mkdirSync(join(runtimeDir, "logs"), { recursive: true });
+	mkdirSync(dirname(paths.coreLog), { recursive: true });
 	mkdirSync(paths.confd, { recursive: true });
 	mkdirSync(paths.pidDir, { recursive: true });
 

@@ -9,6 +9,13 @@ import { parseJson, pollEndpoint } from "./probe.js";
 /** The path dd-trace posts spans to. A receiver that does not advertise it is not one this node can use. */
 const TRACE_ENDPOINT = "/v0.4/traces";
 
+// Stated once so resources.js's probe blocklist can never name a different receiver URL than the one this
+// file verifies against; a mismatch there is exactly the traffic the blocklist exists to keep out of APM.
+export const receiverInfoUrl = (port) => `http://127.0.0.1:${port}/info`;
+
+/** The core agent's expvar endpoint, built the same way for the same reason. */
+export const expvarUrl = (port) => `http://127.0.0.1:${port}/debug/vars`;
+
 // One line per thread per boot, and only where the endpoint made us wait. The failed probes are suppressed
 // by design, so without this a bind that took seconds leaves nothing behind on the node at all.
 const slowBindLogger =
@@ -38,7 +45,7 @@ async function verifyTraceAgent(state, { paths, ports, logInfo }) {
 				"dd-trace drops every span unless it is pointed at a Unix socket instead",
 		};
 	}
-	const url = `http://127.0.0.1:${ports.receiver}/info`;
+	const url = receiverInfoUrl(ports.receiver);
 	const body = await pollEndpoint({
 		url,
 		giveUp: () => state.exited === true,
@@ -76,7 +83,7 @@ async function verifyCoreAgent(state, { paths, ports, logInfo }) {
 				"holding its PID lock, and no host metric can be shown to be collected",
 		};
 	}
-	const url = `http://127.0.0.1:${ports.expvar}/debug/vars`;
+	const url = expvarUrl(ports.expvar);
 	const vars = parseJson(
 		await pollEndpoint({
 			url,

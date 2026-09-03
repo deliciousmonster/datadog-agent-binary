@@ -75,29 +75,43 @@ const guardSupervisor = (log, spawn) => ({
 	async start(agents, { runtime, configFiles, fingerprintParts }) {
 		// Harper's start() writes these itself; on this path nothing else will, and both agents read them.
 		writeConfigFiles(configFiles, log);
-		const result = await guard({
-			pidDir: runtime.paths.pidDir,
-			spawn,
-			log,
-			version: fingerprint(...fingerprintParts),
-			processes: agents.map((agent) => ({
-				name: agent.name,
-				title: agent.title,
-				binaryPath: agent.command,
-				args: agent.args,
-				exitHint: agent.exitHint,
-				verify: agent.verify,
-			})),
-			reaper: {
-				name: REAPER_NAME,
-				logFile: runtime.paths.reaperLog,
-				// Harper records its own pid here, so a restart inside the grace window keeps the agents
-				// running for the replacement node to adopt.
-				...(runtime.root
-					? { replacementPidFile: join(runtime.root, "hdb.pid") }
-					: {}),
-			},
-		});
+		let result;
+		try {
+			result = await guard({
+				pidDir: runtime.paths.pidDir,
+				spawn,
+				log,
+				version: fingerprint(...fingerprintParts),
+				processes: agents.map((agent) => ({
+					name: agent.name,
+					title: agent.title,
+					binaryPath: agent.command,
+					args: agent.args,
+					exitHint: agent.exitHint,
+					verify: agent.verify,
+				})),
+				reaper: {
+					name: REAPER_NAME,
+					logFile: runtime.paths.reaperLog,
+					// Harper records its own pid here, so a restart inside the grace window keeps the agents
+					// running for the replacement node to adopt.
+					...(runtime.root
+						? { replacementPidFile: join(runtime.root, "hdb.pid") }
+						: {}),
+				},
+			});
+		} catch (error) {
+			// guard() already isolates a claimLock/preflight/spawn failure per agent inside its own loop; only
+			// an unguarded commitLock write can throw past that, and it takes both agents down in one rejection.
+			const message = error instanceof Error ? error.message : String(error);
+			log.error(
+				`Datadog supervisor: the guard call for both agents threw: ${message}`
+			);
+			return {
+				processes: agents.map((agent) => unstarted(agent, message)),
+				report: [message],
+			};
+		}
 		return {
 			processes: result.processes.map((state, index) => ({
 				...state,

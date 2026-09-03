@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const { argv } = require("process");
 const { TARGETS, currentTarget } = require("../dist/src/targets.js");
-const { BINARIES } = require("../dist/src/binaries.js");
+const { BINARIES, binaryFilename } = require("../dist/src/binaries.js");
 
 function getParentVersion() {
 	const parentPackageJson = JSON.parse(
@@ -30,7 +30,7 @@ function copyPlatformBinary(platform) {
 	fs.mkdirSync(path.join(packageDir, "bin"), { recursive: true });
 
 	for (const binary of BINARIES) {
-		const fileName = `${binary.shipsAs}${platform.exe}`;
+		const fileName = binaryFilename(binary, platform);
 		const from = path.join(
 			import.meta.dirname,
 			"..",
@@ -120,7 +120,7 @@ function writePlatformPackageJson(platform) {
 
 function writePlatformIndexJs(platform) {
 	const files = Object.fromEntries(
-		BINARIES.map((b) => [b.shipsAs, `${b.shipsAs}${platform.exe}`])
+		BINARIES.map((b) => [b.shipsAs, binaryFilename(b, platform)])
 	);
 	const indexContent = indexTemplate
 		.replace("__BINARIES__", JSON.stringify(files, null, 2))

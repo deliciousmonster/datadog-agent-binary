@@ -5,13 +5,13 @@ const require = createRequire(import.meta.url);
 const { test, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const {
 	REPO_ROOT,
 	BINARIES,
 	currentTarget,
+	scaffoldWorkDir,
 } = require("../support/generator.js");
 
 const TARGET = currentTarget();
@@ -23,21 +23,13 @@ after(() => {
 // One tree shaped like the repo root: verify-package.js resolves dist/src/* and npm/ relative to its
 // own location, the same trick create-platform-packages.js's own tests use to run in isolation.
 function buildFixture({ guard = "populated", binOverrides = {} } = {}) {
-	const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddab-publish-gate-"));
+	const workDir = scaffoldWorkDir("ddab-publish-gate-");
 	workDirs.push(workDir);
 
-	fs.mkdirSync(path.join(workDir, "scripts"));
-	fs.mkdirSync(path.join(workDir, "dist", "src"), { recursive: true });
 	fs.copyFileSync(
 		path.join(REPO_ROOT, "scripts", "verify-package.js"),
 		path.join(workDir, "scripts", "verify-package.js")
 	);
-	for (const table of ["targets.js", "binaries.js"]) {
-		fs.copyFileSync(
-			path.join(REPO_ROOT, "dist", "src", table),
-			path.join(workDir, "dist", "src", table)
-		);
-	}
 	fs.writeFileSync(
 		path.join(workDir, "package.json"),
 		JSON.stringify({

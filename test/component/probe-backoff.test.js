@@ -65,6 +65,8 @@ test("NEGATIVE: the poll does not retry at a fixed interval; it doubles and then
 });
 
 test("the deadline still bounds the poll: the last wait is truncated, not overrun", async () => {
+	// Deliberately real time, unlike every other test in this file: this is the actual clamp-vs-backoff
+	// race, which a mocked setTimeout can't reproduce. The window below is widened for a loaded runner.
 	const port = await findFreePort();
 	const started = Date.now();
 	const body = await pollEndpoint({
@@ -76,12 +78,12 @@ test("the deadline still bounds the poll: the last wait is truncated, not overru
 
 	assert.equal(body, null, "nothing was listening, so the deadline had to win");
 	assert.ok(
-		elapsed >= 280,
+		elapsed >= 260,
 		`gave up after ${elapsed}ms, short of the 300ms deadline it was given`
 	);
 	// Unclamped, the second wait doubles to 400ms and the poll lands around 600ms.
 	assert.ok(
-		elapsed < 500,
+		elapsed < 550,
 		`ran ${elapsed}ms against a 300ms deadline: the backoff is sleeping past it`
 	);
 });

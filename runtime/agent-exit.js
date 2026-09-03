@@ -1,6 +1,5 @@
-// Shared by the bin shim and resources.js, because both launch the same two binaries and both used to
-// report every failure as one sentence. "failed to execute" and exit code 0 are the two readings that sent
-// people looking in the wrong place.
+// Shared by the bin shim and resources.js: both launch the same two binaries, and both used to report every
+// failure as one sentence, when "failed to execute" and exit code 0 are the two readings that mislead most.
 
 import { constants } from "node:os";
 
