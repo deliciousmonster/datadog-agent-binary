@@ -3,6 +3,8 @@
 		"target": "ES2020",
 		"module": "node16",
 		"lib": ["ES2020"],
+		// TS7 stops auto-including node_modules/@types; without this every `process` reference dies on TS2591.
+		"types": ["node"],
 		"outDir": "./dist",
 		// The repo root, not src/: the build half imports runtime/log.js, and every input must sit under
 		// rootDir. Output mirrors the tree, so the CLI compiles to dist/src/cli.js.
