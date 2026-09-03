@@ -345,34 +345,6 @@ test("NEGATIVE: an agent the kernel killed is reported as killed, not as a stop"
 	});
 });
 
-test("a binary that resolves to the wrong agent is refused rather than started twice", async () => {
-	// The published platform packages predate the trace-agent and answer every request with the core agent.
-	// That path exists, so an unchecked resolve starts two core agents and no receiver at all.
-	const receiver = await findFreePort();
-	const expvarPort = await findFreePort();
-	await withTempDir("dd-runtime-", async (root) => {
-		const scope = recordingScope({ state: { exited: true } });
-		const { status } = await start(scope, {
-			ROOTPATH: root,
-			DD_APM_RECEIVER_PORT: String(receiver),
-			DD_EXPVAR_PORT: String(expvarPort),
-		});
-		const trace = status.processes.find((state) => state.name === TRACE_AGENT);
-
-		assert.equal(
-			trace.started,
-			false,
-			"the trace-agent started from a path that resolves the core agent"
-		);
-		assert.match(trace.error, /trace-agent/);
-		assert.deepEqual(
-			scope.starts.map((options) => options.name),
-			[CORE_AGENT],
-			"only the agent whose binary actually resolved may be handed to Harper"
-		);
-	});
-});
-
 // Who supervises, driven from both sides. The guard half spawns for real and reads the locks off disk,
 // because a fallback exercised through a stub is a fallback nobody has run.
 
@@ -416,30 +388,35 @@ function lockedPid(pidDir, name) {
  * The guard path, with everything it spawned stopped before the runtime tree goes. Waiting for the locks to
  * clear is what keeps a release still in flight from writing into a deleted directory.
  */
-async function withGuardStarted(run) {
-	return withAgentsAnswering(
-		{ info: SERVING, expvar: CORE_EXPVAR },
-		async ({ root }) => {
-			const pidDir = path.join(root, "datadog", "pids");
-			let status;
-			try {
-				// A Scope with no `processes` is what released Harper hands a plugin, and it used to be refused.
-				({ status } = await withBuiltBinaries(() => start({}), STAYS_UP));
-				return await run({ pidDir, status });
-			} finally {
-				for (const state of status?.processes ?? []) halt(state.pid);
-				halt(lockedPid(pidDir, REAPER));
-				for (let i = 0; i < 300; i++) {
-					if (
-						BOTH_AGENTS.every((name) => !fs.existsSync(lockFile(pidDir, name)))
-					) {
-						break;
-					}
-					await delay(10);
+async function withGuardStarted(run, { stalePid } = {}) {
+	// Answered per request, not once: verification compares the pid on the lock against the pid the agent
+	// reports, so a body fixed before the spawn can only ever describe a mismatch.
+	let taken;
+	const expvar = () => ({
+		...CORE_EXPVAR,
+		pid: stalePid ?? (taken ? lockedPid(taken, CORE_AGENT) : 0),
+	});
+	return withAgentsAnswering({ info: SERVING, expvar }, async ({ root }) => {
+		const pidDir = path.join(root, "datadog", "pids");
+		taken = pidDir;
+		let status;
+		try {
+			// A Scope with no `processes` is what released Harper hands a plugin, and it used to be refused.
+			({ status } = await withBuiltBinaries(() => start({}), STAYS_UP));
+			return await run({ pidDir, status });
+		} finally {
+			for (const state of status?.processes ?? []) halt(state.pid);
+			halt(lockedPid(pidDir, REAPER));
+			for (let i = 0; i < 300; i++) {
+				if (
+					BOTH_AGENTS.every((name) => !fs.existsSync(lockFile(pidDir, name)))
+				) {
+					break;
 				}
+				await delay(10);
 			}
 		}
-	);
+	});
 }
 
 test("where Harper has no processes.start, the bundled guard starts both agents and locks each one", async () => {
@@ -492,12 +469,21 @@ test("where Harper has no processes.start, the bundled guard starts both agents 
 		// The pid the guard really spawned is the one the verify was handed; a state assembled from the
 		// declaration rather than from the spawn would name something else here.
 		const core = status.processes.find((entry) => entry.name === CORE_AGENT);
-		assert.match(
-			core.verifyDetail,
-			new RegExp(`\\b${core.pid}\\b`),
-			`the core agent verdict does not carry the pid that was spawned: ${core.verifyDetail}`
-		);
+		assert.equal(core.verified, true, core.verifyDetail);
 	});
+});
+
+// The other side of the same check. A core agent answering with a pid this node does not hold the lock
+// for is a stale lock adopted by the wrong process, and reporting it verified would hide exactly that.
+test("NEGATIVE: a core agent answering as another pid does not verify", async () => {
+	await withGuardStarted(
+		({ status }) => {
+			const core = status.processes.find((entry) => entry.name === CORE_AGENT);
+			assert.equal(core.verified, false);
+			assert.match(core.verifyDetail, /not the pid/);
+		},
+		{ stalePid: 4321 }
+	);
 });
 
 test("a deliberate stop releases the lock, so the next boot starts rather than adopting a corpse", async () => {

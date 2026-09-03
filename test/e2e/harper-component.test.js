@@ -32,6 +32,25 @@ const platformName = platform.name; // e.g. linux-x86_64
 const binaryName = `${BINARIES[0].shipsAs}${platform.exe}`; // datadog-agent[.exe]
 const isWindows = process.platform === "win32";
 
+// Lives here, not beside the other supervisor tests, because it needs the platform-package fixture
+// this file plants in the repo's real node_modules. That fixture is global, so it cannot be shared.
+const { loadComponent, recordingScope } = await import(
+	"../support/component.js"
+);
+const { findFreePort } = await import("../support/loopback.js");
+const { withEnvs, withTempDir } = await import("../support/sandbox.js");
+
+/** Start the component against a scope and hand back the status resource. */
+async function start(scope, componentEnv = {}) {
+	return withEnvs(componentEnv, async () => {
+		const { handleApplication, DatadogStatus } = await loadComponent();
+		handleApplication(scope);
+		return { status: await DatadogStatus.get(), DatadogStatus };
+	});
+}
+const TRACE_AGENT = "datadog-trace-agent";
+const CORE_AGENT = "datadog-agent";
+
 // The optional platform package is resolved by `require()` from within
 // dist/binary-manager.js, so it must live in this repo's node_modules — which
 // is exactly where it would sit as a sibling dependency inside a Harper app's
@@ -222,4 +241,32 @@ test("the bin shim passes the Harper-required `name` option", () => {
 		/name:\s*["']datadog-agent["']/,
 		"the bin shim must spawn with a name option or Harper rejects the spawn"
 	);
+});
+
+test("a binary that resolves to the wrong agent is refused rather than started twice", async () => {
+	// The published platform packages predate the trace-agent and answer every request with the core agent.
+	// That path exists, so an unchecked resolve starts two core agents and no receiver at all.
+	const receiver = await findFreePort();
+	const expvarPort = await findFreePort();
+	await withTempDir("dd-runtime-", async (root) => {
+		const scope = recordingScope({ state: { exited: true } });
+		const { status } = await start(scope, {
+			ROOTPATH: root,
+			DD_APM_RECEIVER_PORT: String(receiver),
+			DD_EXPVAR_PORT: String(expvarPort),
+		});
+		const trace = status.processes.find((state) => state.name === TRACE_AGENT);
+
+		assert.equal(
+			trace.started,
+			false,
+			"the trace-agent started from a path that resolves the core agent"
+		);
+		assert.match(trace.error, /trace-agent/);
+		assert.deepEqual(
+			scope.starts.map((options) => options.name),
+			[CORE_AGENT],
+			"only the agent whose binary actually resolved may be handed to Harper"
+		);
+	});
 });

@@ -29,6 +29,8 @@ export async function withServer(server, run) {
 }
 
 /** An unstarted HTTP server answering `answers` with `body`, and 404 everywhere else. */
+// `body` may be a function so a stub can answer with something only known once the component has
+// run, such as the pid that ended up on the lock. A static object cannot report a pid it predates.
 export function createStub({
 	status = 200,
 	body = {},
@@ -42,7 +44,7 @@ export function createStub({
 			return;
 		}
 		response.writeHead(status, head);
-		response.end(JSON.stringify(body));
+		response.end(JSON.stringify(typeof body === "function" ? body() : body));
 	});
 }
 
