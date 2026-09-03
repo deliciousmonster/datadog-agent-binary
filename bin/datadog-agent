@@ -89,7 +89,11 @@ async function main() {
 		});
 	} catch (error) {
 		logger.error(`Failed to run datadog-agent: ${error.message}`);
-		logger.info("You can build from source using: datadog-agent-build build");
+		// The source-build CLI is not published, so a customer reading this has one thing to check.
+		logger.info(
+			"The binary comes from an optionalDependency. Confirm one of " +
+				"@harperfast/datadog-agent-binary-<platform> is installed for this os/cpu."
+		);
 		process.exit(1);
 	}
 }
