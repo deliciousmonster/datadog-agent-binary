@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { deliveryVerdict } from "../../runtime/delivery.js";
-import { loadComponent, REPO_ROOT } from "../support/component.js";
+import { loadComponent } from "../support/component.js";
 import { createStub, findFreePort, withServer } from "../support/loopback.js";
 import { withEnvs, withTempDir } from "../support/sandbox.js";
 
@@ -238,7 +238,7 @@ async function debugPorts(env) {
 	const component = await withEnvs(env, () => loadComponent());
 	const rendered = await withTempDir("dd-debug-", (root) =>
 		withEnvs({ ROOTPATH: root }, () => {
-			const runtime = component.prepareRuntime(REPO_ROOT);
+			const runtime = component.prepareRuntime();
 			return runtime.configFiles[runtime.paths.configFile];
 		})
 	);

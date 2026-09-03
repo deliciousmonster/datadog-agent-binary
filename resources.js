@@ -1,8 +1,5 @@
-// handleApplication(scope) is the only path that starts an agent. Harper hands a Scope only to a component
-// its root config names, and only because config.yaml carries `pluginModule` beside `jsResource`.
-//
-// The entry, and the only file Harper compiles: `spawn` and the compartment globals are read here and passed
-// down, because a helper importing them itself may get the unconstrained ones and nothing says so.
+// handleApplication(scope) is the only path that starts an agent, reachable only when a component's own
+// config.yaml carries `pluginModule` beside `jsResource`. This is also the only file Harper compiles, so `spawn` and the compartment globals are read here and passed down: a helper importing them itself may get the unconstrained ones.
 
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
@@ -92,8 +89,8 @@ const AGENTS = [
 const CONFIG_ENTRY = `${basename(import.meta.dirname)}: { package: "${PACKAGE_NAME}" }`;
 
 /** The runtime tree and the config files for this node, rendered against the ports this instance resolved. */
-export const prepareRuntime = (componentDir) =>
-	prepare(componentDir, { ports, log });
+export const prepareRuntime = () =>
+	prepare(import.meta.dirname, { ports, log });
 
 /** The trace-agent's delivery counters, off the debug port this instance rendered into datadog.yaml. */
 export const readDeliverySignal = (port = ports.debug) => readSignal(port);
@@ -130,7 +127,7 @@ async function startAgents(scope) {
 			);
 		}
 
-		const runtime = prepareRuntime(import.meta.dirname);
+		const runtime = prepareRuntime();
 		Object.assign(status, {
 			runtimeDir: runtime.paths.runtimeDir,
 			configFile: runtime.paths.configFile,
@@ -231,7 +228,7 @@ export function handleApplication(scope) {
 	supervisor ??= startAgents(scope);
 }
 
-/** GET /DatadogStatus/ - the plugin's one REST resource - reports what startup did. Everything it reports fails silently by default, which is why it gets an endpoint. */
+/** GET /DatadogStatus/, the plugin's one REST resource, reports what startup did. Everything it reports fails silently by default, which is why it gets an endpoint. */
 export class DatadogStatus extends ResourceBase {
 	static async get() {
 		// The counters belong to the node's trace-agent, not to this thread, so they are read whether or not

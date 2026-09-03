@@ -12,13 +12,12 @@ import {
 
 // One exit path: commands throw, and the failure is reported here rather than in each action.
 const run =
-	<T>(action: (options: T) => Promise<void>, hint?: string) =>
+	<T>(action: (options: T) => Promise<void>) =>
 	async (options: T): Promise<void> => {
 		try {
 			await action(options);
 		} catch (error) {
 			logger.error(error instanceof Error ? error.message : String(error));
-			if (hint) logger.info(hint);
 			process.exit(1);
 		}
 	};

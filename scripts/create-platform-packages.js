@@ -20,22 +20,9 @@ function getParentVersion() {
 	return parentPackageJson.version;
 }
 
-function getSupportedPlatforms() {
-	return TARGETS;
-}
-
-function getCurrentPlatform() {
-	return currentTarget();
-}
-
 function getPackageDir(platform) {
 	const platformName = platform.name;
 	return path.join(import.meta.dirname, "..", "npm", platformName);
-}
-
-function createPackageDir(platform) {
-	const packageDir = getPackageDir(platform);
-	fs.mkdirSync(packageDir, { recursive: true });
 }
 
 function copyPlatformBinary(platform) {
@@ -83,8 +70,7 @@ function npmCPU(arch) {
 const version = getParentVersion();
 
 const lastArg = argv[argv.length - 1];
-const platforms =
-	lastArg === "--all" ? getSupportedPlatforms() : [getCurrentPlatform()];
+const platforms = lastArg === "--all" ? TARGETS : [currentTarget()];
 
 const packageTemplate = {
 	version: version,
@@ -180,7 +166,6 @@ license per the [Datadog Agent repository](https://github.com/DataDog/datadog-ag
 const tolerateMissing = lastArg === "--all";
 
 platforms.forEach((platform) => {
-	createPackageDir(platform);
 	try {
 		copyPlatformBinary(platform);
 	} catch (err) {

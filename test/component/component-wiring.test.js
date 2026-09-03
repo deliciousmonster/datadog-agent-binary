@@ -123,9 +123,7 @@ test("the runtime tree comes from Harper, not from a variable this package inven
 	const { prepareRuntime } = await loadComponent();
 
 	await withTempDir("dd-root-", async (root) => {
-		const fromEnv = await withEnvs({ ROOTPATH: root }, () =>
-			prepareRuntime(REPO_ROOT)
-		);
+		const fromEnv = await withEnvs({ ROOTPATH: root }, () => prepareRuntime());
 		assert.equal(fromEnv.paths.runtimeDir, path.join(root, "datadog"));
 	});
 
@@ -141,14 +139,14 @@ test("the runtime tree comes from Harper, not from a variable this package inven
 		fs.writeFileSync(settings, `rootPath: ${declared}\noperationsApi:\n`);
 
 		const runtime = await withEnvs({ ROOTPATH: undefined }, () =>
-			withHome(home, () => prepareRuntime(REPO_ROOT))
+			withHome(home, () => prepareRuntime())
 		);
 		assert.equal(runtime.paths.runtimeDir, path.join(declared, "datadog"));
 
 		// Harper's own defaultConfig.yaml ships `rootPath: null`, which is not a path.
 		fs.writeFileSync(settings, "rootPath: null\n");
 		const nulled = await withEnvs({ ROOTPATH: undefined }, () =>
-			withHome(home, () => prepareRuntime(REPO_ROOT))
+			withHome(home, () => prepareRuntime())
 		);
 		assert.notEqual(
 			nulled.paths.runtimeDir,

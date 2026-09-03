@@ -1,6 +1,5 @@
-// Every request this module makes is invisible to APM, two ways. The plugin polls the agents to find out
-// whether they are up, and before they bind those polls fail; on the line this replaces, dd-trace turned each
-// failure into an errored client span on the customer's own service.
+// Every request this module makes is invisible to APM: the plugin polls the agents before they bind, when
+// polls fail, and on the line this replaces those failures became errored client spans on the customer's own service.
 
 import { request as httpsRequest } from "node:https";
 import { createRequire } from "node:module";
@@ -23,8 +22,7 @@ const untraced = (() => {
 })();
 
 // A process-global setting, so the next `tracer.use('http', ...)` from anywhere replaces it: dd-trace's
-// configurePlugin overwrites a plugin's config rather than merging into it. Kept for the releases where the
-// private store above has moved, and it cannot stand alone.
+// configurePlugin overwrites a plugin's config rather than merging into it. Kept only as a fallback for releases where the private store above has moved; it cannot stand alone.
 export function untraceAgentProbes(tracer, blocklist) {
 	tracer.use("http", { client: { blocklist } }); // under `client`, or the server half drops inbound traces too
 	tracer.use("fetch", { blocklist }); // its own plugin extending the http client; use('http') never reaches it

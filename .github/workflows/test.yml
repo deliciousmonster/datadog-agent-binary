@@ -36,7 +36,7 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
-      # Suites are listed rather than globbed: the windows legs run cmd.exe, which does not expand
-      # the pattern, and --test only learned glob positionals in Node 22.
+      # npm's own quoting keeps this pattern out of sh's hands on the ubuntu/macos legs, where an
+      # unquoted `**` would expand as a plain `*` without globstar; --test resolves it instead, and only from Node 22.
       - name: Run tests
         run: npm test

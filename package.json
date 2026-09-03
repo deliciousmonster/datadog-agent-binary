@@ -1,7 +1,7 @@
 {
 	"name": "@harperfast/datadog-agent-binary",
 	"version": "7.75.5",
-	"description": "TypeScript package to download and build Datadog Agent from source for multiple platforms",
+	"description": "Harper component that runs the Datadog trace-agent and core-agent alongside a node, with pre-built binaries installed per platform",
 	"type": "module",
 	"bin": {
 		"datadog-agent": "bin/datadog-agent"

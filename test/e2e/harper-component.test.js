@@ -36,9 +36,8 @@ const isWindows = process.platform === "win32";
 
 // Lives here, not beside the other supervisor tests, because it needs the platform-package fixture
 // this file plants in the repo's real node_modules. That fixture is global, so it cannot be shared.
-const { loadComponent, recordingScope } = await import(
-	"../support/component.js"
-);
+const { loadComponent, recordingScope } =
+	await import("../support/component.js");
 const { findFreePort } = await import("../support/loopback.js");
 const { withEnvs, withTempDir } = await import("../support/sandbox.js");
 
@@ -54,7 +53,7 @@ const TRACE_AGENT = "datadog-trace-agent";
 const CORE_AGENT = "datadog-agent";
 
 // runtime/binary.js resolves the optional platform package by specifier, so it must live in this repo's
-// node_modules — which is exactly where it would sit as a sibling dependency inside a Harper app's tree.
+// node_modules- exactly where it would sit as a sibling dependency inside a Harper app's tree.
 const platformPkgName = `@harperfast/datadog-agent-binary-${platformName}`;
 const platformPkgDir = path.join(REPO_ROOT, "node_modules", platformPkgName);
 const stubBinaryPath = path.join(platformPkgDir, "bin", binaryName);
@@ -104,7 +103,7 @@ function safeRemoveFixture() {
  */
 function createFakePlatformPackage() {
 	if (fs.existsSync(platformPkgDir) && !fs.existsSync(SENTINEL)) {
-		// A real (npm-installed) platform package is here — move it aside and
+		// A real (npm-installed) platform package is here- move it aside and
 		// restore it in teardown, rather than clobbering it.
 		fs.rmSync(BACKUP, { recursive: true, force: true });
 		fs.renameSync(platformPkgDir, BACKUP);

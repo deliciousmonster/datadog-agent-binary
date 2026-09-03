@@ -42,12 +42,6 @@ const harperSupervisor = (scope, log) => ({
 						exitHint: agent.exitHint,
 						verify: agent.verify,
 					})
-					.then((state) => ({
-						name: agent.name,
-						title: agent.title,
-						...state,
-						kind: agent.kind,
-					}))
 					.then((state) => {
 						// Only here: the guard reports its own verdicts through the log it was handed.
 						if (state.verified !== true) {
@@ -55,7 +49,12 @@ const harperSupervisor = (scope, log) => ({
 								`Datadog supervisor: the ${agent.title} started but did not verify: ${state.verifyDetail ?? "no detail"}`
 							);
 						}
-						return state;
+						return {
+							name: agent.name,
+							title: agent.title,
+							...state,
+							kind: agent.kind,
+						};
 					})
 					.catch((error) =>
 						unstarted(agent, describeSpawnFailure(error, agent.command))

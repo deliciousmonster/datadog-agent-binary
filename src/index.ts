@@ -46,7 +46,5 @@ export async function buildAgents(
 	return build({ target, sourceDir, outputDir });
 }
 
-export * from "./binaries.js";
-export * from "./build.js";
 export * from "./downloader.js";
 export * from "./targets.js";
