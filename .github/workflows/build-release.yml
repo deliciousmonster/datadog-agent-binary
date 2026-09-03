@@ -157,26 +157,11 @@ jobs:
           node dist/src/cli.js build "${args[@]}"
           ls -l "build/${{ matrix.platform }}/bin/"
 
-      # Prove the binary actually runs as a standalone file BEFORE we ship it.
-      # We hide the build tree first so a binary that still links libraries by
-      # their build-time path (e.g. librtloader) can't be satisfied — that's the
-      # exact failure that only shows up on a user's machine. A self-contained
-      # binary runs fine; a non-relocatable one fails here and blocks the
-      # release instead of publishing something that won't start.
-      - name: Smoke test ${{ matrix.platform }} runs standalone (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          set -e
-          # Derived, not hardcoded: a second binary added to BINARIES is covered here automatically.
-          bins=$(node -e "console.log(require('./dist/src/binaries.js').BINARIES.map(b=>b.shipsAs).join(' '))")
-          src="build/${{ matrix.platform }}/src"
-          [ -d "$src" ] && mv "$src" "${src}.hidden" || true
-          for name in $bins; do
-            bin="build/${{ matrix.platform }}/bin/${name}"
-            echo "Running: $bin version (build tree hidden)"
-            "$bin" version
-          done
-          [ -d "${src}.hidden" ] && mv "${src}.hidden" "$src" || true
+      # Proves the binaries are real before we ship them, on every OS Windows included (bash is
+      # already relied on there elsewhere in this file). The script hides build/<platform>/src itself.
+      - name: Smoke test ${{ matrix.platform }} binaries
+        shell: bash
+        run: node scripts/smoke-test-binaries.js "build/${{ matrix.platform }}/bin"
 
       # Guard against the symbol floor creeping back up. The Harper Pro runtime
       # image (Debian 12) provides glibc 2.36 (libc.so.6) AND libstdc++

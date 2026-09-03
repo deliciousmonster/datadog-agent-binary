@@ -58,13 +58,18 @@ function verifyGuard() {
 function verifyPlatformPackage(dirName) {
 	const dir = path.join(REPO_ROOT, "npm", dirName);
 	if (!fs.existsSync(path.join(dir, "package.json"))) {
-		// copyPlatformBinary mkdirs bin/ before copying, so a throw mid-copy leaves bin/ populated with
-		// no package.json; left alone that surfaces only later as a bare `npm publish` error with no manifest.
+		// A throw mid-copy can leave bin/ populated with no package.json, or - when the very first
+		// binary is missing - leave bin/ empty and the directory itself absent. Both used to pass silently.
 		const binDir = path.join(dir, "bin");
 		if (fs.existsSync(binDir) && fs.readdirSync(binDir).length > 0) {
 			failures.push(
 				`${dirName}: bin/ has content but no package.json - a partial build was left behind, ` +
 					"re-run npm run all-platform-packages from clean"
+			);
+		} else {
+			failures.push(
+				`${dirName}: no platform package was ever created - package.json is missing and bin/ ` +
+					"is empty or absent, re-run npm run all-platform-packages from clean"
 			);
 		}
 		return;
@@ -113,8 +118,18 @@ function verifyPlatformPackage(dirName) {
 
 verifyGuard();
 const npmDir = path.join(REPO_ROOT, "npm");
+
+// TARGETS drives this, not readdirSync(npmDir): a directory listing never mentions a target whose
+// npm/<name>/ was never created, which is exactly the gap this gate exists to catch.
+for (const target of TARGETS) verifyPlatformPackage(target.name);
+
+// Anything left under npm/ that no target names still ships - the publish step iterates npm/*/, not
+// TARGETS - so it gets the same scrutiny, via the "no matching entry in src/targets.ts" check above.
+const knownNames = new Set(TARGETS.map((target) => target.name));
 if (fs.existsSync(npmDir)) {
-	for (const dirName of fs.readdirSync(npmDir)) verifyPlatformPackage(dirName);
+	for (const dirName of fs.readdirSync(npmDir)) {
+		if (!knownNames.has(dirName)) verifyPlatformPackage(dirName);
+	}
 }
 
 if (failures.length > 0) {

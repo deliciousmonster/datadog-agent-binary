@@ -10,6 +10,7 @@ const { execFileSync } = require("node:child_process");
 const {
 	REPO_ROOT,
 	BINARIES,
+	TARGETS,
 	currentTarget,
 	scaffoldWorkDir,
 } = require("../support/generator.js");
@@ -20,9 +21,36 @@ after(() => {
 	for (const dir of workDirs) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-// One tree shaped like the repo root: verify-package.js resolves dist/src/* and npm/ relative to its
-// own location, the same trick create-platform-packages.js's own tests use to run in isolation.
-function buildFixture({ guard = "populated", binOverrides = {} } = {}) {
+// A well-formed platform package for one target. Content is a text stand-in, never a real binary -
+// verify-package.js only ever byte-searches it, same as create-platform-packages.js's own tests.
+function writePlatformPackage(workDir, target, binOverrides = {}) {
+	const binDir = path.join(workDir, "npm", target.name, "bin");
+	fs.mkdirSync(binDir, { recursive: true });
+	fs.writeFileSync(
+		path.join(workDir, "npm", target.name, "package.json"),
+		JSON.stringify({
+			name: `platform-fixture-${target.name}`,
+			version: "0.0.0",
+			files: ["bin/"],
+		})
+	);
+	for (const binary of BINARIES) {
+		const override = binOverrides[binary.shipsAs];
+		if (override === "missing") continue;
+		fs.writeFileSync(
+			path.join(binDir, `${binary.shipsAs}${target.exe}`),
+			override ?? `${binary.requiredSymbol}\n`
+		);
+	}
+}
+
+// One tree shaped like the repo root, every target holding a well-formed package by default.
+// `binOverrides` only ever touches TARGET; `missingTargets` skips a directory entirely.
+function buildFixture({
+	guard = "populated",
+	binOverrides = {},
+	missingTargets = [],
+} = {}) {
 	const workDir = scaffoldWorkDir("ddab-publish-gate-");
 	workDirs.push(workDir);
 
@@ -50,22 +78,12 @@ function buildFixture({ guard = "populated", binOverrides = {} } = {}) {
 		fs.mkdirSync(path.join(workDir, "guard"));
 	}
 
-	const binDir = path.join(workDir, "npm", TARGET.name, "bin");
-	fs.mkdirSync(binDir, { recursive: true });
-	fs.writeFileSync(
-		path.join(workDir, "npm", TARGET.name, "package.json"),
-		JSON.stringify({
-			name: `platform-fixture-${TARGET.name}`,
-			version: "0.0.0",
-			files: ["bin/"],
-		})
-	);
-	for (const binary of BINARIES) {
-		const override = binOverrides[binary.shipsAs];
-		if (override === "missing") continue;
-		fs.writeFileSync(
-			path.join(binDir, `${binary.shipsAs}${TARGET.exe}`),
-			override ?? `${binary.requiredSymbol}\n`
+	for (const target of TARGETS) {
+		if (missingTargets.includes(target.name)) continue;
+		writePlatformPackage(
+			workDir,
+			target,
+			target.name === TARGET.name ? binOverrides : {}
 		);
 	}
 
@@ -110,6 +128,32 @@ test("NEGATIVE: a platform package with zero binaries refuses the release", () =
 	const result = runGate(buildFixture({ binOverrides: missingAll() }));
 	assert.notEqual(result.status, 0);
 	assert.match(result.stderr, /ships zero binaries/);
+});
+
+// What create-platform-packages.js's --all tolerateMissing branch produces: a target the build threw
+// on is skipped with a console.warn and no npm/<name>/ directory, which readdirSync(npmDir) never visits.
+test("NEGATIVE: a target whose platform package was never created refuses the release", () => {
+	const result = runGate(buildFixture({ missingTargets: [TARGET.name] }));
+	assert.notEqual(result.status, 0);
+	assert.match(
+		result.stderr,
+		new RegExp(`${TARGET.name}: no platform package was ever created`)
+	);
+});
+
+// The same gap, one layer deeper: create-platform-packages.js's copyPlatformBinary mkdirs bin/ before
+// the loop that can throw, so the directory can exist - empty - with package.json still never written.
+test("NEGATIVE: a platform directory with an empty bin/ and no package.json refuses the release", () => {
+	const workDir = buildFixture({ missingTargets: [TARGET.name] });
+	fs.mkdirSync(path.join(workDir, "npm", TARGET.name, "bin"), {
+		recursive: true,
+	});
+	const result = runGate(workDir);
+	assert.notEqual(result.status, 0);
+	assert.match(
+		result.stderr,
+		new RegExp(`${TARGET.name}: no platform package was ever created`)
+	);
 });
 
 // The regression this whole project chases: one agent shipped, the other silently absent, and the
