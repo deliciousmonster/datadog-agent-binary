@@ -16,6 +16,7 @@
 		"all-platform-packages": "npm run build && node scripts/create-platform-packages.js --all",
 		"platform-package": "npm run build && npm run build-agent && node scripts/create-platform-packages.js",
 		"update-optional-deps": "npm run build && node scripts/update-optional-deps.js",
+		"verify-package": "node scripts/verify-package.js",
 		"lint": "prettier --write .",
 		"lint:check": "prettier --check .",
 		"prepare": "husky",

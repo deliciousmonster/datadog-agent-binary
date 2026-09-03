@@ -395,6 +395,11 @@ jobs:
         run: |
           node scripts/create-platform-packages.js --all
 
+      # Checks what npm pack would actually ship, not the working tree: refuses a missing/empty guard/
+      # submodule and any platform package whose binaries are absent or missing a required symbol.
+      - name: Verify package
+        run: npm run verify-package
+
       - name: Publish platform packages
         run: |
           for platform_dir in npm/*/; do
