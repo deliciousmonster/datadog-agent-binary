@@ -2,6 +2,7 @@
 
 import { spawn } from "node:child_process";
 
+import { describeExit, describeSpawnFailure } from "../agent-exit.js";
 import { BinaryManager } from "../dist/binary-manager.js";
 import { logger } from "../dist/logger.js";
 
@@ -64,20 +65,20 @@ async function main() {
 		logger.info(`datadog-agent child process started (pid=${child.pid})`);
 
 		child.on("exit", (code, signal) => {
-			if (signal) {
-				logger.warn(`datadog-agent terminated by signal ${signal}`);
-			} else if (code && code !== 0) {
-				logger.error(`datadog-agent exited with non-zero code ${code}`);
-			} else {
-				logger.info(`datadog-agent exited with code ${code}`);
-			}
-			process.exit(code || 0);
+			// A signalled child reports no exit code, so `code || 0` hands a caller 0 for an OOM kill.
+			const { killed, detail, exitCode } = describeExit(code, signal);
+			if (killed) logger.error(`datadog-agent ${detail}`);
+			else if (exitCode !== 0) logger.warn(`datadog-agent ${detail}`);
+			else logger.info(`datadog-agent ${detail}`);
+			process.exit(exitCode);
 		});
 
 		child.on("error", (error) => {
 			// Under Harper v5 spawn enforcement, a binary path that is not listed
 			// in applications.allowedSpawnCommands surfaces here as an error.
-			logger.error(`Failed to execute datadog-agent: ${error.message}`);
+			logger.error(
+				`datadog-agent could not run: ${describeSpawnFailure(error, binaryPath)}`
+			);
 			logger.error(
 				`If running under Harper, confirm this exact absolute path is in ` +
 					`applications.allowedSpawnCommands: ${binaryPath}`

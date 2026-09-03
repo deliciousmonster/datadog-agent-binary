@@ -178,6 +178,38 @@ test("end-to-end: the datadog-agent shim resolves and executes the agent", async
 	);
 });
 
+test("NEGATIVE: the shim does not exit 0 for an agent the kernel killed", async (t) => {
+	if (isWindows) {
+		t.skip("no POSIX signals to kill the stub with");
+		return;
+	}
+	// A signalled child reports exit code null, which `code || 0` turns into success. That is what an OOM
+	// kill of the core agent looked like to anything watching the shim.
+	const original = fs.readFileSync(stubBinaryPath, "utf8");
+	fs.writeFileSync(stubBinaryPath, "#!/bin/sh\nkill -9 $$\n");
+	try {
+		const shim = path.join(REPO_ROOT, "bin", "datadog-agent");
+		const child = spawn(process.execPath, [shim], {
+			stdio: ["ignore", "pipe", "pipe"],
+			env: process.env,
+		});
+		const { code, stderr } = await runToCompletion(child);
+		assert.notEqual(
+			code,
+			0,
+			"the shim reported success for a SIGKILLed agent, so a supervisor sees a clean stop"
+		);
+		assert.match(
+			stderr,
+			/SIGKILL/,
+			"the signal has to reach the log as well as the exit code"
+		);
+	} finally {
+		fs.writeFileSync(stubBinaryPath, original);
+		fs.chmodSync(stubBinaryPath, 0o755);
+	}
+});
+
 test("the bin shim passes the Harper-required `name` option", () => {
 	// Regression guard: the spawn call inside the bin shim and the generated
 	// wrappers must keep the `name: "datadog-agent"` option.
