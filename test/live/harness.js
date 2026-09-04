@@ -49,6 +49,15 @@ export const DIMENSIONS = [
 		name: "harper@5.2.8 / guard-bundled supervision",
 		harperLine: "5.2.8",
 		moduleLoader: "vm-current-context",
+		expectedSupervision: "guard",
+	},
+	{
+		// A local worktree, not the registry: this Harper build carries a real `scope.processes`
+		// (feat/process-guard), so this row proves the native path rather than mocking it.
+		name: "harper@5.2.5 (patched) / native scope.processes supervision",
+		harperLine: "file:/Users/jrepp/Developer/repositories/harperfast/.wt/guard",
+		moduleLoader: "vm-current-context",
+		expectedSupervision: "harper",
 	},
 ];
 
@@ -396,4 +405,26 @@ export async function readDelivery(handle) {
 	if (!body)
 		throw new Error(`DatadogStatus at ${handle.statusUrl} did not answer`);
 	return body;
+}
+
+/**
+ * Polls DatadogStatus until the real receiver reports exactly `count` traces delivered and the
+ * verdict has left "idle" (a periodic stats bucket, not an on-write counter, so a fresh burst can
+ * sit at the right count with a stale "idle" verdict for several seconds), or the deadline passes.
+ * Returns the last status read, which is `undefined` only if DatadogStatus never answered at all.
+ */
+export async function waitForDelivery(handle, count, deadlineMs) {
+	const deadline = Date.now() + deadlineMs;
+	let status;
+	while (Date.now() < deadline) {
+		status = await readDelivery(handle).catch(() => status);
+		if (
+			status?.delivery?.receiver.tracesReceived === count &&
+			status.delivery.verdict !== "idle"
+		) {
+			return status;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 1000));
+	}
+	return status;
 }
