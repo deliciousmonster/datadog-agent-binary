@@ -57,10 +57,22 @@ const PROBE_URLS = [
 ];
 
 // Resolved rather than imported: dd-trace belongs to the host application, and this package does not ship it.
+let tracer;
 try {
-	untraceAgentProbes(createRequire(import.meta.url)("dd-trace"), PROBE_URLS);
+	tracer = createRequire(import.meta.url)("dd-trace");
 } catch {
 	// No tracer in this process, so there is nothing to keep the probes out of.
+}
+if (tracer) {
+	try {
+		untraceAgentProbes(tracer, PROBE_URLS);
+	} catch (error) {
+		// A shape untraceAgentProbes did not expect from tracer.use(): unlike a missing require, this leaves
+		// the probes untraced, so it gets its own log line rather than sharing the silent path above.
+		log.error(
+			`Datadog supervisor: found dd-trace but could not configure it to ignore the agent probes: ${error.message}. Probe requests may now appear as spans in APM.`
+		);
+	}
 }
 
 // `name` is Harper's spawn name and the PID-lock filename, stated once: a second spelling is a second lock
@@ -191,7 +203,9 @@ async function startAgents(scope) {
 		if (started.report?.length) status.supervisionReport = started.report;
 	} catch (error) {
 		status.error = error.message;
-		log.error(`Datadog supervisor: startup failed: ${error.message}`);
+		log.error(
+			`Datadog supervisor: startup failed: ${error.stack ?? error.message}`
+		);
 	}
 	return status;
 }

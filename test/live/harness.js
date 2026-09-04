@@ -17,9 +17,9 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import { PACKAGE_NAME, resolveBinary } from "../../runtime/binary.js";
+import { REPO_ROOT } from "../support/generator.js";
 import { findFreePort } from "../support/loopback.js";
 
-const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const COMPONENT_NAME = basename(REPO_ROOT);
 
 // The same table resources.js's own AGENTS array and scripts/create-platform-packages.js build

@@ -73,5 +73,8 @@ jobs:
             git config user.email "github-actions[bot]@users.noreply.github.com"
 
             npm version "v$LATEST_RELEASE"
-            git push origin "v$LATEST_RELEASE"
+
+            # npm version's local commit has to reach main too, or main's committed version
+            # permanently drifts from the tag this run just produced.
+            git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}" "v$LATEST_RELEASE"
           fi

@@ -25,6 +25,15 @@ const slowBindLogger =
 			`Datadog supervisor: thread ${threadId} waited ${waitedMs}ms over ${attempts} probes for ${title} to answer ${url}.`
 		);
 
+// Both verifiers poll the same way and differ only in title and url; state.exited is the one giveUp
+// condition either agent has, since a dead process cannot bind the port it is being polled for.
+const pollAgent = (url, title, state, logInfo) =>
+	pollEndpoint({
+		url,
+		giveUp: () => state.exited === true,
+		onRetried: slowBindLogger(title, url, logInfo),
+	});
+
 /** What the process did, when it did anything. A signalled exit reports no code, so `code || 0` reads it as a clean stop. */
 function exitDetail(state) {
 	if (state?.exited !== true) return "";
@@ -46,11 +55,7 @@ async function verifyTraceAgent(state, { paths, ports, logInfo }) {
 		};
 	}
 	const url = receiverInfoUrl(ports.receiver);
-	const body = await pollEndpoint({
-		url,
-		giveUp: () => state.exited === true,
-		onRetried: slowBindLogger("the APM receiver", url, logInfo),
-	});
+	const body = await pollAgent(url, "the APM receiver", state, logInfo);
 	const endpoints = parseJson(body)?.endpoints;
 	const serving =
 		Array.isArray(endpoints) &&
@@ -85,11 +90,7 @@ async function verifyCoreAgent(state, { paths, ports, logInfo }) {
 	}
 	const url = expvarUrl(ports.expvar);
 	const vars = parseJson(
-		await pollEndpoint({
-			url,
-			giveUp: () => state.exited === true,
-			onRetried: slowBindLogger("the core agent", url, logInfo),
-		})
+		await pollAgent(url, "the core agent", state, logInfo)
 	);
 	if (!vars || !("aggregator" in vars) || !("forwarder" in vars)) {
 		return {

@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { createRequire } from "node:module";
 
@@ -23,8 +24,67 @@ export function loadComponent() {
 /** A binary that exits at once, which is all a suite driving a recorded Harper ever runs. */
 export const EXITS_AT_ONCE = "#!/bin/sh\nexit 0\n";
 
-/** A binary that stays up, so a suite spawning for real has a live pid to find behind the lock. */
-export const STAYS_UP = "#!/bin/sh\nexec sleep 15\n";
+/**
+ * A binary that stays up. Minutes, not seconds: this is spawned for real and stopped only by its own
+ * caller's teardown (SIGTERM), so a lifetime long enough to outlast a slow, loaded machine is what keeps a
+ * suite's own wall-clock from being able to race it.
+ */
+export const STAYS_UP = "#!/bin/sh\nexec sleep 300\n";
+
+// runtime/binary.js's resolveBinary reads two fixed, shared locations, in order: the installed platform
+// package under node_modules/, then build/<platform>/bin. Both paths are derived from resolveBinary's own
+// file location, not from anything a caller here can redirect, so neither can be given a copy unique per
+// call the way a temp-dir fixture would be. test/e2e/harper-component.test.js plants a fake platform
+// package for its own file's duration; withBuiltBinaries plants build/<platform>/bin for one call's
+// duration. Either one, present when it should not be, changes what a concurrent resolveBinary() call
+// anywhere in the process tree resolves - so the one real fix is making sure only one user of these paths,
+// across every file, is ever active at a time.
+const RESOLVE_BINARY_LOCK = path.join(
+	REPO_ROOT,
+	"build",
+	".resolveBinary.lock"
+);
+const LOCK_POLL_MS = 10;
+const LOCK_TIMEOUT_MS = 30_000;
+
+/**
+ * Exclusive use of the paths resolveBinary() reads. `mkdirSync` without `recursive` fails EEXIST when
+ * another holder already made the directory, which is what turns "wait your turn" into a real mutex
+ * instead of a best-effort delay: a writer (withBuiltBinaries, or harper-component.test.js's fake platform
+ * package) and a reader relying on those paths' absence or content can never observe each other mid-way,
+ * in this process or another. Returns a `release` function rather than taking a callback, so a caller whose
+ * hold must outlive one function - a whole test file's before()/after(), say - can still use it.
+ */
+export async function acquireResolveBinaryLock() {
+	fs.mkdirSync(path.dirname(RESOLVE_BINARY_LOCK), { recursive: true });
+	const deadline = Date.now() + LOCK_TIMEOUT_MS;
+	for (;;) {
+		try {
+			fs.mkdirSync(RESOLVE_BINARY_LOCK);
+			return () =>
+				fs.rmSync(RESOLVE_BINARY_LOCK, { recursive: true, force: true });
+		} catch (error) {
+			if (error.code !== "EEXIST") throw error;
+			if (Date.now() >= deadline) {
+				throw new Error(
+					`${RESOLVE_BINARY_LOCK} is still held after ${LOCK_TIMEOUT_MS}ms. A prior run likely ` +
+						`crashed before releasing it; remove the directory by hand once nothing is using it.`
+				);
+			}
+			await delay(LOCK_POLL_MS);
+		}
+	}
+}
+
+/** `run` under {@link acquireResolveBinaryLock}, released however `run` ends. */
+export async function withResolveBinaryLock(run) {
+	const release = await acquireResolveBinaryLock();
+	try {
+		return await run();
+	} finally {
+		release();
+	}
+}
 
 /**
  * Both agent binaries where resources.js looks for a dev checkout's build output, for the duration of
@@ -32,21 +92,23 @@ export const STAYS_UP = "#!/bin/sh\nexec sleep 15\n";
  * agent, so without these nothing that needs a trace-agent path can be driven at all.
  */
 export async function withBuiltBinaries(run, body = EXITS_AT_ONCE) {
-	const target = currentTarget();
-	const binDir = path.join(REPO_ROOT, "build", target.name, "bin");
-	fs.mkdirSync(binDir, { recursive: true });
-	const files = BINARIES.map((binary) =>
-		path.join(binDir, `${binary.shipsAs}${target.exe}`)
-	);
-	for (const file of files) {
-		fs.writeFileSync(file, body);
-		fs.chmodSync(file, 0o755);
-	}
-	try {
-		return await run(files);
-	} finally {
-		for (const file of files) fs.rmSync(file, { force: true });
-	}
+	return withResolveBinaryLock(async () => {
+		const target = currentTarget();
+		const binDir = path.join(REPO_ROOT, "build", target.name, "bin");
+		fs.mkdirSync(binDir, { recursive: true });
+		const files = BINARIES.map((binary) =>
+			path.join(binDir, `${binary.shipsAs}${target.exe}`)
+		);
+		for (const file of files) {
+			fs.writeFileSync(file, body);
+			fs.chmodSync(file, 0o755);
+		}
+		try {
+			return await run(files);
+		} finally {
+			for (const file of files) fs.rmSync(file, { force: true });
+		}
+	});
 }
 
 /**

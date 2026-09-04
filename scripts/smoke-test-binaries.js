@@ -8,14 +8,14 @@ import { existsSync, mkdtempSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-import { BINARIES } from "../dist/src/binaries.js";
+import { BINARIES, binaryFilename } from "../dist/src/binaries.js";
+import { currentTarget } from "../dist/src/targets.js";
 import { debugVarsUrl } from "../runtime/delivery.js";
 import { writeConfigFiles } from "../runtime/config.js";
 import { receiverInfoUrl, verifyLaunch } from "../runtime/verify.js";
 import { findFreePort } from "../test/support/loopback.js";
 
 const REPO_ROOT = join(import.meta.dirname, "..");
-const EXE = process.platform === "win32" ? ".exe" : "";
 
 // Syntactically valid, not real: a wrong key still makes the trace-agent build and count real
 // payloads before the intake refuses them. Same key, same reasoning, as test/live/harness.js.
@@ -109,6 +109,17 @@ async function checkTraceAgent(binPath, ports, paths, resources, spawned) {
 	log(
 		`trace-agent counted it: ${signal.receiver.spansReceived} span(s) at the receiver`
 	);
+
+	await sleep(LIVENESS_HOLD_MS);
+	if (proc.state.exited) {
+		throw new Error(
+			`exited ${LIVENESS_HOLD_MS}ms after counting the span ` +
+				`(code ${proc.state.code}, signal ${proc.state.signal})\n${proc.output()}`
+		);
+	}
+	log(
+		`trace-agent stayed up for ${LIVENESS_HOLD_MS}ms after counting the span`
+	);
 }
 
 /** Starts the core agent, proves it identifies itself over expvar, then proves it stays up. */
@@ -145,6 +156,12 @@ const CHECKS = {
 function hideBuildTree(binDir) {
 	const srcDir = join(dirname(binDir), "src");
 	const hiddenDir = `${srcDir}.smoke-test-hidden`;
+
+	// A run killed between the rename below and its `finally` restore (a CI timeout, not a caught
+	// throw) leaves hiddenDir behind with srcDir missing; recover it before this run hides anything.
+	if (existsSync(hiddenDir) && !existsSync(srcDir))
+		renameSync(hiddenDir, srcDir);
+
 	const present = existsSync(srcDir);
 	if (present) renameSync(srcDir, hiddenDir);
 	return () => {
@@ -191,7 +208,7 @@ async function main() {
 	const failures = [];
 	try {
 		for (const binary of BINARIES) {
-			const binPath = join(binDir, `${binary.shipsAs}${EXE}`);
+			const binPath = join(binDir, binaryFilename(binary, currentTarget()));
 			const check = CHECKS[binary.shipsAs];
 			if (!check) {
 				failures.push(

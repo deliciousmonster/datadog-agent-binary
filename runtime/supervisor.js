@@ -105,7 +105,7 @@ const guardSupervisor = (log, spawn) => ({
 			// an unguarded commitLock write can throw past that, and it takes both agents down in one rejection.
 			const message = error instanceof Error ? error.message : String(error);
 			log.error(
-				`Datadog supervisor: the guard call for both agents threw: ${message}`
+				`Datadog supervisor: the guard call for both agents threw: ${error.stack ?? message}`
 			);
 			return {
 				processes: agents.map((agent) => unstarted(agent, message)),

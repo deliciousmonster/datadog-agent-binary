@@ -115,8 +115,7 @@ function removeStaleDefaults(confd, owned) {
 }
 
 // The runtime tree lives under Harper's root, never the component directory, which `harper deploy` replaces
-// under a live agent. Named by the component's own directory, not just "datadog": two installs of this
-// plugin under different component names must not share one pidDir, or their guards fight over one lock.
+// under a live agent. Named by the component's own directory, not just "datadog": sharing one pidDir means sharing one lock.
 export function prepareRuntime(componentDir, { ports, log }) {
 	const root = harperRoot();
 	const runtimeDir = root

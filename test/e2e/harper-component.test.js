@@ -11,7 +11,7 @@ const { spawn } = require("node:child_process");
 
 // Lives here, not beside the other supervisor tests, because it needs the platform-package fixture
 // this file plants in the repo's real node_modules. That fixture is global, so it cannot be shared.
-const { loadComponent, recordingScope, REPO_ROOT } =
+const { loadComponent, recordingScope, REPO_ROOT, acquireResolveBinaryLock } =
 	await import("../support/component.js");
 const { findFreePort } = await import("../support/loopback.js");
 const { withEnvs, withTempDir } = await import("../support/sandbox.js");
@@ -141,12 +141,20 @@ function runToCompletion(child) {
 	});
 }
 
-before(() => {
+// Held for the whole file, not just one test: the fixture below is a shared, mutable path
+// (node_modules/@harperfast/datadog-agent-binary-<platform>) that resolveBinary() also reads from any
+// other concurrently-running file, for as long as this fixture is on disk - not only while a given test
+// here happens to be running.
+let releaseResolveBinaryLock;
+
+before(async () => {
+	releaseResolveBinaryLock = await acquireResolveBinaryLock();
 	createFakePlatformPackage();
 });
 
 after(() => {
 	safeRemoveFixture();
+	releaseResolveBinaryLock();
 });
 
 test("the installed platform package is preferred over a local build (no network, no build)", async () => {
@@ -236,6 +244,10 @@ test("the bin shim passes the Harper-required `name` option", () => {
 test("a binary that resolves to the wrong agent is refused rather than started twice", async () => {
 	// The published platform packages predate the trace-agent and answer every request with the core agent.
 	// That path exists, so an unchecked resolve starts two core agents and no receiver at all.
+	//
+	// This depends on build/<platform>/bin holding no trace-agent. before() above already holds the
+	// resolve-binary lock for this whole file, which is what keeps that path clear of a concurrently-running
+	// file's withBuiltBinaries: without it, a concurrently-running file can make the "wrong agent" premise false.
 	const receiver = await findFreePort();
 	const expvarPort = await findFreePort();
 	await withTempDir("dd-runtime-", async (root) => {

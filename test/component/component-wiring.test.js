@@ -36,7 +36,12 @@ test("NEGATIVE: config.yaml carries pluginModule, without which the plugin is ne
 	);
 });
 
-/** Every local file reachable from `entries` by import, as repo-relative posix paths. */
+/**
+ * Every local file reachable from `entries` by import, as repo-relative posix paths. Matches a static
+ * `from "..."` specifier and a dynamic `import("...")` call, in both cases only a literal relative path:
+ * runtime/binary.js's `import(platformPackage)` names an external optional dependency built from a
+ * variable, so it resolves to no local file and correctly falls outside this walk rather than being missed by it.
+ */
 function importedFrom(...entries) {
 	const seen = new Set();
 	const walk = (file) => {
@@ -48,7 +53,7 @@ function importedFrom(...entries) {
 		if (!fs.existsSync(file)) return;
 		for (const [, specifier] of fs
 			.readFileSync(file, "utf8")
-			.matchAll(/from\s+["'](\.[^"']+)["']/g)) {
+			.matchAll(/(?:from|import\()\s*["'](\.[^"']+)["']/g)) {
 			walk(path.resolve(path.dirname(file), specifier));
 		}
 	};
