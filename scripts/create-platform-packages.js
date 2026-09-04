@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createRequire } from "node:module";
+import { REPO_ROOT, readRepoVersion, platformPackageDir } from "./paths.js";
 
 const require = createRequire(import.meta.url);
 
@@ -10,35 +11,13 @@ const { argv } = require("process");
 const { TARGETS, currentTarget } = require("../dist/src/targets.js");
 const { BINARIES, binaryFilename } = require("../dist/src/binaries.js");
 
-function getParentVersion() {
-	const parentPackageJson = JSON.parse(
-		fs.readFileSync(
-			path.join(import.meta.dirname, "..", "package.json"),
-			"utf8"
-		)
-	);
-	return parentPackageJson.version;
-}
-
-function getPackageDir(platform) {
-	const platformName = platform.name;
-	return path.join(import.meta.dirname, "..", "npm", platformName);
-}
-
 function copyPlatformBinary(platform) {
-	const packageDir = getPackageDir(platform);
+	const packageDir = platformPackageDir(platform.name);
 	fs.mkdirSync(path.join(packageDir, "bin"), { recursive: true });
 
 	for (const binary of BINARIES) {
 		const fileName = binaryFilename(binary, platform);
-		const from = path.join(
-			import.meta.dirname,
-			"..",
-			"build",
-			platform.name,
-			"bin",
-			fileName
-		);
+		const from = path.join(REPO_ROOT, "build", platform.name, "bin", fileName);
 		if (!fs.existsSync(from)) {
 			throw new Error(`Binary not found at ${from}`);
 		}
@@ -67,7 +46,7 @@ function npmCPU(arch) {
 	return mapped;
 }
 
-const version = getParentVersion();
+const version = readRepoVersion();
 
 const lastArg = argv[argv.length - 1];
 const platforms = lastArg === "--all" ? TARGETS : [currentTarget()];
@@ -111,7 +90,7 @@ function writePlatformPackageJson(platform) {
 	};
 
 	fs.writeFileSync(
-		path.join(getPackageDir(platform), "package.json"),
+		path.join(platformPackageDir(platform.name), "package.json"),
 		JSON.stringify(packageJson, null, "\t")
 	);
 
@@ -126,7 +105,7 @@ function writePlatformIndexJs(platform) {
 		.replace("__BINARIES__", JSON.stringify(files, null, 2))
 		.replace("__DEFAULT__", BINARIES[0].shipsAs);
 	fs.writeFileSync(
-		path.join(getPackageDir(platform), "index.js"),
+		path.join(platformPackageDir(platform.name), "index.js"),
 		indexContent
 	);
 }
@@ -158,7 +137,10 @@ for usage, configuration, and Harper integration details.
 Apache-2.0. The Datadog Agent binary is distributed under the Apache-2.0
 license per the [Datadog Agent repository](https://github.com/DataDog/datadog-agent).
 `;
-	fs.writeFileSync(path.join(getPackageDir(platform), "README.md"), readme);
+	fs.writeFileSync(
+		path.join(platformPackageDir(platform.name), "README.md"),
+		readme
+	);
 }
 
 // In --all mode (release), tolerate a platform whose binary didn't build: skip it with a warning

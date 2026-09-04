@@ -57,6 +57,18 @@ function spawnAgent(binPath, args) {
 	};
 }
 
+/** Sleeps LIVENESS_HOLD_MS, then confirms `proc` (named by `label` in messages) is still running. */
+async function holdAlive(proc, label) {
+	await sleep(LIVENESS_HOLD_MS);
+	if (proc.state.exited) {
+		throw new Error(
+			`${label} exited ${LIVENESS_HOLD_MS}ms into the liveness hold ` +
+				`(code ${proc.state.code}, signal ${proc.state.signal})\n${proc.output()}`
+		);
+	}
+	log(`${label} stayed up for ${LIVENESS_HOLD_MS}ms`);
+}
+
 /** Starts the trace-agent, proves it binds the receiver, then proves a real span reaches it. */
 async function checkTraceAgent(binPath, ports, paths, resources, spawned) {
 	log(`starting trace-agent: ${binPath} run -c ${paths.configFile}`);
@@ -110,16 +122,7 @@ async function checkTraceAgent(binPath, ports, paths, resources, spawned) {
 		`trace-agent counted it: ${signal.receiver.spansReceived} span(s) at the receiver`
 	);
 
-	await sleep(LIVENESS_HOLD_MS);
-	if (proc.state.exited) {
-		throw new Error(
-			`exited ${LIVENESS_HOLD_MS}ms after counting the span ` +
-				`(code ${proc.state.code}, signal ${proc.state.signal})\n${proc.output()}`
-		);
-	}
-	log(
-		`trace-agent stayed up for ${LIVENESS_HOLD_MS}ms after counting the span`
-	);
+	await holdAlive(proc, "trace-agent");
 }
 
 /** Starts the core agent, proves it identifies itself over expvar, then proves it stays up. */
@@ -135,14 +138,7 @@ async function checkCoreAgent(binPath, ports, paths, _resources, spawned) {
 	}
 	log(`core agent started: ${started.detail}`);
 
-	await sleep(LIVENESS_HOLD_MS);
-	if (proc.state.exited) {
-		throw new Error(
-			`exited ${LIVENESS_HOLD_MS}ms after binding expvar ` +
-				`(code ${proc.state.code}, signal ${proc.state.signal})\n${proc.output()}`
-		);
-	}
-	log(`core agent stayed up for ${LIVENESS_HOLD_MS}ms after binding`);
+	await holdAlive(proc, "core agent");
 }
 
 // One entry per binary this repo ships, same signature on both, so a future binary with no entry here

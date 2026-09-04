@@ -4,11 +4,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { supervisorFor } from "../../runtime/supervisor.js";
+import { withTempDir } from "../support/sandbox.js";
 
 // A Scope with no `processes.start` is what selects guardSupervisor; see supervisorFor's own check.
 const NO_NATIVE_SUPERVISION = {};
@@ -30,35 +29,34 @@ const spawnThatThrowsACodedError = () => ({
 	},
 });
 
-test("NEGATIVE: a guard() rejection reports both agents with the same untranslated message, not a per-binary spawn diagnosis", async () => {
-	const pidDir = mkdtempSync(join(tmpdir(), "guard-catch-"));
-	const logged = { errors: [] };
-	const log = {
-		info: () => {},
-		warn: () => {},
-		error: (message) => logged.errors.push(message),
-	};
+test("NEGATIVE: a guard() rejection reports both agents with the same untranslated message, not a per-binary spawn diagnosis", () =>
+	withTempDir("guard-catch-", async (pidDir) => {
+		const logged = { errors: [] };
+		const log = {
+			info: () => {},
+			warn: () => {},
+			error: (message) => logged.errors.push(message),
+		};
 
-	// Different commands and different preflight-passing binaries: this is what makes describeSpawnFailure's
-	// per-agent translation (pre-fix) produce two DIFFERENT messages rather than coincidentally the same one.
-	const agents = [
-		{
-			name: "agent-one",
-			title: "Agent One",
-			kind: "trace",
-			command: process.execPath,
-			args: [],
-		},
-		{
-			name: "agent-two",
-			title: "Agent Two",
-			kind: "core",
-			command: "/bin/sh",
-			args: [],
-		},
-	];
+		// Different commands and different preflight-passing binaries: this is what makes describeSpawnFailure's
+		// per-agent translation (pre-fix) produce two DIFFERENT messages rather than coincidentally the same one.
+		const agents = [
+			{
+				name: "agent-one",
+				title: "Agent One",
+				kind: "trace",
+				command: process.execPath,
+				args: [],
+			},
+			{
+				name: "agent-two",
+				title: "Agent Two",
+				kind: "core",
+				command: "/bin/sh",
+				args: [],
+			},
+		];
 
-	try {
 		const supervisor = supervisorFor(NO_NATIVE_SUPERVISION, {
 			log,
 			spawn: spawnThatThrowsACodedError,
@@ -119,7 +117,4 @@ test("NEGATIVE: a guard() rejection reports both agents with the same untranslat
 			),
 			`the boot log must still say the call threw; logged: ${JSON.stringify(logged.errors)}`
 		);
-	} finally {
-		rmSync(pidDir, { recursive: true, force: true });
-	}
-});
+	}));

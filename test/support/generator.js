@@ -45,10 +45,14 @@ function scaffoldWorkDir(prefix) {
 function generatePackages({ prefix, args = [] }) {
 	const workDir = scaffoldWorkDir(prefix);
 
-	fs.copyFileSync(
-		path.join(REPO_ROOT, "scripts", "create-platform-packages.js"),
-		path.join(workDir, "scripts", "create-platform-packages.js")
-	);
+	// create-platform-packages.js imports REPO_ROOT/readRepoVersion/platformPackageDir from
+	// paths.js; the copied script resolves that import relative to itself.
+	for (const script of ["create-platform-packages.js", "paths.js"]) {
+		fs.copyFileSync(
+			path.join(REPO_ROOT, "scripts", script),
+			path.join(workDir, "scripts", script)
+		);
+	}
 	fs.copyFileSync(
 		path.join(REPO_ROOT, "package.json"),
 		path.join(workDir, "package.json")

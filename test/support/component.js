@@ -26,7 +26,7 @@ export function loadComponent() {
 }
 
 /** A binary that exits at once, which is all a suite driving a recorded Harper ever runs. */
-export const EXITS_AT_ONCE = "#!/bin/sh\nexit 0\n";
+const EXITS_AT_ONCE = "#!/bin/sh\nexit 0\n";
 
 /**
  * A binary that stays up. Minutes, not seconds: this is spawned for real and stopped only by its own
@@ -81,7 +81,7 @@ export async function acquireResolveBinaryLock() {
 }
 
 /** `run` under {@link acquireResolveBinaryLock}, released however `run` ends. */
-export async function withResolveBinaryLock(run) {
+async function withResolveBinaryLock(run) {
 	const release = await acquireResolveBinaryLock();
 	try {
 		return await run();
@@ -170,6 +170,40 @@ export function recordingScope({ state = {} } = {}) {
 /** The start options recorded for one agent, by the spawn name Harper locks on. */
 export const startFor = (scope, name) =>
 	scope.starts.find((options) => options.name === name);
+
+/** Path to the guard's pid lock file for one agent under `pidDir`, read by both recordingScope- and nativeScope-driven suites to check what the guard actually did. */
+export const lockFile = (pidDir, name) => path.join(pidDir, `${name}.pid`);
+
+/** The pid a guard lock records, or null. Line 1 is the pid; a host reading only that still reads it. */
+export function lockedPid(pidDir, name) {
+	try {
+		const first = fs
+			.readFileSync(lockFile(pidDir, name), "utf-8")
+			.split("\n")[0];
+		return Number.parseInt(first, 10);
+	} catch {
+		return null;
+	}
+}
+
+// SIGTERM, not SIGKILL: the guard reads a signalled stop as deliberate and releases its lock instead
+// of restarting, so teardown here cannot race the supervision a caller just started.
+export function halt(pid) {
+	if (!Number.isInteger(pid)) return;
+	try {
+		process.kill(pid, "SIGTERM");
+	} catch {
+		// Already gone.
+	}
+}
+
+/** Polls until every named lock under `pidDir` is gone, so a caller's teardown never races a release still writing the runtime tree it sits in. */
+export async function waitForLocksCleared(pidDir, names) {
+	for (let i = 0; i < 300; i++) {
+		if (names.every((name) => !fs.existsSync(lockFile(pidDir, name)))) return;
+		await delay(10);
+	}
+}
 
 /**
  * Harper's native supervision, for real: unlike recordingScope's fabricated pid, this spawns

@@ -7,19 +7,21 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
+	halt,
 	loadComponent,
+	lockedPid,
 	nativeScope,
 	REPO_ROOT,
+	waitForLocksCleared,
 	withRealBinaries,
 } from "../support/component.js";
 import { withEnvs, withTempDir } from "../support/sandbox.js";
 import { freshPorts } from "../support/loopback.js";
+import { driveTraffic } from "../support/traffic.js";
 
 // prepareRuntime nests the runtime tree under the component's own directory name; the guard's pid
 // lock directory sits under that, same as test/component/supervisor-start.test.js's own layout.
@@ -36,66 +38,13 @@ const DELIVERY_DEADLINE_MS = 60_000;
 // key still makes the trace-agent build and count real payloads before the intake refuses them.
 const FAKE_API_KEY = "0".repeat(32);
 
-// dd-trace initialises once per process, so this runs in a throwaway child - the same shape as
-// test/live/harness.js's own TRAFFIC_SCRIPT, kept as this file's own copy rather than an import so
-// this proof never depends on that local-only file.
-const TRAFFIC_SCRIPT = `
-const tracer = require('dd-trace').init({ startupLogs: false, flushInterval: 0 });
-const count = Number(process.env.SPAN_COUNT);
-for (let i = 0; i < count; i++) {
-	const span = tracer.startSpan('supervision-equivalence.span', { tags: { 'span.iteration': i } });
-	span.finish();
-}
-`;
-
-/** Real spans, from a real child process, into the real receiver at `receiverPort`. Blocks until flushed. */
-function driveTraffic(receiverPort, count) {
-	execFileSync(process.execPath, ["-e", TRAFFIC_SCRIPT], {
-		cwd: REPO_ROOT,
-		timeout: 20_000,
-		env: {
-			...process.env,
-			SPAN_COUNT: String(count),
-			DD_TRACE_AGENT_URL: `http://127.0.0.1:${receiverPort}`,
-			DD_TRACE_STARTUP_LOGS: "false",
-			DD_INSTRUMENTATION_TELEMETRY_ENABLED: "false",
-			DD_REMOTE_CONFIGURATION_ENABLED: "false",
-			DD_CRASHTRACKING_ENABLED: "false",
-		},
-	});
-}
-
-const lockFile = (pidDir, name) => path.join(pidDir, `${name}.pid`);
-
-/** The pid a guard lock records, or null. Line 1 is the pid; a host reading only that still reads it. */
-function lockedPid(pidDir, name) {
-	try {
-		const first = fs
-			.readFileSync(lockFile(pidDir, name), "utf-8")
-			.split("\n")[0];
-		return Number.parseInt(first, 10);
-	} catch {
-		return null;
-	}
-}
-
-// SIGTERM, not SIGKILL: the guard reads a signalled stop as deliberate and releases its lock instead
-// of restarting, so teardown here cannot race the supervision this file just started.
-function halt(pid) {
-	if (!Number.isInteger(pid)) return;
-	try {
-		process.kill(pid, "SIGTERM");
-	} catch {
-		// Already gone.
-	}
-}
-
-async function waitForLocksCleared(pidDir, names) {
-	for (let i = 0; i < 300; i++) {
-		if (names.every((name) => !fs.existsSync(lockFile(pidDir, name)))) return;
-		await delay(10);
-	}
-}
+// The traffic-driving mechanism lives in support/traffic.js, shared with test/live/harness.js;
+// only the env var and span naming below are this file's own.
+const SPAN_SCRIPT = {
+	envVar: "SPAN_COUNT",
+	spanName: "supervision-equivalence.span",
+	tagKey: "span.iteration",
+};
 
 /** Polls readSignal() until the receiver reports exactly `count` and the verdict has left "idle", or the deadline passes. */
 async function waitForDeliveredCount(readSignal, count, deadlineMs) {
@@ -150,7 +99,7 @@ async function bootDriveAndRead(makeScope) {
 						`the trace-agent did not verify: ${trace?.verifyDetail ?? JSON.stringify(trace)}`
 					);
 
-					driveTraffic(ports.receiver, SPAN_COUNT);
+					driveTraffic(ports.receiver, SPAN_COUNT, SPAN_SCRIPT);
 					const delivered = await waitForDeliveredCount(
 						() => component.readDeliverySignal(),
 						SPAN_COUNT,

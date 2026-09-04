@@ -8,7 +8,8 @@ on:
   workflow_dispatch:
 
 env:
-  NODE_VERSION: "22"
+  # Same repo-level Actions variable build-release.yml uses; see that file's env block.
+  NODE_VERSION: ${{ vars.NODE_VERSION }}
 
 jobs:
   check-upstream:
@@ -35,7 +36,6 @@ jobs:
         run: npm ci
 
       - name: Check for new upstream release
-        id: check
         run: |
           # Get latest Datadog Agent release with error handling
           echo "Fetching latest Datadog Agent release..."

@@ -68,7 +68,7 @@ test("no attacker-controlled value is spliced into a workflow script body", () =
 	);
 	assert.match(
 		WORKFLOW,
-		/VERSION: \$\{\{ steps\.extract_version\.outputs\.version \}\}/
+		/VERSION: \$\{\{ needs\.prepare\.outputs\.version \}\}/
 	);
 	assert.match(WORKFLOW, /REF_NAME: \$\{\{ github\.ref_name \}\}/);
 });
@@ -80,6 +80,16 @@ test("version extraction and the build are each written once, not once per runne
 	assert.equal(matches(/^\s+- name: Build \$\{\{ matrix\.platform \}\}$/gm), 1);
 	assert.equal(matches(/^\s+id: extract_version$/gm), 1);
 	assert.equal(matches(/shell: pwsh$/gm), 0);
+});
+
+// The version is computed once, by prepare's extract_version step (checked above); this checks the
+// other half, that build and publish both consume that one output rather than re-deriving their own.
+test("build and publish both consume prepare's version output, not their own derivation", () => {
+	assert.equal(
+		matches(/VERSION: \$\{\{ needs\.prepare\.outputs\.version \}\}/g),
+		2
+	);
+	assert.equal(matches(/GITHUB_REF_NAME#v/g), 0);
 });
 
 // The org refuses a workflow that names an action by tag, and the refusal lands at job setup, so

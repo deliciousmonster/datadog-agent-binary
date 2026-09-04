@@ -41,4 +41,15 @@ async function withTempDir(prefix, run) {
 	}
 }
 
-export { withEnv, withEnvs, withHome, withTempDir };
+/** globalThis.setTimeout replaced by `patch(realSetTimeout)` for `run`'s duration, restored however it ends. */
+async function withPatchedSetTimeout(patch, run) {
+	const realSetTimeout = globalThis.setTimeout;
+	globalThis.setTimeout = patch(realSetTimeout);
+	try {
+		return await run();
+	} finally {
+		globalThis.setTimeout = realSetTimeout;
+	}
+}
+
+export { withEnv, withEnvs, withHome, withPatchedSetTimeout, withTempDir };

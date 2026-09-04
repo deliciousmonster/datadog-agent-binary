@@ -9,7 +9,12 @@ import path from "node:path";
 
 import { resolveBinary } from "../../runtime/binary.js";
 import { loadComponent, REPO_ROOT } from "../support/component.js";
-import { withEnvs, withHome, withTempDir } from "../support/sandbox.js";
+import {
+	withEnvs,
+	withHome,
+	withPatchedSetTimeout,
+	withTempDir,
+} from "../support/sandbox.js";
 import { captureLogs } from "../support/loopback.js";
 
 const read = (...parts) =>
@@ -170,16 +175,13 @@ test("the runtime tree comes from Harper, not from a variable this package inven
 const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Load with the module's own 60s start deadline shortened, so the real timer decides rather than the test. */
-async function withShortDeadline(run) {
-	const realSetTimeout = globalThis.setTimeout;
-	globalThis.setTimeout = (callback, ms, ...rest) =>
-		realSetTimeout(callback, ms === 60_000 ? 20 : ms, ...rest);
-	try {
-		return await run();
-	} finally {
-		globalThis.setTimeout = realSetTimeout;
-	}
-}
+const withShortDeadline = (run) =>
+	withPatchedSetTimeout(
+		(realSetTimeout) =>
+			(callback, ms, ...rest) =>
+				realSetTimeout(callback, ms === 60_000 ? 20 : ms, ...rest),
+		run
+	);
 
 test("NEGATIVE: a component the plugin is never called for reports it, and names the root-config entry", async () => {
 	// The one failure the module cannot see from inside: Harper imports it for its resources and never calls

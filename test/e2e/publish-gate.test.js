@@ -54,10 +54,14 @@ function buildFixture({
 	const workDir = scaffoldWorkDir("ddab-publish-gate-");
 	workDirs.push(workDir);
 
-	fs.copyFileSync(
-		path.join(REPO_ROOT, "scripts", "verify-package.js"),
-		path.join(workDir, "scripts", "verify-package.js")
-	);
+	// verify-package.js now imports REPO_ROOT/platformPackageDir from paths.js; the copied
+	// script resolves that import relative to itself, so the fixture needs both files.
+	for (const script of ["verify-package.js", "paths.js"]) {
+		fs.copyFileSync(
+			path.join(REPO_ROOT, "scripts", script),
+			path.join(workDir, "scripts", script)
+		);
+	}
 	fs.writeFileSync(
 		path.join(workDir, "package.json"),
 		JSON.stringify({

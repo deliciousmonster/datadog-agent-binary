@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 
 import { createRequire } from "node:module";
+import { REPO_ROOT } from "./paths.js";
 
 const require = createRequire(import.meta.url);
 
 const fs = require("fs");
 const path = require("path");
 
-const packageJsonPath = path.join(import.meta.dirname, "..", "package.json");
+const packageJsonPath = path.join(REPO_ROOT, "package.json");
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
 
 const { targetNames } = require("../dist/src/targets.js");

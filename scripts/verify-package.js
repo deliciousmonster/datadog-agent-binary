@@ -5,6 +5,7 @@
 // with no trace-agent in it before. Both looked correct from inside the working tree.
 
 import { createRequire } from "node:module";
+import { REPO_ROOT, platformPackageDir } from "./paths.js";
 
 const require = createRequire(import.meta.url);
 
@@ -13,8 +14,6 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { TARGETS } = require("../dist/src/targets.js");
 const { BINARIES, binaryFilename } = require("../dist/src/binaries.js");
-
-const REPO_ROOT = path.join(import.meta.dirname, "..");
 
 // --ignore-scripts, because pack still runs "prepare" without it: this dry-run inspects a manifest,
 // it does not consent to running whatever that package's lifecycle hooks do.
@@ -56,7 +55,7 @@ function verifyGuard() {
 // Checked against the packed listing, not the build tree the binary was copied from: this is the
 // regression test for the entire project, so it has to see exactly what a customer's install sees.
 function verifyPlatformPackage(dirName) {
-	const dir = path.join(REPO_ROOT, "npm", dirName);
+	const dir = platformPackageDir(dirName);
 	if (!fs.existsSync(path.join(dir, "package.json"))) {
 		// A throw mid-copy can leave bin/ populated with no package.json, or - when the very first
 		// binary is missing - leave bin/ empty and the directory itself absent. Both used to pass silently.

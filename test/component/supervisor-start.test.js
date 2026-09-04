@@ -6,15 +6,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 
 import {
+	halt,
 	loadComponent,
+	lockedPid,
+	lockFile,
 	recordingScope,
 	REPO_ROOT,
 	start,
 	startFor,
 	STAYS_UP,
+	waitForLocksCleared,
 	withBuiltBinaries,
 } from "../support/component.js";
 import { withEnvs, withTempDir } from "../support/sandbox.js";
@@ -373,8 +376,6 @@ test("NEGATIVE: an agent the kernel killed is reported as killed, not as a stop"
 const REAPER = "datadog-agent-reaper";
 const BOTH_AGENTS = [TRACE_AGENT, CORE_AGENT];
 
-const lockFile = (pidDir, name) => path.join(pidDir, `${name}.pid`);
-
 const alive = (pid) => {
 	try {
 		process.kill(pid, 0);
@@ -383,28 +384,6 @@ const alive = (pid) => {
 		return false;
 	}
 };
-
-// SIGTERM rather than SIGKILL: the guard reads a signalled stop as deliberate and releases the lock instead
-// of restarting, so teardown cannot race the supervision the test just started.
-const halt = (pid) => {
-	try {
-		process.kill(pid, "SIGTERM");
-	} catch {
-		// Already gone, which is the outcome asked for.
-	}
-};
-
-/** The pid a guard lock records, or null where there is no lock. Line 1 is the pid; a host reading only that still reads it. */
-function lockedPid(pidDir, name) {
-	try {
-		const first = fs
-			.readFileSync(lockFile(pidDir, name), "utf-8")
-			.split("\n")[0];
-		return Number.parseInt(first, 10);
-	} catch {
-		return null;
-	}
-}
 
 /**
  * The guard path, with everything it spawned stopped before the runtime tree goes. Waiting for the locks to
@@ -429,14 +408,7 @@ async function withGuardStarted(run, { stalePid } = {}) {
 		} finally {
 			for (const state of status?.processes ?? []) halt(state.pid);
 			halt(lockedPid(pidDir, REAPER));
-			for (let i = 0; i < 300; i++) {
-				if (
-					BOTH_AGENTS.every((name) => !fs.existsSync(lockFile(pidDir, name)))
-				) {
-					break;
-				}
-				await delay(10);
-			}
+			await waitForLocksCleared(pidDir, BOTH_AGENTS);
 		}
 	});
 }

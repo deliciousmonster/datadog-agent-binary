@@ -8,31 +8,31 @@ import http from "node:http";
 
 import { pollEndpoint } from "../../runtime/probe.js";
 import { createStub, findFreePort, withServer } from "../support/loopback.js";
+import { withPatchedSetTimeout } from "../support/sandbox.js";
 
 /** The sleeps pollEndpoint asks for, read off the clock rather than waited out. */
 async function recordedWaits(options, stopAfter) {
 	const waits = [];
 	let armed = false;
-	const realSetTimeout = globalThis.setTimeout;
-	// Nothing awaits between giveUp returning and the backoff's setTimeout, so the first setTimeout after a
-	// giveUp is always the backoff and never some other library's timer.
-	globalThis.setTimeout = (callback, ms, ...rest) => {
-		if (!armed) return realSetTimeout(callback, ms, ...rest);
-		armed = false;
-		waits.push(ms);
-		return realSetTimeout(callback, 0, ...rest);
-	};
-	try {
-		await pollEndpoint({
-			...options,
-			giveUp: () => {
-				armed = true;
-				return waits.length >= stopAfter;
+	await withPatchedSetTimeout(
+		// Nothing awaits between giveUp returning and the backoff's setTimeout, so the first setTimeout
+		// after a giveUp is always the backoff and never some other library's timer.
+		(realSetTimeout) =>
+			(callback, ms, ...rest) => {
+				if (!armed) return realSetTimeout(callback, ms, ...rest);
+				armed = false;
+				waits.push(ms);
+				return realSetTimeout(callback, 0, ...rest);
 			},
-		});
-	} finally {
-		globalThis.setTimeout = realSetTimeout;
-	}
+		() =>
+			pollEndpoint({
+				...options,
+				giveUp: () => {
+					armed = true;
+					return waits.length >= stopAfter;
+				},
+			})
+	);
 	return waits;
 }
 

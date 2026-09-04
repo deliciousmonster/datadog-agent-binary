@@ -19,6 +19,7 @@ import { basename, join } from "node:path";
 import { PACKAGE_NAME, resolveBinary } from "../../runtime/binary.js";
 import { REPO_ROOT } from "../support/generator.js";
 import { findFreePort } from "../support/loopback.js";
+import { driveTraffic as driveTrafficWith } from "../support/traffic.js";
 
 const COMPONENT_NAME = basename(REPO_ROOT);
 
@@ -368,35 +369,17 @@ async function bootHarperInto(workDir, row, realHome, onSpawn) {
 	};
 }
 
-// dd-trace initialises once per process; this runs in a child so a suite that calls driveTraffic
-// twice gets two independent tracers rather than one already pointed at the first handle's port.
-// This dd-trace version exposes no public flush(): flushInterval 0 posts on every export instead of
-// batching, and dropping the explicit process.exit() lets the in-flight HTTP POST keep the event
-// loop alive until delivery actually finishes, rather than a fixed settle delay standing in for it.
-const TRAFFIC_SCRIPT = `
-const tracer = require('dd-trace').init({ startupLogs: false, flushInterval: 0 });
-const count = Number(process.env.LIVE_SPAN_COUNT);
-for (let i = 0; i < count; i++) {
-	const span = tracer.startSpan('live-harness.span', { tags: { 'live.iteration': i } });
-	span.finish();
-}
-`;
+// The traffic-driving mechanism lives in support/traffic.js, shared with
+// test/binaries/supervision-equivalence.test.js; only the env var and span naming are this file's own.
+const LIVE_SCRIPT = {
+	envVar: "LIVE_SPAN_COUNT",
+	spanName: "live-harness.span",
+	tagKey: "live.iteration",
+};
 
 /** Real spans, from a real child process, into the real receiver `handle` points at. Blocks until flushed. */
 export async function driveTraffic(handle, count) {
-	execFileSync(process.execPath, ["-e", TRAFFIC_SCRIPT], {
-		cwd: REPO_ROOT,
-		timeout: 20_000,
-		env: {
-			...process.env,
-			LIVE_SPAN_COUNT: String(count),
-			DD_TRACE_AGENT_URL: `http://127.0.0.1:${handle.receiverPort}`,
-			DD_TRACE_STARTUP_LOGS: "false",
-			DD_INSTRUMENTATION_TELEMETRY_ENABLED: "false",
-			DD_REMOTE_CONFIGURATION_ENABLED: "false",
-			DD_CRASHTRACKING_ENABLED: "false",
-		},
-	});
+	driveTrafficWith(handle.receiverPort, count, LIVE_SCRIPT);
 }
 
 /** A real authenticated GET against the running node's own DatadogStatus resource. Returns the parsed body. */

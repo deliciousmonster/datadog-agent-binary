@@ -14,14 +14,68 @@ on:
         required: false
 
 env:
-  NODE_VERSION: "22"
+  # Repo-level Actions variable (Settings > Secrets and variables > Actions > Variables), shared
+  # with check-upstream.yml so both workflows pin the same Node line from one place.
+  NODE_VERSION: ${{ vars.NODE_VERSION }}
   GO_VERSION: "1.23"
 
 jobs:
+  # tsc's output doesn't depend on OS/arch, so it is compiled once here instead of once per matrix
+  # leg below. Also the single source of the release version, so build and publish agree on it.
+  prepare:
+    runs-on: ubuntu-latest
+    # Installing deps and running tsc is minutes of work, not hours.
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.extract_version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      # Every leg compiles the same source, so only one upload is needed; build's four legs
+      # download this instead of compiling their own. Publish's copy is provisional - see its own download step.
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+
+      # The dispatch input reaches bash as an environment value, never as source. Spliced through
+      # ${{ }} it is shell text, and `7.0.0 ; touch pwned ; #` executes on the runner.
+      - name: Extract version from tag
+        id: extract_version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.datadog_version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            echo "version=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: prepare
     # No leg below sets `experimental`, so this is always false: a real failure fails the job
-    # outright, taking release/publish down with it; the publish loop only skips an artifact that never arrived.
-    continue-on-error: ${{ matrix.experimental || false }}
+    # outright, taking release/publish down with it.
+    continue-on-error: false
     # Cap each leg so a runner that never gets scheduled (e.g. a retired runner
     # image) can't stall the whole build — and therefore the publish — for the
     # default 6h. A real agent build finishes well within this.
@@ -122,45 +176,24 @@ jobs:
         run: |
           choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
 
+      # Native deps (if any land in devDependencies later) resolve per runner OS/arch here; the
+      # compiled dist/ itself is OS-independent and comes from prepare instead, below.
       - name: Install dependencies
         run: npm ci
 
-      - name: Build TypeScript
-        run: npm run build
-
-      # Every leg compiles the same source, so only one upload is needed; publish downloads
-      # this instead of running npm ci && npm run build a 5th time from scratch.
-      - name: Upload dist artifact
-        if: matrix.platform == 'linux-x86_64'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Download dist artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dist
           path: dist/
-          retention-days: 1
-
-      # The dispatch input reaches bash as an environment value, never as source. Spliced through
-      # ${{ }} it is shell text, and `7.0.0 ; touch pwned ; #` executes on the runner.
-      - name: Extract version from tag
-        id: extract_version
-        shell: bash
-        env:
-          INPUT_VERSION: ${{ github.event.inputs.datadog_version }}
-        run: |
-          if [ -n "$INPUT_VERSION" ]; then
-            echo "version=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
-          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Build ${{ matrix.platform }}
         shell: bash
         env:
           DEBUG: true
           DD_AGENT_BUILD_ARGS: ${{ github.event.inputs.agent_build_args }}
-          # Carries the dispatch input back out of the step above, so it stays a value here too.
-          VERSION: ${{ steps.extract_version.outputs.version }}
+          # Carries the dispatch input (or tag) back out of prepare, so it stays a value here too.
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           args=()
           if [ -n "$VERSION" ]; then args=(--datadog-version "$VERSION"); fi
@@ -258,9 +291,8 @@ jobs:
       # Git permits ; $() ` && and | in a tag name, so ref_name spliced into a run body is shell
       # source. It arrives as a value, like every other untrusted input in this workflow.
       #
-      # Each arch list names only the legs the matrix above actually produces, and the
-      # release-body platform list (below) is built from these same loops as they run, so
-      # neither can advertise a platform whose leg was removed from the matrix.
+      # Driven off the downloaded agent-* directory names (same idea as publish's "Move binaries
+      # to build dirs" step) instead of a hardcoded arch list, so a matrix change needs no edit here.
       - name: Prepare release assets
         id: prepare_assets
         env:
@@ -270,49 +302,33 @@ jobs:
           platforms_file="$RUNNER_TEMP/platforms.md"
           : > "$platforms_file"
 
-          # Create compressed archives for each platform
           cd artifacts
 
           echo "Recursively listing files in artifacts:"
           ls -lR
 
-          # Linux platforms
-          for arch in x86_64 arm64; do
-            if [ -d "agent-linux-${arch}" ]; then
-              cd "agent-linux-${arch}"
-              file="datadog-agent-${REF_NAME}-linux-${arch}.tar.gz"
-              tar -czf "../../release-assets/${file}" ./*
-              echo "- **Linux ${arch}**: \`${file}\`" >> "$platforms_file"
-              cd ..
-            fi
-          done
+          for artifact in agent-*; do
+            [ -d "$artifact" ] || continue
+            platform=${artifact#agent-}
+            os=${platform%%-*}
+            arch=${platform#*-}
+            case "$os" in
+              linux) label="Linux" ;;
+              macos) label="macOS" ;;
+              windows) label="Windows" ;;
+              *) label="$os" ;;
+            esac
 
-          echo "Listing files in release-assets:"
-          ls -l ../release-assets
-
-          # macOS platforms
-          for arch in arm64; do
-            if [ -d "agent-macos-${arch}" ]; then
-              cd "agent-macos-${arch}"
-              file="datadog-agent-${REF_NAME}-macos-${arch}.tar.gz"
-              tar -czf "../../release-assets/${file}" ./*
-              echo "- **macOS ${arch}**: \`${file}\`" >> "$platforms_file"
-              cd ..
-            fi
-          done
-
-          echo "Listing files in release-assets:"
-          ls -l ../release-assets
-
-          # Windows platforms
-          for arch in x86_64; do
-            if [ -d "agent-windows-${arch}" ]; then
-              cd "agent-windows-${arch}"
-              file="datadog-agent-${REF_NAME}-windows-${arch}.zip"
+            cd "$artifact"
+            if [ "$os" = "windows" ]; then
+              file="datadog-agent-${REF_NAME}-${platform}.zip"
               zip -r "../../release-assets/${file}" ./*
-              echo "- **Windows ${arch}**: \`${file}\`" >> "$platforms_file"
-              cd ..
+            else
+              file="datadog-agent-${REF_NAME}-${platform}.tar.gz"
+              tar -czf "../../release-assets/${file}" ./*
             fi
+            echo "- **${label} ${arch}**: \`${file}\`" >> "$platforms_file"
+            cd ..
           done
 
           echo "Listing files in release-assets:"
@@ -364,7 +380,7 @@ jobs:
             ```
 
   publish:
-    needs: build
+    needs: [build, prepare]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     # npm publish is the only external call here; it doesn't hang for hours.
@@ -415,6 +431,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # This download is provisional: "Set package version from tag" below still rebuilds dist/ via
+      # npm version's lifecycle script (see package.json), so this copy doesn't survive to Verify package.
       - name: Download dist artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -425,9 +443,13 @@ jobs:
       # the npm package version must match it. This runs the `version` lifecycle
       # script (build + update-optional-deps), keeping optionalDependencies
       # pinned to the same version. --allow-same-version makes re-runs safe.
+      #
+      # update-optional-deps keeps its own build prefix (see package.json): check-upstream.yml
+      # calls npm version with no prior build step and needs it to produce dist/src/targets.js.
       - name: Set package version from tag
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           echo "Setting npm package version to $VERSION"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
