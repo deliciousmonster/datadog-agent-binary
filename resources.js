@@ -46,6 +46,8 @@ const ports = {
 	receiver: resolvePort("DD_APM_RECEIVER_PORT", 8126),
 	expvar: resolvePort("DD_EXPVAR_PORT", 5000),
 	debug: resolvePort("DD_APM_DEBUG_PORT", 5012),
+	dogstatsd: resolvePort("DD_DOGSTATSD_PORT", 8125),
+	cmd: resolvePort("DD_CMD_PORT", 5001),
 };
 
 // Every URL this module polls. probe.js already suppresses these at the call site; this is the public half,

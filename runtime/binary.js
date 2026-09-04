@@ -31,6 +31,9 @@ function platformName() {
 export async function resolveBinary(agent) {
 	const file = `${agent.shipsAs}${EXE}`;
 	const platformPackage = `${PACKAGE_NAME}-${platformName()}`;
+	// Set only on a name mismatch, so the error below can tell "the package answered with the wrong
+	// binary" apart from "the package isn't installed" instead of collapsing both into one guess.
+	let staleMatch;
 	try {
 		const pkg = await import(platformPackage);
 		const getBinaryPath = pkg.getBinaryPath ?? pkg.default?.getBinaryPath;
@@ -40,11 +43,19 @@ export async function resolveBinary(agent) {
 		if (resolved && basename(resolved) === file && existsSync(resolved)) {
 			return resolved;
 		}
+		if (resolved) staleMatch = resolved;
 	} catch {
 		// The optional dependency is not installed here; the dev-checkout path below still applies.
 	}
 	const local = join(PACKAGE_ROOT, "build", platformName(), "bin", file);
 	if (existsSync(local)) return local;
+	if (staleMatch) {
+		throw new Error(
+			`no ${agent.title} binary: ${platformPackage} is installed but predates ${file} support (it ` +
+				`resolved ${staleMatch} instead) and no local build exists at ${local}. Update ${platformPackage} ` +
+				`to a version that ships ${file}, or build locally with npm run build-agent.`
+		);
+	}
 	throw new Error(
 		`no ${agent.title} binary: neither ${platformPackage} nor a local build at ${local} resolved ${file}`
 	);

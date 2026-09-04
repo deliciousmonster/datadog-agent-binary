@@ -129,7 +129,14 @@ test("the rendered datadog.yaml keeps the credentials off disk and pins what the
 		{ info: SERVING, expvar: CORE_EXPVAR },
 		async ({ root, receiver, expvarPort }) => {
 			const scope = recordingScope();
-			await withBuiltBinaries(() => start(scope));
+			const dogstatsdPort = await findFreePort();
+			const cmdPort = await findFreePort();
+			await withBuiltBinaries(() =>
+				start(scope, {
+					DD_DOGSTATSD_PORT: String(dogstatsdPort),
+					DD_CMD_PORT: String(cmdPort),
+				})
+			);
 
 			const traceStart = startFor(scope, TRACE_AGENT);
 			const configFile = path.join(root, "datadog", APP_NAME, "datadog.yaml");
@@ -150,6 +157,26 @@ test("the rendered datadog.yaml keeps the credentials off disk and pins what the
 				rendered,
 				new RegExp(`expvar_port: ${expvarPort}\\b`),
 				"the expvar port in the config must be the one the core-agent verify polls"
+			);
+			assert.match(
+				rendered,
+				new RegExp(`dogstatsd_port: ${dogstatsdPort}\\b`),
+				"dogstatsd_port must be pinned to the port this instance resolved"
+			);
+			assert.match(
+				rendered,
+				new RegExp(`cmd_port: ${cmdPort}\\b`),
+				"cmd_port must be pinned to the port this instance resolved"
+			);
+			assert.doesNotMatch(
+				rendered,
+				/dogstatsd_port: 8125\b/,
+				"dogstatsd_port fell back to Datadog's own hardcoded default rather than the pinned one"
+			);
+			assert.doesNotMatch(
+				rendered,
+				/cmd_port: 5001\b/,
+				"cmd_port fell back to Datadog's own hardcoded default rather than the pinned one"
 			);
 			assert.match(
 				rendered,
@@ -509,12 +536,16 @@ test("a deliberate stop releases the lock, so the next boot starts rather than a
 	}
 });
 
-test("NEGATIVE: where Harper has processes.start, the guard never runs", async () => {
+test("NEGATIVE: where Harper has processes.start, the guard never runs, and says so", async () => {
+	const captured = [];
 	await withAgentsAnswering(
 		{ info: SERVING, expvar: CORE_EXPVAR },
 		async ({ root }) => {
 			const scope = recordingScope();
-			const { status } = await withBuiltBinaries(() => start(scope), STAYS_UP);
+			const logged = await captureLogs(async () => {
+				captured.push(await withBuiltBinaries(() => start(scope), STAYS_UP));
+			});
+			const { status } = captured[0];
 
 			assert.equal(status.supervision, "harper");
 			assert.deepEqual(
@@ -528,6 +559,19 @@ test("NEGATIVE: where Harper has processes.start, the guard never runs", async (
 				fs.readdirSync(path.join(root, "datadog", APP_NAME, "pids")),
 				[],
 				"the guard took a lock under a Harper that supervises natively, so two supervisors hold one pair of agents"
+			);
+
+			// (a) the boot log names the guard as present-but-unused, in words an operator reads directly.
+			assert.ok(
+				logged.some((line) => /guard/i.test(line) && /unused/i.test(line)),
+				`the boot log never said the guard went unused; logged: ${JSON.stringify(logged)}`
+			);
+			// (b) the same fact lands on the status object, so a caller can assert on it without grepping a log.
+			assert.ok(
+				status.supervisionReport?.some(
+					(line) => /guard/i.test(line) && /unused/i.test(line)
+				),
+				`status.supervisionReport must carry the same fact the boot log does; got: ${JSON.stringify(status.supervisionReport)}`
 			);
 		}
 	);

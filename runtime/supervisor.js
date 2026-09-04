@@ -23,10 +23,16 @@ export const unstarted = (agent, error) => ({
 	error,
 });
 
+// Symmetric with the guard path's own notes: an operator reading the boot log sees this line, and a
+// caller reading status.supervisionReport sees the same words, not just the absence of `kind: "guard"`.
+const GUARD_UNUSED_NOTE =
+	"the bundled process guard is present but unused: this Harper supervises the agents natively, so the guard never runs.";
+
 /** Harper's own sidecar, one call per process. It writes the config files behind its own sweep. */
 const harperSupervisor = (scope, log) => ({
 	kind: "harper",
 	async start(agents, { configFiles, fingerprintParts }) {
+		log.warn(`Datadog supervisor: ${GUARD_UNUSED_NOTE}`);
 		const processes = await Promise.all(
 			agents.map((agent) =>
 				scope.processes
@@ -61,7 +67,11 @@ const harperSupervisor = (scope, log) => ({
 					)
 			)
 		);
-		return { processes, reaper: scope.processes.reaper, report: [] };
+		return {
+			processes,
+			reaper: scope.processes.reaper,
+			report: [GUARD_UNUSED_NOTE],
+		};
 	},
 });
 

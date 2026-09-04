@@ -264,7 +264,16 @@ test("a binary that resolves to the wrong agent is refused rather than started t
 			false,
 			"the trace-agent started from a path that resolves the core agent"
 		);
-		assert.match(trace.error, /trace-agent/);
+		assert.match(
+			trace.error,
+			/predates trace-agent support/,
+			`the error must name the real cause (a stale platform package), not a generic "could not resolve": ${trace.error}`
+		);
+		assert.match(
+			trace.error,
+			/npm run build-agent/,
+			`an operator reading this needs the fix, not just the diagnosis: ${trace.error}`
+		);
 		assert.deepEqual(
 			scope.starts.map((options) => options.name),
 			[CORE_AGENT],
