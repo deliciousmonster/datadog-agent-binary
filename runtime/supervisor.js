@@ -118,7 +118,11 @@ const guardSupervisor = (log, spawn) => ({
 				`Datadog supervisor: the guard call for both agents threw: ${error.stack ?? message}`
 			);
 			return {
-				processes: agents.map((agent) => unstarted(agent, message)),
+				// Same translation harperSupervisor's per-agent catch gets, keyed to each agent's own binary:
+				// guard's own error text can't name ENOEXEC/EACCES/ENOENT any better, but this side can.
+				processes: agents.map((agent) =>
+					unstarted(agent, describeSpawnFailure(error, agent.command))
+				),
 				report: [message],
 			};
 		}

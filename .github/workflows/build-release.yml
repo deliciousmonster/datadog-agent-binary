@@ -271,7 +271,7 @@ jobs:
             if [ -d "agent-linux-${arch}" ]; then
               cd "agent-linux-${arch}"
               file="datadog-agent-${REF_NAME}-linux-${arch}.tar.gz"
-              tar -czf "../../release-assets/${file}" *
+              tar -czf "../../release-assets/${file}" ./*
               echo "- **Linux ${arch}**: \`${file}\`" >> "$platforms_file"
               cd ..
             fi
@@ -285,7 +285,7 @@ jobs:
             if [ -d "agent-macos-${arch}" ]; then
               cd "agent-macos-${arch}"
               file="datadog-agent-${REF_NAME}-macos-${arch}.tar.gz"
-              tar -czf "../../release-assets/${file}" *
+              tar -czf "../../release-assets/${file}" ./*
               echo "- **macOS ${arch}**: \`${file}\`" >> "$platforms_file"
               cd ..
             fi
@@ -299,7 +299,7 @@ jobs:
             if [ -d "agent-windows-${arch}" ]; then
               cd "agent-windows-${arch}"
               file="datadog-agent-${REF_NAME}-windows-${arch}.zip"
-              zip -r "../../release-assets/${file}" *
+              zip -r "../../release-assets/${file}" ./*
               echo "- **Windows ${arch}**: \`${file}\`" >> "$platforms_file"
               cd ..
             fi
@@ -321,7 +321,7 @@ jobs:
           echo "Listing release-assets dir"
           ls -l release-assets/
           cd release-assets
-          sha256sum * > checksums.txt
+          sha256sum ./* > checksums.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2

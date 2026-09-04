@@ -72,7 +72,7 @@ if (tracer) {
 		// A shape untraceAgentProbes did not expect from tracer.use(): unlike a missing require, this leaves
 		// the probes untraced, so it gets its own log line rather than sharing the silent path above.
 		log.error(
-			`Datadog supervisor: found dd-trace but could not configure it to ignore the agent probes: ${error.message}. Probe requests may now appear as spans in APM.`
+			`Datadog supervisor: found dd-trace but could not configure it to ignore the agent probes: ${error.stack ?? error.message}. Probe requests may now appear as spans in APM.`
 		);
 	}
 }
@@ -115,10 +115,15 @@ const apiKeyStatus = () => (process.env.DD_API_KEY ? "set" : "MISSING");
 /** Per worker thread, set by handleApplication; a request that beats it, or a thread that never ran it, reads NOT_STARTED. */
 let supervisor;
 
-const NOT_STARTED = {
+/** The fields every status shape starts from, so NOT_STARTED and startAgents's own status object cannot drift apart. */
+const baseStatus = () => ({
 	receiverPort: ports.receiver,
 	apiKey: apiKeyStatus(),
 	processes: [],
+});
+
+const NOT_STARTED = {
+	...baseStatus(),
 	detail:
 		`nothing has started on this thread. Check first that the node's harper-config.yaml carries ` +
 		`\`${CONFIG_ENTRY}\`: Harper calls handleApplication only for a component the root config names, and ` +
@@ -132,9 +137,7 @@ async function startAgents(scope) {
 	const supervisor = supervisorFor(scope, { log, spawn });
 	const status = {
 		supervision: supervisor.kind,
-		receiverPort: ports.receiver,
-		apiKey: apiKeyStatus(),
-		processes: [],
+		...baseStatus(),
 	};
 	try {
 		if (!process.env.DD_API_KEY) {

@@ -189,6 +189,8 @@ async function main() {
 		receiver: await findFreePort(),
 		expvar: await findFreePort(),
 		debug: await findFreePort(),
+		dogstatsd: await findFreePort(),
+		cmd: await findFreePort(),
 	};
 
 	process.env.DD_API_KEY = FAKE_API_KEY;
@@ -196,6 +198,8 @@ async function main() {
 	process.env.DD_APM_RECEIVER_PORT = String(ports.receiver);
 	process.env.DD_EXPVAR_PORT = String(ports.expvar);
 	process.env.DD_APM_DEBUG_PORT = String(ports.debug);
+	process.env.DD_DOGSTATSD_PORT = String(ports.dogstatsd);
+	process.env.DD_CMD_PORT = String(ports.cmd);
 	process.env.ROOTPATH = rootDir;
 
 	// Dynamic, and after every env var above is set: resources.js reads DD_APM_*_PORT into module-scope

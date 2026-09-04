@@ -3,7 +3,6 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 
 // What upstream's 7.82.1 build assumes a host already has. tools/bazel exits 2 under CI without an
-
 // XDG_CACHE_HOME, and .bazelrc plus tools/bazel.bat make two Windows assumptions a runner breaks.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");

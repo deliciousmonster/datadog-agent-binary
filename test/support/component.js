@@ -8,6 +8,8 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { createRequire } from "node:module";
 
+import { withEnvs } from "./sandbox.js";
+
 const require = createRequire(import.meta.url);
 const { REPO_ROOT, BINARIES, currentTarget } = require("./generator.js");
 
@@ -143,3 +145,12 @@ export function recordingScope({ state = {} } = {}) {
 /** The start options recorded for one agent, by the spawn name Harper locks on. */
 export const startFor = (scope, name) =>
 	scope.starts.find((options) => options.name === name);
+
+/** Start the component against a scope and hand back the recorded starts plus the status resource. */
+export async function start(scope, componentEnv = {}) {
+	return withEnvs(componentEnv, async () => {
+		const { handleApplication, DatadogStatus } = await loadComponent();
+		handleApplication(scope);
+		return { status: await DatadogStatus.get(), DatadogStatus };
+	});
+}

@@ -12,6 +12,7 @@ import {
 	loadComponent,
 	recordingScope,
 	REPO_ROOT,
+	start,
 	startFor,
 	STAYS_UP,
 	withBuiltBinaries,
@@ -52,15 +53,6 @@ async function withAgentsAnswering({ info, expvar }, run) {
 
 const SERVING = { endpoints: ["/v0.1/traces", "/v0.4/traces", "/v0.7/traces"] };
 const CORE_EXPVAR = { aggregator: {}, forwarder: {}, pid: 4321 };
-
-/** Start the component against a scope and hand back the recorded starts plus the status resource. */
-async function start(scope, componentEnv = {}) {
-	return withEnvs(componentEnv, async () => {
-		const { handleApplication, DatadogStatus } = await loadComponent();
-		handleApplication(scope);
-		return { status: await DatadogStatus.get(), DatadogStatus };
-	});
-}
 
 test("NEGATIVE: importing the module starts nothing; only handleApplication does", async () => {
 	await withAgentsAnswering(

@@ -11,10 +11,15 @@ const { spawn } = require("node:child_process");
 
 // Lives here, not beside the other supervisor tests, because it needs the platform-package fixture
 // this file plants in the repo's real node_modules. That fixture is global, so it cannot be shared.
-const { loadComponent, recordingScope, REPO_ROOT, acquireResolveBinaryLock } =
-	await import("../support/component.js");
+const {
+	loadComponent,
+	recordingScope,
+	REPO_ROOT,
+	acquireResolveBinaryLock,
+	start,
+} = await import("../support/component.js");
 const { findFreePort } = await import("../support/loopback.js");
-const { withEnvs, withTempDir } = await import("../support/sandbox.js");
+const { withTempDir } = await import("../support/sandbox.js");
 
 const { currentTarget } = require(
 	path.join(REPO_ROOT, "dist", "src", "targets.js")
@@ -29,14 +34,6 @@ const platformName = platform.name; // e.g. linux-x86_64
 const binaryName = `${BINARIES[0].shipsAs}${platform.exe}`; // datadog-agent[.exe]
 const isWindows = process.platform === "win32";
 
-/** Start the component against a scope and hand back the status resource. */
-async function start(scope, componentEnv = {}) {
-	return withEnvs(componentEnv, async () => {
-		const { handleApplication, DatadogStatus } = await loadComponent();
-		handleApplication(scope);
-		return { status: await DatadogStatus.get(), DatadogStatus };
-	});
-}
 const TRACE_AGENT = "datadog-trace-agent";
 const CORE_AGENT = "datadog-agent";
 

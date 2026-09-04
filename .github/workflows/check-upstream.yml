@@ -39,7 +39,9 @@ jobs:
         run: |
           # Get latest Datadog Agent release with error handling
           echo "Fetching latest Datadog Agent release..."
-          RESPONSE=$(curl -s https://api.github.com/repos/DataDog/datadog-agent/releases/latest)
+          # -f makes curl fail on a 4xx/5xx response; plain -s exits 0 even on those,
+          # so without it this check only ever caught a dead connection.
+          RESPONSE=$(curl -sf https://api.github.com/repos/DataDog/datadog-agent/releases/latest)
 
           # Check if curl succeeded
           if [ $? -ne 0 ]; then
