@@ -90,6 +90,40 @@ async function withResolveBinaryLock(run) {
 	}
 }
 
+/** Where a dev checkout's `npm run build-agent` leaves each agent, which is also where stubs go. */
+function builtBinaryPaths() {
+	const target = currentTarget();
+	const binDir = path.join(REPO_ROOT, "build", target.name, "bin");
+	return {
+		binDir,
+		files: BINARIES.map((binary) =>
+			path.join(binDir, `${binary.shipsAs}${target.exe}`)
+		),
+	};
+}
+
+/**
+ * Whatever real binaries sit at build/<platform>/bin moved aside, and the restore that puts them back.
+ * A rename, so a 139MB agent costs the same as an empty file and the mode rides along with the inode;
+ * copying the bytes back would drop the exec bit and leave an agent nothing can spawn.
+ */
+export function hideBuiltBinaries() {
+	const { files } = builtBinaryPaths();
+	const hidden = files.map((file) => `${file}.hidden-by-fixture`);
+	files.forEach((file, index) => {
+		// A run killed between the rename below and its restore (a suite timeout, not a caught throw)
+		// leaves the hidden copy behind with the real path empty; recover it before hiding anything.
+		if (fs.existsSync(hidden[index]) && !fs.existsSync(file))
+			fs.renameSync(hidden[index], file);
+		if (fs.existsSync(file)) fs.renameSync(file, hidden[index]);
+	});
+	return () =>
+		files.forEach((file, index) => {
+			fs.rmSync(file, { force: true });
+			if (fs.existsSync(hidden[index])) fs.renameSync(hidden[index], file);
+		});
+}
+
 /**
  * Both agent binaries where resources.js looks for a dev checkout's build output, for the duration of
  * `run`. The installed platform package predates the trace-agent and answers every request with the core
@@ -97,12 +131,11 @@ async function withResolveBinaryLock(run) {
  */
 export async function withBuiltBinaries(run, body = EXITS_AT_ONCE) {
 	return withResolveBinaryLock(async () => {
-		const target = currentTarget();
-		const binDir = path.join(REPO_ROOT, "build", target.name, "bin");
+		const { binDir, files } = builtBinaryPaths();
 		fs.mkdirSync(binDir, { recursive: true });
-		const files = BINARIES.map((binary) =>
-			path.join(binDir, `${binary.shipsAs}${target.exe}`)
-		);
+		// A developer's real build lives at these exact paths, so the stubs written over it have to give it
+		// back: deleting instead means running this suite destroys an `npm run build-agent` as a side effect.
+		const restore = hideBuiltBinaries();
 		for (const file of files) {
 			fs.writeFileSync(file, body);
 			fs.chmodSync(file, 0o755);
@@ -110,7 +143,7 @@ export async function withBuiltBinaries(run, body = EXITS_AT_ONCE) {
 		try {
 			return await run(files);
 		} finally {
-			for (const file of files) fs.rmSync(file, { force: true });
+			restore();
 		}
 	});
 }
@@ -123,11 +156,7 @@ export async function withBuiltBinaries(run, body = EXITS_AT_ONCE) {
  */
 export async function withRealBinaries(run) {
 	return withResolveBinaryLock(async () => {
-		const target = currentTarget();
-		const binDir = path.join(REPO_ROOT, "build", target.name, "bin");
-		const files = BINARIES.map((binary) =>
-			path.join(binDir, `${binary.shipsAs}${target.exe}`)
-		);
+		const { files } = builtBinaryPaths();
 		const missing = files.filter((file) => !fs.existsSync(file));
 		if (missing.length) {
 			throw new Error(
