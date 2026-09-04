@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
-import { join } from "node:path";
 import { logger } from "../runtime/log.js";
 import {
 	buildAgents,
@@ -30,25 +29,18 @@ program
 	.command("build")
 	.description("Build Datadog Agent for current platform")
 	.option("--datadog-version <version>", "Datadog Agent version to build")
-	.option("-o, --output <dir>", "Output directory", "./build")
 	.option("-d, --debug", "Enable debug logging")
+	// No output option: scripts/create-platform-packages.js reads the built binaries back out of
+	// build/<target>/bin, so a relocatable tree is a tree the packaging step cannot find.
 	.action(
-		run(
-			async (options: {
-				datadogVersion?: string;
-				output: string;
-				debug?: boolean;
-			}) => {
-				if (options.debug) process.env.DEBUG = "1";
-				const target = currentTarget();
-				const shipped = await buildAgents({
-					target,
-					version: options.datadogVersion,
-					outputDir: join(options.output, target.name, "bin"),
-				});
-				for (const path of shipped) logger.info(`Built ${path}`);
-			}
-		)
+		run(async (options: { datadogVersion?: string; debug?: boolean }) => {
+			if (options.debug) process.env.DEBUG = "1";
+			const shipped = await buildAgents({
+				target: currentTarget(),
+				version: options.datadogVersion,
+			});
+			for (const path of shipped) logger.info(`Built ${path}`);
+		})
 	);
 
 program

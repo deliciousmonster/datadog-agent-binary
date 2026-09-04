@@ -1,5 +1,5 @@
-// Path formulas shared by create-platform-packages.js, verify-package.js, and
-// update-optional-deps.js, so the repo-root and platform-package layout each has one owner.
+// Path formulas shared by create-platform-packages.js, verify-package.js, update-optional-deps.js
+// and smoke-test-binaries.js, so the repo-root and platform-package layout each has one owner.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

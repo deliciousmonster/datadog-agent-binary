@@ -4,16 +4,12 @@
 // --recurse-submodules ships an empty guard/, and a broken binaries.js copy has shipped a package
 // with no trace-agent in it before. Both looked correct from inside the working tree.
 
-import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { REPO_ROOT, platformPackageDir } from "./paths.js";
-
-const require = createRequire(import.meta.url);
-
-const fs = require("fs");
-const path = require("path");
-const { execFileSync } = require("child_process");
-const { TARGETS } = require("../dist/src/targets.js");
-const { BINARIES, binaryFilename } = require("../dist/src/binaries.js");
+import { TARGETS } from "../dist/src/targets.js";
+import { BINARIES, binaryFilename } from "../dist/src/binaries.js";
 
 // --ignore-scripts, because pack still runs "prepare" without it: this dry-run inspects a manifest,
 // it does not consent to running whatever that package's lifecycle hooks do.
@@ -27,7 +23,7 @@ function packedPaths(dir) {
 }
 
 function countSymbol(binaryPath, symbol) {
-	const bytes = fs.readFileSync(binaryPath);
+	const bytes = readFileSync(binaryPath);
 	const needle = Buffer.from(symbol, "latin1");
 	let count = 0;
 	for (
@@ -56,11 +52,11 @@ function verifyGuard() {
 // regression test for the entire project, so it has to see exactly what a customer's install sees.
 function verifyPlatformPackage(dirName) {
 	const dir = platformPackageDir(dirName);
-	if (!fs.existsSync(path.join(dir, "package.json"))) {
+	if (!existsSync(join(dir, "package.json"))) {
 		// A throw mid-copy can leave bin/ populated with no package.json, or - when the very first
 		// binary is missing - leave bin/ empty and the directory itself absent. Both used to pass silently.
-		const binDir = path.join(dir, "bin");
-		if (fs.existsSync(binDir) && fs.readdirSync(binDir).length > 0) {
+		const binDir = join(dir, "bin");
+		if (existsSync(binDir) && readdirSync(binDir).length > 0) {
 			failures.push(
 				`${dirName}: bin/ has content but no package.json - a partial build was left behind, ` +
 					"re-run npm run all-platform-packages from clean"
@@ -95,7 +91,7 @@ function verifyPlatformPackage(dirName) {
 			);
 			continue;
 		}
-		const binaryPath = path.join(dir, relPath);
+		const binaryPath = join(dir, relPath);
 		if (
 			binary.requiredSymbol &&
 			countSymbol(binaryPath, binary.requiredSymbol) === 0
@@ -116,7 +112,7 @@ function verifyPlatformPackage(dirName) {
 }
 
 verifyGuard();
-const npmDir = path.join(REPO_ROOT, "npm");
+const npmDir = join(REPO_ROOT, "npm");
 
 // TARGETS drives this, not readdirSync(npmDir): a directory listing never mentions a target whose
 // npm/<name>/ was never created, which is exactly the gap this gate exists to catch.
@@ -125,8 +121,8 @@ for (const target of TARGETS) verifyPlatformPackage(target.name);
 // Anything left under npm/ that no target names still ships - the publish step iterates npm/*/, not
 // TARGETS - so it gets the same scrutiny, via the "no matching entry in src/targets.ts" check above.
 const knownNames = new Set(TARGETS.map((target) => target.name));
-if (fs.existsSync(npmDir)) {
-	for (const dirName of fs.readdirSync(npmDir)) {
+if (existsSync(npmDir)) {
+	for (const dirName of readdirSync(npmDir)) {
 		if (!knownNames.has(dirName)) verifyPlatformPackage(dirName);
 	}
 }

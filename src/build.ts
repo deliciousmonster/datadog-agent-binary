@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { AgentBinary, BINARIES, binaryFilename } from "./binaries.js";
+import { buildTree } from "./layout.js";
 import { logger } from "../runtime/log.js";
 import { Target } from "./targets.js";
 
@@ -25,7 +26,7 @@ interface RunOptions {
 }
 
 export function environment(target: Target): NodeJS.ProcessEnv {
-	const goPath = join(process.cwd(), "build", target.name, "go");
+	const goPath = buildTree(process.cwd(), target).goPath;
 	return {
 		...process.env,
 		GOPATH: goPath,
@@ -47,22 +48,33 @@ function run(
 	options: RunOptions = {}
 ): Promise<string> {
 	logger.debug(`${command} ${args.join(" ")}`);
+	const timeoutMs = options.timeoutMs ?? BUILD_TIMEOUT_MS;
 	return new Promise((fulfil, reject) => {
 		const child = spawn(command, args, {
 			cwd,
 			env,
 			stdio: options.capture ? ["ignore", "pipe", "ignore"] : "inherit",
-			timeout: options.timeoutMs ?? BUILD_TIMEOUT_MS,
+			timeout: timeoutMs,
 		});
 		let output = "";
 		child.stdout?.on("data", (chunk: Buffer) => {
 			output += chunk;
 		});
 		child.on("error", reject);
-		child.on("close", (code) =>
+		// A timeout kills the child rather than raising, so it arrives here with a null code and the
+		// kill signal; reporting only the code names neither the deadline nor what ended the build.
+		child.on("close", (code, signal) =>
 			code === 0
 				? fulfil(output)
-				: reject(new Error(`${command} ${args.join(" ")} exited ${code}`))
+				: reject(
+						new Error(
+							`${command} ${args.join(" ")} ${
+								signal
+									? `was killed by ${signal} (timeout ${timeoutMs}ms)`
+									: `exited ${code}`
+							}`
+						)
+					)
 		);
 	});
 }

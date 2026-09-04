@@ -101,15 +101,20 @@ async function verifyCoreAgent(state, { paths, ports, logInfo }) {
 				`the wrong process produces exactly this; read ${paths.coreLog} and check ${paths.configFile}`,
 		};
 	}
-	if (typeof vars.pid === "number" && vars.pid !== state.pid) {
+	// A guard attempt that never reached a spawn leaves state.pid undefined (guard/src/supervise.js:155), and
+	// comparing against that reads a healthy agent as stale and sends the operator to delete its live lock.
+	const held = typeof state?.pid === "number" ? state.pid : null;
+	if (typeof vars.pid === "number" && held !== null && vars.pid !== held) {
 		return {
 			ok: false,
-			detail: `a core agent answered ${url} as pid ${vars.pid}, not the pid ${state.pid} this node holds the lock for; remove the stale .pid file under the node's pids/ directory and restart`,
+			detail: `a core agent answered ${url} as pid ${vars.pid}, not the pid ${held} this node holds the lock for; remove the stale .pid file under the node's pids/ directory and restart`,
 		};
 	}
 	return {
 		ok: true,
-		detail: `the core agent serves expvar on 127.0.0.1:${ports.expvar} as pid ${state.pid}`,
+		detail:
+			`the core agent serves expvar on 127.0.0.1:${ports.expvar}` +
+			(held === null ? "" : ` as pid ${held}`),
 	};
 }
 

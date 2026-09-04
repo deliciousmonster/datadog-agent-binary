@@ -36,64 +36,72 @@ const onWindowsHost = (dir, run) =>
 		withHome(dir, () => withEnv("BAZEL_SH", bashAt(dir), run))
 	);
 
-test("under CI with no XDG_CACHE_HOME, the XDG default is created and exported", async () => {
-	await withTempDir("ddab-xdg-default-", (home) =>
-		withHome(home, () =>
-			withEnv("CI", "true", () =>
-				withEnv("XDG_CACHE_HOME", undefined, async () => {
-					const expected = path.join(home, ".cache");
-					const env = await prepareHost(LINUX, home);
-					assert.equal(env.XDG_CACHE_HOME, expected);
-					assert.ok(fs.statSync(expected).isDirectory());
-				})
+/**
+ * A throwaway HOME on a runner whose CI is `ci`, with XDG_CACHE_HOME set to `xdgCacheHome(home)`.
+ * `run` is handed both, since two of these assert against the cache path they asked for.
+ */
+const onCacheHost = ({ prefix, ci, xdgCacheHome = () => undefined }, run) =>
+	withTempDir(prefix, (home) => {
+		const requested = xdgCacheHome(home);
+		return withHome(home, () =>
+			withEnv("CI", ci, () =>
+				withEnv("XDG_CACHE_HOME", requested, () => run(home, requested))
 			)
-		)
+		);
+	});
+
+test("under CI with no XDG_CACHE_HOME, the XDG default is created and exported", async () => {
+	await onCacheHost(
+		{ prefix: "ddab-xdg-default-", ci: "true" },
+		async (home) => {
+			const expected = path.join(home, ".cache");
+			const env = await prepareHost(LINUX, home);
+			assert.equal(env.XDG_CACHE_HOME, expected);
+			assert.ok(fs.statSync(expected).isDirectory());
+		}
 	);
 });
 
 test("an explicit XDG_CACHE_HOME wins and is created, so a cache action can point the build at it", async () => {
-	await withTempDir("ddab-xdg-explicit-", (home) => {
-		const requested = path.join(home, "workspace", ".cache");
-		return withHome(home, () =>
-			withEnv("CI", "true", () =>
-				withEnv("XDG_CACHE_HOME", requested, async () => {
-					const env = await prepareHost(LINUX, home);
-					assert.equal(env.XDG_CACHE_HOME, requested);
-					assert.ok(fs.statSync(requested).isDirectory());
-					assert.ok(!fs.existsSync(path.join(home, ".cache")));
-				})
-			)
-		);
-	});
+	await onCacheHost(
+		{
+			prefix: "ddab-xdg-explicit-",
+			ci: "true",
+			xdgCacheHome: (home) => path.join(home, "workspace", ".cache"),
+		},
+		async (home, requested) => {
+			const env = await prepareHost(LINUX, home);
+			assert.equal(env.XDG_CACHE_HOME, requested);
+			assert.ok(fs.statSync(requested).isDirectory());
+			assert.ok(!fs.existsSync(path.join(home, ".cache")));
+		}
+	);
 });
 
 test("an empty XDG_CACHE_HOME is treated as unset, since the wrapper rejects it too", async () => {
-	await withTempDir("ddab-xdg-empty-", (home) =>
-		withHome(home, () =>
-			withEnv("CI", "true", () =>
-				withEnv("XDG_CACHE_HOME", "  ", async () => {
-					const env = await prepareHost(LINUX, home);
-					assert.equal(env.XDG_CACHE_HOME, path.join(home, ".cache"));
-				})
-			)
-		)
+	await onCacheHost(
+		{ prefix: "ddab-xdg-empty-", ci: "true", xdgCacheHome: () => "  " },
+		async (home) => {
+			const env = await prepareHost(LINUX, home);
+			assert.equal(env.XDG_CACHE_HOME, path.join(home, ".cache"));
+		}
 	);
 });
 
 test("off CI nothing is created and no XDG_CACHE_HOME is exported", async () => {
-	await withTempDir("ddab-xdg-local-", (home) => {
-		const requested = path.join(home, "workspace", ".cache");
-		return withHome(home, () =>
-			withEnv("CI", undefined, () =>
-				withEnv("XDG_CACHE_HOME", requested, async () => {
-					const env = await prepareHost(LINUX, home);
-					assert.ok(!("XDG_CACHE_HOME" in env));
-					assert.ok(!fs.existsSync(requested));
-					assert.ok(!fs.existsSync(path.join(home, ".cache")));
-				})
-			)
-		);
-	});
+	await onCacheHost(
+		{
+			prefix: "ddab-xdg-local-",
+			ci: undefined,
+			xdgCacheHome: (home) => path.join(home, "workspace", ".cache"),
+		},
+		async (home, requested) => {
+			const env = await prepareHost(LINUX, home);
+			assert.ok(!("XDG_CACHE_HOME" in env));
+			assert.ok(!fs.existsSync(requested));
+			assert.ok(!fs.existsSync(path.join(home, ".cache")));
+		}
+	);
 });
 
 // The fixture is a literal Windows path, not mkdtemp's: a host POSIX path has no backslash to

@@ -1,54 +1,39 @@
 #!/usr/bin/env node
 
-import { createRequire } from "node:module";
+import {
+	chmodSync,
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
 import { REPO_ROOT, readRepoVersion, platformPackageDir } from "./paths.js";
-
-const require = createRequire(import.meta.url);
-
-const fs = require("fs");
-const path = require("path");
-const { argv } = require("process");
-const { TARGETS, currentTarget } = require("../dist/src/targets.js");
-const { BINARIES, binaryFilename } = require("../dist/src/binaries.js");
+import { TARGETS, currentTarget } from "../dist/src/targets.js";
+import { BINARIES, binaryFilename } from "../dist/src/binaries.js";
+import { buildTree } from "../dist/src/layout.js";
 
 function copyPlatformBinary(platform) {
 	const packageDir = platformPackageDir(platform.name);
-	fs.mkdirSync(path.join(packageDir, "bin"), { recursive: true });
+	mkdirSync(join(packageDir, "bin"), { recursive: true });
+	const builtAt = buildTree(REPO_ROOT, platform).bin;
 
 	for (const binary of BINARIES) {
 		const fileName = binaryFilename(binary, platform);
-		const from = path.join(REPO_ROOT, "build", platform.name, "bin", fileName);
-		if (!fs.existsSync(from)) {
+		const from = join(builtAt, fileName);
+		if (!existsSync(from)) {
 			throw new Error(`Binary not found at ${from}`);
 		}
-		const to = path.join(packageDir, "bin", fileName);
-		fs.copyFileSync(from, to);
+		const to = join(packageDir, "bin", fileName);
+		copyFileSync(from, to);
 		// Ensure the executable bit is set so it survives `npm publish`/`npm install`.
-		fs.chmodSync(to, 0o755);
+		chmodSync(to, 0o755);
 	}
-}
-
-// npm filters optionalDependencies using Node's `process.platform` and
-// `process.arch` values, NOT our human-readable names. Map to those so the
-// right binary package actually installs on each host.
-const NPM_OS = { linux: "linux", macos: "darwin", windows: "win32" };
-const NPM_CPU = { x86_64: "x64", arm64: "arm64" };
-
-function npmOS(os) {
-	const mapped = NPM_OS[os];
-	if (!mapped) throw new Error(`No npm os mapping for "${os}"`);
-	return mapped;
-}
-
-function npmCPU(arch) {
-	const mapped = NPM_CPU[arch];
-	if (!mapped) throw new Error(`No npm cpu mapping for "${arch}"`);
-	return mapped;
 }
 
 const version = readRepoVersion();
 
-const lastArg = argv[argv.length - 1];
+const lastArg = process.argv[process.argv.length - 1];
 const platforms = lastArg === "--all" ? TARGETS : [currentTarget()];
 
 const packageTemplate = {
@@ -84,13 +69,13 @@ function writePlatformPackageJson(platform) {
 		...packageTemplate,
 		name: `@harperfast/datadog-agent-binary-${platform.name}`,
 		description: `Datadog Agent binary for ${os} ${arch}`,
-		os: [npmOS(os)],
-		cpu: [npmCPU(arch)],
+		os: [platform.npmOs],
+		cpu: [platform.npmCpu],
 		keywords: [...packageTemplate.keywords, os, arch],
 	};
 
-	fs.writeFileSync(
-		path.join(platformPackageDir(platform.name), "package.json"),
+	writeFileSync(
+		join(platformPackageDir(platform.name), "package.json"),
 		JSON.stringify(packageJson, null, "\t")
 	);
 
@@ -104,8 +89,8 @@ function writePlatformIndexJs(platform) {
 	const indexContent = indexTemplate
 		.replace("__BINARIES__", JSON.stringify(files, null, 2))
 		.replace("__DEFAULT__", BINARIES[0].shipsAs);
-	fs.writeFileSync(
-		path.join(platformPackageDir(platform.name), "index.js"),
+	writeFileSync(
+		join(platformPackageDir(platform.name), "index.js"),
 		indexContent
 	);
 }
@@ -137,10 +122,7 @@ for usage, configuration, and Harper integration details.
 Apache-2.0. The Datadog Agent binary is distributed under the Apache-2.0
 license per the [Datadog Agent repository](https://github.com/DataDog/datadog-agent).
 `;
-	fs.writeFileSync(
-		path.join(platformPackageDir(platform.name), "README.md"),
-		readme
-	);
+	writeFileSync(join(platformPackageDir(platform.name), "README.md"), readme);
 }
 
 // In --all mode (release), tolerate a platform whose binary didn't build: skip it with a warning

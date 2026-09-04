@@ -119,7 +119,7 @@ test("findTarget names the supported set when asked for one that is not", () => 
 	assert.equal(findTarget("linux-arm64").goarch, "arm64");
 });
 
-test("every target derives goos and goarch rather than restating them", () => {
+test("the table spells goos, goarch and exe the way the Go toolchain names them, not the way this package does", () => {
 	assert.equal(
 		TARGETS.filter((t) => t.os === "macos").every((t) => t.goos === "darwin"),
 		true

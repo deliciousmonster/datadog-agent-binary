@@ -1,17 +1,12 @@
 #!/usr/bin/env node
 
-import { createRequire } from "node:module";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { REPO_ROOT } from "./paths.js";
+import { targetNames } from "../dist/src/targets.js";
 
-const require = createRequire(import.meta.url);
-
-const fs = require("fs");
-const path = require("path");
-
-const packageJsonPath = path.join(REPO_ROOT, "package.json");
-const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-
-const { targetNames } = require("../dist/src/targets.js");
+const packageJsonPath = join(REPO_ROOT, "package.json");
+const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
 const platforms = targetNames();
 
 // Update optionalDependencies to use the same version as the main package
@@ -22,9 +17,6 @@ platforms.forEach((platform) => {
 	] = packageJson.version;
 });
 
-fs.writeFileSync(
-	packageJsonPath,
-	JSON.stringify(packageJson, null, "\t") + "\n"
-);
+writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, "\t") + "\n");
 
 console.log(`Updated optionalDependencies to version ${packageJson.version}`);

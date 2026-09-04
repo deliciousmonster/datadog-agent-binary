@@ -169,7 +169,7 @@ async function startAgents(scope) {
 		);
 
 		// The credentials ride in the inherited environment, invisible to the config contents, so a rotated
-		// key must be folded in here or the old one is posted forever.
+		// key must be folded in here or a thread joins the agent still posting under the old one.
 		const fingerprintParts = [
 			...Object.values(runtime.configFiles),
 			process.env.DD_API_KEY ?? "",
@@ -222,7 +222,6 @@ const START_DEADLINE_MS = 60_000;
 // The one failure this module cannot see from inside: Harper imports it for its resources and never calls
 // the plugin, which is what an auto-scanned component directory gets. Module evaluation is the only vantage point left.
 const startDeadline = setTimeout(() => {
-	if (supervisor) return;
 	log.error(
 		`Datadog supervisor: Harper has not called handleApplication ${START_DEADLINE_MS / 1000}s after this ` +
 			`module loaded, so no agent started and nothing on this node is supervising one. The likeliest ` +

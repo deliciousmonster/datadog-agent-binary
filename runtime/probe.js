@@ -65,8 +65,10 @@ function fetchInsecure(url, timeoutMs) {
 // Both branches run under `untraced`: the span is created where the request is made, so that is the only
 // place suppression cannot be undone by other code in the process.
 async function probe(url, timeoutMs, insecureTls) {
-	if (insecureTls) return untraced(() => fetchInsecure(url, timeoutMs));
 	try {
+		// Awaited inside the try on both branches: `untraced` reaches into a dd-trace private path, and
+		// pollEndpoint's never-throws contract has to hold whichever branch that path moves under.
+		if (insecureTls) return await untraced(() => fetchInsecure(url, timeoutMs));
 		return await untraced(async () => {
 			const response = await fetch(url, {
 				signal: AbortSignal.timeout(timeoutMs),

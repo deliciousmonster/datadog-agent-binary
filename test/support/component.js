@@ -289,8 +289,8 @@ export function nativeScope({ logDir }) {
 					exited: false,
 					adopted: false,
 				};
-				// An unhandled 'error' event crashes the process (guard/src/index.js:128,
-				// guard/src/supervise.js:195,211); reported the same way the 'exit' listener below does.
+				// An unhandled 'error' event crashes the process, which is why the guard's own launchReaper()
+				// and attempt() attach one right after ctx.spawn(); reported the way the 'exit' listener is.
 				child.on("error", () => {
 					state.exited = true;
 				});

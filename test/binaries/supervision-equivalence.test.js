@@ -3,12 +3,12 @@
 // Harper. component.js's nativeScope stands in for Harper's own sidecar; the only things that are real
 // are the two agent binaries this repo builds and the spans this file sends them. Deliberately independent
 // of test/live/ - this file imports nothing from there - so a future change to that local-only layer can
-// never silently change what this one proves.
+// never silently change what this one proves. The equivalence bullet is held per row: each path asserts
+// its own delivered count against the SPAN_COUNT it sent, pinning both to one number rather than to each other.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 
 import {
 	halt,
@@ -21,7 +21,11 @@ import {
 } from "../support/component.js";
 import { withEnvs, withTempDir } from "../support/sandbox.js";
 import { freshPorts } from "../support/loopback.js";
-import { driveTraffic } from "../support/traffic.js";
+import {
+	FAKE_API_KEY,
+	driveTraffic,
+	waitForDeliveredCount,
+} from "../support/traffic.js";
 
 // prepareRuntime nests the runtime tree under the component's own directory name; the guard's pid
 // lock directory sits under that, same as test/component/supervisor-start.test.js's own layout.
@@ -34,34 +38,13 @@ const SPAN_COUNT = 5;
 // on its own fixed interval; test/live/harper-boot.test.js polls the same field and needs the same room.
 const DELIVERY_DEADLINE_MS = 60_000;
 
-// Syntactically valid, not real: same reasoning as test/live/harness.js's own FAKE_API_KEY. A wrong
-// key still makes the trace-agent build and count real payloads before the intake refuses them.
-const FAKE_API_KEY = "0".repeat(32);
-
-// The traffic-driving mechanism lives in support/traffic.js, shared with test/live/harness.js;
-// only the env var and span naming below are this file's own.
+// The API key, the traffic-driving mechanism and the delivery poll all live in support/traffic.js,
+// shared with test/live/harness.js; only the env var and span naming below are this file's own.
 const SPAN_SCRIPT = {
 	envVar: "SPAN_COUNT",
 	spanName: "supervision-equivalence.span",
 	tagKey: "span.iteration",
 };
-
-/** Polls readSignal() until the receiver reports exactly `count` and the verdict has left "idle", or the deadline passes. */
-async function waitForDeliveredCount(readSignal, count, deadlineMs) {
-	const deadline = Date.now() + deadlineMs;
-	let signal;
-	while (Date.now() < deadline) {
-		signal = await readSignal();
-		if (
-			signal?.receiver?.tracesReceived === count &&
-			signal.verdict !== "idle"
-		) {
-			return signal.receiver.tracesReceived;
-		}
-		await delay(500);
-	}
-	return signal?.receiver?.tracesReceived;
-}
 
 /**
  * Boots resources.js against `makeScope(root)`, drives SPAN_COUNT real spans through the real trace-agent
@@ -100,13 +83,16 @@ async function bootDriveAndRead(makeScope) {
 					);
 
 					driveTraffic(ports.receiver, SPAN_COUNT, SPAN_SCRIPT);
-					const delivered = await waitForDeliveredCount(
+					const signal = await waitForDeliveredCount(
 						() => component.readDeliverySignal(),
 						SPAN_COUNT,
 						DELIVERY_DEADLINE_MS
 					);
 
-					return { supervision: status.supervision, delivered };
+					return {
+						supervision: status.supervision,
+						delivered: signal?.receiver?.tracesReceived,
+					};
 				} finally {
 					// For the native row, status.processes carries the exact pids already in
 					// scope.children; haltedPids keeps that overlap from a second, redundant SIGTERM.
@@ -144,11 +130,6 @@ const ROWS = [
 	},
 ];
 
-// Filled in by each row's own test below, so the comparison test can read real delivered counts
-// without booting the component a second time. A row whose own test failed leaves no entry, which the
-// comparison test treats as its own failure rather than silently skipping it.
-const deliveredByRow = new Map();
-
 // Deliberately skips hideBuildTree: that precaution catches a binary still linked to its build
 // tree, a different property from the supervision equivalence this file proves.
 for (const row of ROWS) {
@@ -165,26 +146,6 @@ for (const row of ROWS) {
 				SPAN_COUNT,
 				`${row.name}: the real trace-agent reported ${delivered} delivered traces, not the ${SPAN_COUNT} spans this run actually sent`
 			);
-			deliveredByRow.set(row.name, delivered);
 		});
 	});
 }
-
-// MOD-16's acceptance bullet, proved without the locally-patched Harper test/live/harness.js's own row
-// needs: N real spans against each supervision path must land N real traces on both.
-test("MOD-16 (CI-portable): harperSupervisor and guardSupervisor deliver the same trace count for the same real span count", () => {
-	const counts = ROWS.map((row) => {
-		assert.ok(
-			deliveredByRow.has(row.name),
-			`"${row.name}" reported no delivered count; its own boot test above must pass before this comparison means anything`
-		);
-		return deliveredByRow.get(row.name);
-	});
-
-	assert.ok(
-		counts.every((count) => count === counts[0]),
-		`the same ${SPAN_COUNT} real spans produced different real trace counts across supervision paths: ${JSON.stringify(
-			Object.fromEntries(ROWS.map((row, index) => [row.name, counts[index]]))
-		)}`
-	);
-});

@@ -14,6 +14,10 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { threadId } from "node:worker_threads";
 
+// Rejects `rootPath: null`, which Harper's own defaultConfig.yaml ships, and anything relative: a relative
+// root puts the runtime tree, the PID locks and the reaper's replacement-pid file under each worker's cwd.
+const absoluteRoot = (value) => (value && isAbsolute(value) ? value : null);
+
 // Read here rather than taken from an environment variable this package invents: Harper reads the same chain
 // for itself and exposes no root path to a component. Absolute or null, never throws.
 function readHarperRootPath() {
@@ -31,15 +35,24 @@ function readHarperRootPath() {
 		const rootPath = readFileSync(settingsPath, "utf-8")
 			.match(/^rootPath[ \t]*:[ \t]*(.+?)[ \t]*(?:#.*)?$/m)?.[1]
 			?.replace(/^(['"])(.*)\1$/, "$2");
-		// Rejects `rootPath: null`, which Harper's own defaultConfig.yaml ships, and anything relative.
-		return rootPath && isAbsolute(rootPath) ? rootPath : null;
+		return absoluteRoot(rootPath);
 	} catch {
 		return null;
 	}
 }
 
-/** Harper's root path, or null. ROOTPATH is the harper-pro image's own spelling and wins. */
-const harperRoot = () => process.env.ROOTPATH || readHarperRootPath();
+/** Harper's root path, or null. ROOTPATH is the harper-pro image's own spelling and wins where it is usable. */
+function harperRoot(log) {
+	const spelled = process.env.ROOTPATH;
+	if (spelled && !absoluteRoot(spelled)) {
+		log.warn(
+			`Datadog supervisor: ROOTPATH="${spelled}" is not an absolute path, so it is ignored. A relative ` +
+				`one resolves against each worker's own cwd, and two workers that disagree take different PID ` +
+				`locks and each start their own pair of agents.`
+		);
+	}
+	return absoluteRoot(spelled) ?? readHarperRootPath();
+}
 
 /** YAML-safe scalar; double quotes also survive Windows drive letters. */
 const yamlString = (value) => JSON.stringify(String(value));
@@ -121,7 +134,7 @@ function removeStaleDefaults(confd, owned) {
 // The runtime tree lives under Harper's root, never the component directory, which `harper deploy` replaces
 // under a live agent. Named by the component's own directory, not just "datadog": sharing one pidDir means sharing one lock.
 export function prepareRuntime(componentDir, { ports, log }) {
-	const root = harperRoot();
+	const root = harperRoot(log);
 	const runtimeDir = root
 		? join(root, "datadog", basename(componentDir))
 		: join(homedir(), ".harper-datadog", basename(componentDir));

@@ -24,20 +24,21 @@ function logDatadogEnv() {
 			`DD_LOGS_ENABLED=${process.env.DD_LOGS_ENABLED || "(unset, default false)"}, ` +
 			`DD_LOG_TO_CONSOLE=${process.env.DD_LOG_TO_CONSOLE || "(unset, default true)"}`
 	);
+	// Both remedies are the environment, never a file: the component regenerates its datadog.yaml on every
+	// worker start (runtime/config.js), and this shim ships with no datadog.yaml of its own to edit.
 	if (!process.env.DD_API_KEY) {
 		logger.warn(
-			"DD_API_KEY is not set in this process. The agent will start but disable " +
-				"its connection to Datadog, so nothing will appear in env:development. " +
-				"Confirm the API key is exported into the spawning process (loadEnv) or " +
-				"set in the component's datadog.yaml."
+			"DD_API_KEY is not set in this process. The agent will start and collect, but " +
+				"the intake rejects the payloads, so nothing will appear in Datadog under " +
+				`env:${process.env.DD_ENV || "<DD_ENV is unset too>"} or any other. Export ` +
+				"DD_API_KEY into this process; the key never goes on disk."
 		);
 	}
 	if (!process.env.DD_LOGS_ENABLED) {
 		logger.warn(
 			"DD_LOGS_ENABLED is not set (defaults to false). Log collection is OFF, so " +
 				"application logs will not be forwarded to Datadog even when the agent is " +
-				"running. Set DD_LOGS_ENABLED=true (or logs_enabled: true in datadog.yaml) " +
-				"and configure a logs source."
+				"running. Export DD_LOGS_ENABLED=true into this process and configure a logs source."
 		);
 	}
 }

@@ -170,6 +170,24 @@ test("the runtime tree comes from Harper, not from a variable this package inven
 			"`rootPath: null` was taken for a directory name"
 		);
 	});
+
+	// ROOTPATH gets the same absoluteness check the yaml spelling does. A relative one resolves against each
+	// worker's own cwd, so two workers that disagree take different PID locks and each start their own pair.
+	await withTempDir("dd-home-", async (home) => {
+		const relative = "relative-rootpath-fixture";
+		const runtime = await withEnvs({ ROOTPATH: relative }, () =>
+			withHome(home, () => prepareRuntime())
+		);
+		assert.ok(
+			path.isAbsolute(runtime.paths.pidDir),
+			`the guard locks went to ${runtime.paths.pidDir}, which every worker resolves against its own cwd`
+		);
+		assert.equal(
+			fs.existsSync(path.join(process.cwd(), relative)),
+			false,
+			"a relative ROOTPATH built the runtime tree under whatever cwd this worker happened to have"
+		);
+	});
 });
 
 const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

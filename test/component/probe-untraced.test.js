@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
-import { REPO_ROOT } from "../support/component.js";
+import { REPO_ROOT } from "../support/generator.js";
 import { findFreePort } from "../support/loopback.js";
 
 // dd-trace initialises once per process, so this runs in a child. Its `log` exporter writes every exported

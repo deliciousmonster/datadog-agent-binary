@@ -9,27 +9,46 @@ export interface Target {
 	readonly goos: string;
 	readonly goarch: string;
 	readonly exe: string;
+	/** npm's own name for this system. npm filters optionalDependencies on process.platform, not on `name`. */
+	readonly npmOs: string;
+	/** npm's own name for this architecture, matched against process.arch. */
+	readonly npmCpu: string;
 	/** Shell command that must succeed before this OS can build. */
 	readonly precondition?: string;
 	/** Build environment this OS needs on top of the toolchain's own. */
 	readonly env?: Readonly<Record<string, string>>;
 }
 
-const SYSTEMS: Record<OS, Omit<Target, "os" | "arch" | "name" | "goarch">> = {
-	linux: { goos: "linux", exe: "" },
-	macos: { goos: "darwin", exe: "", precondition: "xcode-select -p" },
+type System = Omit<Target, "os" | "arch" | "name" | "goarch" | "npmCpu">;
+
+const SYSTEMS: Record<OS, System> = {
+	linux: { goos: "linux", npmOs: "linux", exe: "" },
+	macos: {
+		goos: "darwin",
+		npmOs: "darwin",
+		exe: "",
+		precondition: "xcode-select -p",
+	},
 	// 7.82.1 splices `-Wl,--pdb=` into extldflags for Windows unless DD_GO_PDB=0, and CGO_ENABLED=1
 	// sends it to the host's ld. Nothing here ships a PDB, so the flag can only cost a link failure.
-	windows: { goos: "windows", exe: ".exe", env: { DD_GO_PDB: "0" } },
+	windows: {
+		goos: "windows",
+		npmOs: "win32",
+		exe: ".exe",
+		env: { DD_GO_PDB: "0" },
+	},
 };
 
-const GOARCH: Record<Arch, string> = { x86_64: "amd64", arm64: "arm64" };
+const ARCHES: Record<Arch, Pick<Target, "goarch" | "npmCpu">> = {
+	x86_64: { goarch: "amd64", npmCpu: "x64" },
+	arm64: { goarch: "arm64", npmCpu: "arm64" },
+};
 
 const target = (os: OS, arch: Arch): Target => ({
 	os,
 	arch,
 	name: `${os}-${arch}`,
-	goarch: GOARCH[arch],
+	...ARCHES[arch],
 	...SYSTEMS[os],
 });
 

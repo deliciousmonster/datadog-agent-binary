@@ -9,17 +9,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { BINARIES, binaryFilename } from "../dist/src/binaries.js";
+import { treeAt } from "../dist/src/layout.js";
 import { currentTarget } from "../dist/src/targets.js";
 import { debugVarsUrl } from "../runtime/delivery.js";
 import { writeConfigFiles } from "../runtime/config.js";
 import { receiverInfoUrl, verifyLaunch } from "../runtime/verify.js";
+import { REPO_ROOT } from "./paths.js";
 import { freshPorts } from "../test/support/loopback.js";
-
-const REPO_ROOT = join(import.meta.dirname, "..");
-
-// Syntactically valid, not real: a wrong key still makes the trace-agent build and count real
-// payloads before the intake refuses them. Same key, same reasoning, as test/live/harness.js.
-const FAKE_API_KEY = "0".repeat(32);
+import { FAKE_API_KEY } from "../test/support/traffic.js";
 
 // Go binaries bind well under a second cold; this only needs to be longer than a slow CI runner.
 const DELIVERY_DEADLINE_MS = 15_000;
@@ -148,9 +145,10 @@ const CHECKS = {
 	"datadog-agent": checkCoreAgent,
 };
 
-/** Moves build/<platform>/src aside so a binary that still links its build tree by path can't find it. */
+/** Moves the build tree's src/ aside so a binary that still links it by path can't find it. Reports
+ * whether there was one: with no tree beside the bin dir, that independence is never put to the test. */
 function hideBuildTree(binDir) {
-	const srcDir = join(dirname(binDir), "src");
+	const srcDir = treeAt(dirname(binDir)).source;
 	const hiddenDir = `${srcDir}.smoke-test-hidden`;
 
 	// A run killed between the rename below and its `finally` restore (a CI timeout, not a caught
@@ -158,10 +156,14 @@ function hideBuildTree(binDir) {
 	if (existsSync(hiddenDir) && !existsSync(srcDir))
 		renameSync(hiddenDir, srcDir);
 
-	const present = existsSync(srcDir);
-	if (present) renameSync(srcDir, hiddenDir);
-	return () => {
-		if (present) renameSync(hiddenDir, srcDir);
+	const hidden = existsSync(srcDir);
+	if (hidden) renameSync(srcDir, hiddenDir);
+	return {
+		hidden,
+		srcDir,
+		restore: () => {
+			if (hidden) renameSync(hiddenDir, srcDir);
+		},
 	};
 }
 
@@ -179,7 +181,12 @@ async function main() {
 		process.exit(1);
 	}
 
-	const restoreBuildTree = hideBuildTree(binDir);
+	const isolation = hideBuildTree(binDir);
+	log(
+		isolation.hidden
+			? `hid the build tree at ${isolation.srcDir} for the duration of this run`
+			: `no build tree at ${isolation.srcDir}, so nothing here tests independence from one`
+	);
 	const rootDir = mkdtempSync(join(tmpdir(), "dd-smoke-test-"));
 	const ports = await freshPorts();
 
@@ -228,7 +235,7 @@ async function main() {
 				// Already gone.
 			}
 		}
-		restoreBuildTree();
+		isolation.restore();
 		rmSync(rootDir, { recursive: true, force: true });
 	}
 
@@ -237,7 +244,12 @@ async function main() {
 		for (const failure of failures) console.error(`  - ${failure}`);
 		process.exit(1);
 	}
-	log(`every binary in ${binDir} bound, ran, and delivered for real.`);
+	log(
+		`every binary in ${binDir} bound, ran, and delivered for real, ` +
+			(isolation.hidden
+				? "with its build tree hidden."
+				: "though with no build tree hidden: build-tree independence went untested.")
+	);
 	process.exit(0);
 }
 

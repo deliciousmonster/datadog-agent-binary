@@ -1,8 +1,14 @@
-// Real spans, from a throwaway child process, into a real trace-agent receiver. Shared by
-// test/binaries/supervision-equivalence.test.js and test/live/harness.js, which differ only in env var and span naming, not in the mechanism.
+// Real delivery through a real trace-agent: the key that makes it count payloads, the spans a child
+// process sends it, and the poll that reads the count back. Shared by test/binaries/supervision-equivalence.test.js,
+// test/live/harness.js and scripts/smoke-test-binaries.js, which differ only in span naming, not in the mechanism.
 
 import { execFileSync } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { REPO_ROOT } from "./generator.js";
+
+// Syntactically valid, not real. A wrong key still makes the trace-agent build and count real
+// payloads before the intake refuses them; an unset key disables the forwarder and proves nothing.
+export const FAKE_API_KEY = "0".repeat(32);
 
 // dd-trace initialises once per process, so this always runs in a child. No explicit process.exit():
 // flushInterval 0 posts on every export, and the in-flight POST needs the event loop kept alive to finish, not a settle delay standing in for it.
@@ -41,4 +47,28 @@ export function driveTraffic(
 			},
 		}
 	);
+}
+
+const DELIVERY_POLL_MS = 500;
+
+/**
+ * Polls `readSignal` until the real receiver reports exactly `count` traces and the verdict has left
+ * "idle" (a periodic stats bucket, not an on-write counter, so a fresh burst can sit at the right count
+ * with a stale "idle" verdict for several seconds), or the deadline passes. Returns the last signal read,
+ * which is `undefined` only if `readSignal` never produced one.
+ */
+export async function waitForDeliveredCount(readSignal, count, deadlineMs) {
+	const deadline = Date.now() + deadlineMs;
+	let signal;
+	while (Date.now() < deadline) {
+		signal = await readSignal();
+		if (
+			signal?.receiver?.tracesReceived === count &&
+			signal.verdict !== "idle"
+		) {
+			return signal;
+		}
+		await delay(DELIVERY_POLL_MS);
+	}
+	return signal;
 }

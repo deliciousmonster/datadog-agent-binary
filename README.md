@@ -127,10 +127,13 @@ the agents themselves with `curl` from a shell rather than through that endpoint
 traced request path it would be reporting on.
 
 A Harper build whose `Scope` carries the process sidecar API supervises both agents itself. Where it
-does not, the bundled guard supervises instead: one lock per agent under `<harper root>/datadog/pids/`,
-its own rather than the node's, plus a detached reaper that stops them when the node goes. Either way
-a PID lock is what holds it to one agent pair per node instead of one trace-agent per worker thread;
-only who holds the lock changes. `GET /DatadogStatus/` reports which of the two ran, as `supervision`.
+does not, the bundled guard supervises instead: one lock per agent under
+`<harper root>/datadog/<component directory>/pids/`, its own rather than the node's, plus a detached
+reaper that stops them when the node goes. The component-directory segment is load-bearing- two
+installed copies sharing one `pids/` would share one lock. It is also the directory to clear when a
+killed node leaves a stale lock behind. Either way a PID lock is what holds it to one agent pair per
+node instead of one trace-agent per worker thread; only who holds the lock changes.
+`GET /DatadogStatus/` reports which of the two ran, as `supervision`.
 
 ### Install scripts
 
@@ -148,13 +151,18 @@ Most consumers never need this — it's how the published binaries are produced.
 # Build for the current platform
 npm run build-agent
 
-# Pin a version and output directory
-npm run build && node dist/src/cli.js build --datadog-version 7.50.0 --output ~/my-datadog-agent-build
+# Build a specific version instead of the pin in .datadog-agent-version
+npm run build && node dist/src/cli.js build --datadog-version 7.50.0
 
 # Other commands
 node dist/src/cli.js platforms   # list supported platforms
 node dist/src/cli.js version     # latest upstream version
 ```
+
+The tree is always `build/<platform>/` under the checkout: `src/` is the clone, `go/` the GOPATH it
+is linked into, and `bin/` the built binaries. There is no flag to move it, because
+`scripts/create-platform-packages.js` reads those binaries back out of that path to build the npm
+packages, and a relocated tree is one it cannot find.
 
 ### Build requirements
 

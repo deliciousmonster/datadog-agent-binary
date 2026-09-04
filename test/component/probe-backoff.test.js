@@ -36,6 +36,19 @@ async function recordedWaits(options, stopAfter) {
 	return waits;
 }
 
+/**
+ * 503s the first `failures` probes, then serves. 503 rather than a refused connection: a listener
+ * started mid-test races the poll it is meant to outlast.
+ */
+function failsThenServes(failures) {
+	let served = 0;
+	return http.createServer((request, response) => {
+		const ready = ++served > failures;
+		response.writeHead(ready ? 200 : 503, { "content-type": "text/plain" });
+		response.end(ready ? "expvar" : "not yet");
+	});
+}
+
 test("NEGATIVE: the poll does not retry at a fixed interval; it doubles and then caps", async () => {
 	// Nothing is listening, so every probe fails the way a pre-bind expvar port does.
 	const port = await findFreePort();
@@ -44,23 +57,12 @@ test("NEGATIVE: the poll does not retry at a fixed interval; it doubles and then
 		8
 	);
 
+	// Probes arrive at 0, 250, 750, 1750, 3750, 7750ms: five inside the ~7s bind window where a flat
+	// 250ms retry lands about 28, and the sixth already past the 6.8s bind this was measured against.
 	assert.deepEqual(
 		waits,
 		[250, 500, 1000, 2000, 4000, 5000, 5000, 5000],
 		"the backoff must double from intervalMs and then cap, or a target that binds late costs one probe every 250ms until it does"
-	);
-	const arrivals = waits.reduce(
-		(times, wait) => [...times, times.at(-1) + wait],
-		[0]
-	);
-	assert.equal(
-		arrivals[5],
-		7750,
-		"the sixth probe must land past the 6.8s bind this schedule was measured against"
-	);
-	assert.ok(
-		arrivals.filter((at) => at <= 7000).length <= 5,
-		`${arrivals.filter((at) => at <= 7000).length} probes land inside the bind window; a fixed 250ms retry lands about 28`
 	);
 });
 
@@ -89,17 +91,8 @@ test("the deadline still bounds the poll: the last wait is truncated, not overru
 });
 
 test("a poll that had to wait reports what it cost, once", async () => {
-	let served = 0;
-	// 503 rather than a refused connection: a listener started mid-test races the poll it is meant to outlast.
-	const server = http.createServer((request, response) => {
-		served += 1;
-		response.writeHead(served < 3 ? 503 : 200, {
-			"content-type": "text/plain",
-		});
-		response.end(served < 3 ? "not yet" : "expvar");
-	});
 	const reports = [];
-	const body = await withServer(server, (port) =>
+	const body = await withServer(failsThenServes(2), (port) =>
 		pollEndpoint({
 			url: `http://127.0.0.1:${port}/debug/vars`,
 			intervalMs: 20,
@@ -131,15 +124,7 @@ test("a poll that had to wait reports what it cost, once", async () => {
 test("NEGATIVE: a throwing onRetried costs neither the body nor the never-throws guarantee", async () => {
 	// It fires after a successful probe, so an unguarded call would lose a body already in hand and fail the
 	// verify on a healthy node, which is worse than the diagnostic it was added for.
-	let served = 0;
-	const server = http.createServer((request, response) => {
-		served += 1;
-		response.writeHead(served < 2 ? 503 : 200, {
-			"content-type": "text/plain",
-		});
-		response.end(served < 2 ? "not yet" : "expvar");
-	});
-	const body = await withServer(server, (port) =>
+	const body = await withServer(failsThenServes(1), (port) =>
 		pollEndpoint({
 			url: `http://127.0.0.1:${port}/debug/vars`,
 			intervalMs: 20,
@@ -177,5 +162,21 @@ test("NEGATIVE: an endpoint that answers first time reports nothing", async () =
 		reports,
 		[],
 		"onRetried fired without a retry, so every thread would log a wait on every boot"
+	);
+});
+
+test("NEGATIVE: the insecure branch answers null rather than rejecting, same as the fetch branch", async () => {
+	// readDeliverySignal's own never-rejects contract rests on this one, and both branches call into a
+	// dd-trace private path that can move under either of them.
+	const answered = await pollEndpoint({
+		// A port outside 1-65535 is not a URL, so node:https throws before it ever opens a socket.
+		url: "https://127.0.0.1:99999/debug/vars",
+		insecureTls: true,
+		giveUp: () => true,
+	});
+	assert.equal(
+		answered,
+		null,
+		"a request the https client refused outright rejected out of a poll documented never to throw"
 	);
 });

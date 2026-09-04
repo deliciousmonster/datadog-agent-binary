@@ -25,18 +25,17 @@ const { BINARIES } = require(
 	path.join(REPO_ROOT, "dist", "src", "binaries.js")
 );
 
-// The tree shape every fixture built from this repo's compiled output needs: a scripts/ dir plus
-// dist/src/{targets,binaries}.js, since a caller's copied script resolves those tables relative to itself.
+// The tree shape every fixture built from this repo's compiled output needs: a scripts/ dir plus the whole
+// of dist/src, since a caller's copied script resolves its ../dist/src imports relative to itself. Copied
+// wholesale rather than named table by table, so a script that starts importing one more never breaks here.
 function scaffoldWorkDir(prefix) {
 	const workDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 	fs.mkdirSync(path.join(workDir, "scripts"));
-	fs.mkdirSync(path.join(workDir, "dist", "src"), { recursive: true });
-	for (const table of ["targets.js", "binaries.js"]) {
-		fs.copyFileSync(
-			path.join(REPO_ROOT, "dist", "src", table),
-			path.join(workDir, "dist", "src", table)
-		);
-	}
+	fs.cpSync(
+		path.join(REPO_ROOT, "dist", "src"),
+		path.join(workDir, "dist", "src"),
+		{ recursive: true }
+	);
 	return workDir;
 }
 

@@ -6,13 +6,13 @@ import {
 	fetchLatestVersion,
 	pinnedVersion,
 } from "./downloader.js";
+import { buildTree } from "./layout.js";
 import { logger } from "../runtime/log.js";
 import { Target } from "./targets.js";
 
 export interface BuildRequest {
 	readonly target: Target;
 	readonly version?: string;
-	readonly outputDir: string;
 }
 
 // The Go toolchain resolves the agent by import path, so the source has to appear under
@@ -31,17 +31,16 @@ async function linkIntoGoPath(
 
 /** Fetches the source, prepares GOPATH, and builds every binary for one target. Throws on failure. */
 export async function buildAgents(request: BuildRequest): Promise<string[]> {
-	const { target, version, outputDir } = request;
+	const { target, version } = request;
 	const resolved =
 		version ?? (await pinnedVersion()) ?? (await fetchLatestVersion());
-	const buildDir = join(process.cwd(), "build", target.name);
-	const sourceDir = join(buildDir, "src");
+	const tree = buildTree(process.cwd(), target);
 
 	logger.info(`Building Datadog Agent ${resolved} for ${target.name}`);
-	await fetchAgentSource(resolved, sourceDir);
-	await linkIntoGoPath(join(buildDir, "go"), sourceDir);
+	await fetchAgentSource(resolved, tree.source);
+	await linkIntoGoPath(tree.goPath, tree.source);
 
-	return build({ target, sourceDir, outputDir });
+	return build({ target, sourceDir: tree.source, outputDir: tree.bin });
 }
 
 export * from "./downloader.js";

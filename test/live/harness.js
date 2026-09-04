@@ -19,7 +19,11 @@ import { basename, join } from "node:path";
 import { PACKAGE_NAME, resolveBinary } from "../../runtime/binary.js";
 import { REPO_ROOT } from "../support/generator.js";
 import { findFreePort } from "../support/loopback.js";
-import { driveTraffic as driveTrafficWith } from "../support/traffic.js";
+import {
+	FAKE_API_KEY,
+	driveTraffic as driveTrafficWith,
+	waitForDeliveredCount,
+} from "../support/traffic.js";
 
 const COMPONENT_NAME = basename(REPO_ROOT);
 
@@ -31,10 +35,6 @@ const { BINARIES } = await import(
 
 const ADMIN_USER = "LIVE_ADMIN";
 const ADMIN_PASS = "live-tier-2026";
-
-// Syntactically valid, not real. A wrong key still makes the trace-agent build and count real
-// payloads before the intake refuses them; an unset key disables the forwarder and proves nothing.
-const FAKE_API_KEY = "0".repeat(32);
 
 /**
  * One row per Harper line (and, later, per platform) this tier boots against. `moduleLoader` is
@@ -391,23 +391,19 @@ export async function readDelivery(handle) {
 }
 
 /**
- * Polls DatadogStatus until the real receiver reports exactly `count` traces delivered and the
- * verdict has left "idle" (a periodic stats bucket, not an on-write counter, so a fresh burst can
- * sit at the right count with a stale "idle" verdict for several seconds), or the deadline passes.
- * Returns the last status read, which is `undefined` only if DatadogStatus never answered at all.
+ * Polls DatadogStatus until the real receiver reports `count` traces delivered, or the deadline passes.
+ * Returns the last status read, which is `undefined` only if DatadogStatus never answered at all; a read
+ * that fails mid-poll keeps the previous status rather than discarding what the run already saw.
  */
 export async function waitForDelivery(handle, count, deadlineMs) {
-	const deadline = Date.now() + deadlineMs;
 	let status;
-	while (Date.now() < deadline) {
-		status = await readDelivery(handle).catch(() => status);
-		if (
-			status?.delivery?.receiver.tracesReceived === count &&
-			status.delivery.verdict !== "idle"
-		) {
-			return status;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 1000));
-	}
+	await waitForDeliveredCount(
+		async () => {
+			status = await readDelivery(handle).catch(() => status);
+			return status?.delivery;
+		},
+		count,
+		deadlineMs
+	);
 	return status;
 }

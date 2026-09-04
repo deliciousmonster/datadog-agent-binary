@@ -14,14 +14,29 @@ import { writeConfigFiles } from "./config.js";
 const supervisesNatively = (scope) =>
 	typeof scope?.processes?.start === "function";
 
-/** The state a supervisor never reached, in the shape both of them report. */
+// The state a supervisor never reached, in the shape both of them report. `started` is what answers "is it
+// running": `exited: false` here means it never ran, not that it still does.
 export const unstarted = (agent, error) => ({
 	name: agent.name,
 	title: agent.title,
 	kind: agent.kind,
 	started: false,
+	adopted: false,
+	exited: false,
+	restarts: 0,
 	error,
 });
+
+// What either supervisor publishes about the reaper. guard/src/index.js sets `error` both when the reaper
+// never started and when it started and only its lock write failed, so `started` is what tells those apart.
+const REAPER_FIELDS = ["name", "started", "adopted", "error"];
+const reaperStatus = (reaper) =>
+	reaper &&
+	Object.fromEntries(
+		REAPER_FIELDS.filter((field) => reaper[field] !== undefined).map(
+			(field) => [field, reaper[field]]
+		)
+	);
 
 // Symmetric with the guard path's own notes: an operator reading the boot log sees this line, and a
 // caller reading status.supervisionReport sees the same words, not just the absence of `kind: "guard"`.
@@ -69,7 +84,7 @@ const harperSupervisor = (scope, log) => ({
 		);
 		return {
 			processes,
-			reaper: scope.processes.reaper,
+			reaper: reaperStatus(scope.processes.reaper),
 			report: [GUARD_UNUSED_NOTE],
 		};
 	},
@@ -92,6 +107,9 @@ const guardSupervisor = (log, spawn) => ({
 				spawn,
 				log,
 				version: fingerprint(...fingerprintParts),
+				// What makes the fingerprint a replacement rather than a second lock holder: without it a rotated
+				// key leaves the old agent running under no lock, so not even the reaper below can stop it again.
+				stopOrphans: true,
 				processes: agents.map((agent) => ({
 					name: agent.name,
 					title: agent.title,
@@ -134,11 +152,7 @@ const guardSupervisor = (log, spawn) => ({
 				...state,
 				kind: agents[index].kind,
 			})),
-			reaper: result.reaper && {
-				name: result.reaper.name,
-				adopted: result.reaper.adopted,
-				...(result.reaper.error ? { error: result.reaper.error } : {}),
-			},
+			reaper: reaperStatus(result.reaper),
 			report: result.report,
 		};
 	},

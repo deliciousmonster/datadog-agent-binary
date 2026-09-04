@@ -4,6 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -459,6 +460,13 @@ test("where Harper has no processes.start, the bundled guard starts both agents 
 			"no reaper is running, so both agents outlive the node that started them"
 		);
 		assert.equal(status.reaper.name, REAPER);
+		// guard/src/index.js sets `error` both when the reaper never started and when it started and only
+		// its lock write failed, so without `started` this cannot be told from an absent reaper.
+		assert.equal(
+			status.reaper.started,
+			true,
+			`a reaper is running under ${pidDir} and the status cannot say so`
+		);
 
 		// The pid the guard really spawned is the one the verify was handed; a state assembled from the
 		// declaration rather than from the spawn would name something else here.
@@ -573,5 +581,91 @@ test("both supervisors report the same agents, started, under the same names", a
 		guarded.map((entry) => entry.started),
 		[true, true],
 		"a path that starts nothing would satisfy an equality check against another that starts nothing"
+	);
+});
+
+test("NEGATIVE: a core agent whose state carries no pid is not reported stale against `undefined`", async () => {
+	// Every guard attempt that fails before a spawn leaves state.pid undefined (guard/src/supervise.js:155),
+	// and guard/src/index.js verifies those states anyway.
+	await withAgentsAnswering(
+		{ info: SERVING, expvar: CORE_EXPVAR },
+		async () => {
+			const scope = recordingScope({ state: { pid: undefined } });
+			const { status } = await withBuiltBinaries(() => start(scope));
+			const core = status.processes.find((state) => state.kind === "core");
+
+			assert.equal(
+				core.verified,
+				true,
+				`a core agent publishing aggregator and forwarder was refused: ${core.verifyDetail}`
+			);
+			assert.doesNotMatch(
+				core.verifyDetail,
+				/undefined/,
+				`the verdict compared the answering pid against a pid nobody holds, and sends the operator to delete a live agent's lock: ${core.verifyDetail}`
+			);
+		}
+	);
+});
+
+/**
+ * A guard lock naming a live process under a fingerprint this node cannot reproduce, which is what a
+ * rotated DD_API_KEY leaves behind. `sleep` rather than a shell-script stub because the interpreter takes
+ * over a shebang script's command line, and the command line is the whole identification.
+ */
+function plantOrphanLock(pidDir, name, pid) {
+	fs.mkdirSync(pidDir, { recursive: true });
+	const record = {
+		token: "an-earlier-configuration",
+		host: process.pid,
+		argv: ["sleep", "300"],
+	};
+	fs.writeFileSync(
+		lockFile(pidDir, name),
+		`${pid}\n1\n${JSON.stringify(record)}\n`
+	);
+}
+
+test("an agent still running under a configuration this node no longer has is stopped, not left holding the ports", async () => {
+	await withAgentsAnswering(
+		{ info: SERVING, expvar: CORE_EXPVAR },
+		async ({ root }) => {
+			const pidDir = path.join(root, "datadog", APP_NAME, "pids");
+			const orphan = spawn("sleep", ["300"], { stdio: "ignore" });
+			plantOrphanLock(pidDir, CORE_AGENT, orphan.pid);
+
+			let status;
+			try {
+				({ status } = await withBuiltBinaries(() => start({}), STAYS_UP));
+
+				// The whole point of folding the credentials into the fingerprint: left running, the old agent
+				// keeps posting under the old key and holds the ports its replacement needs, and once the lock
+				// names the replacement instead, not even the reaper can find it again.
+				assert.equal(
+					alive(orphan.pid),
+					false,
+					`pid ${orphan.pid} survived a start under a fingerprint it does not match`
+				);
+
+				const core = status.processes.find(
+					(entry) => entry.name === CORE_AGENT
+				);
+				assert.notEqual(core.pid, orphan.pid);
+				assert.equal(
+					lockedPid(pidDir, CORE_AGENT),
+					core.pid,
+					"the replacement did not end up holding the lock the orphan left"
+				);
+				assert.ok(
+					status.supervisionReport?.some((line) => /stopped pid/.test(line)),
+					`the stop must reach an operator reading the status: ${JSON.stringify(status.supervisionReport)}`
+				);
+			} finally {
+				halt(orphan.pid);
+				for (const state of status?.processes ?? []) halt(state.pid);
+				halt(lockedPid(pidDir, REAPER));
+				await waitForLocksCleared(pidDir, BOTH_AGENTS);
+			}
+		}
 	);
 });
