@@ -176,9 +176,12 @@ jobs:
       # MOD-16's equivalence property (harperSupervisor and guardSupervisor deliver the same trace
       # count for the same input) against these same real binaries, on every leg this matrix builds -
       # not just wherever a developer happens to have the locally-patched Harper test/live/ needs.
+      #
+      # Calls node --test directly, not `npm run test:binaries`: that script's own `npm run
+      # build` prefix would recompile dist/ from scratch, already current from the step above.
       - name: Supervision equivalence test (native vs guard, real binaries)
         shell: bash
-        run: npm run test:binaries
+        run: node --test "test/binaries/**/*.test.js"
 
       # Guard against the symbol floor creeping back up. The Harper Pro runtime
       # image (Debian 12) provides glibc 2.36 (libc.so.6) AND libstdc++

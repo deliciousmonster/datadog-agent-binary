@@ -16,6 +16,17 @@ export function findFreePort() {
 	});
 }
 
+/** The five ports one agent-binary boot needs, each free right now. Shared so a fixture and its smoke-test sibling can't drift on the set. */
+export async function freshPorts() {
+	return {
+		receiver: await findFreePort(),
+		expvar: await findFreePort(),
+		debug: await findFreePort(),
+		dogstatsd: await findFreePort(),
+		cmd: await findFreePort(),
+	};
+}
+
 /** `run` against a server listening on an ephemeral 127.0.0.1 port, closed however `run` ends. */
 export async function withServer(server, run) {
 	const port = await new Promise((resolve) =>

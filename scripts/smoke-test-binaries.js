@@ -13,7 +13,7 @@ import { currentTarget } from "../dist/src/targets.js";
 import { debugVarsUrl } from "../runtime/delivery.js";
 import { writeConfigFiles } from "../runtime/config.js";
 import { receiverInfoUrl, verifyLaunch } from "../runtime/verify.js";
-import { findFreePort } from "../test/support/loopback.js";
+import { freshPorts } from "../test/support/loopback.js";
 
 const REPO_ROOT = join(import.meta.dirname, "..");
 
@@ -185,13 +185,7 @@ async function main() {
 
 	const restoreBuildTree = hideBuildTree(binDir);
 	const rootDir = mkdtempSync(join(tmpdir(), "dd-smoke-test-"));
-	const ports = {
-		receiver: await findFreePort(),
-		expvar: await findFreePort(),
-		debug: await findFreePort(),
-		dogstatsd: await findFreePort(),
-		cmd: await findFreePort(),
-	};
+	const ports = await freshPorts();
 
 	process.env.DD_API_KEY = FAKE_API_KEY;
 	process.env.DD_SITE = process.env.DD_SITE || "datadoghq.com";

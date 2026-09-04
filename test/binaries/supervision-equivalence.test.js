@@ -19,7 +19,7 @@ import {
 	withRealBinaries,
 } from "../support/component.js";
 import { withEnvs, withTempDir } from "../support/sandbox.js";
-import { findFreePort } from "../support/loopback.js";
+import { freshPorts } from "../support/loopback.js";
 
 // prepareRuntime nests the runtime tree under the component's own directory name; the guard's pid
 // lock directory sits under that, same as test/component/supervisor-start.test.js's own layout.
@@ -35,16 +35,6 @@ const DELIVERY_DEADLINE_MS = 60_000;
 // Syntactically valid, not real: same reasoning as test/live/harness.js's own FAKE_API_KEY. A wrong
 // key still makes the trace-agent build and count real payloads before the intake refuses them.
 const FAKE_API_KEY = "0".repeat(32);
-
-async function freshPorts() {
-	return {
-		receiver: await findFreePort(),
-		expvar: await findFreePort(),
-		debug: await findFreePort(),
-		dogstatsd: await findFreePort(),
-		cmd: await findFreePort(),
-	};
-}
 
 // dd-trace initialises once per process, so this runs in a throwaway child - the same shape as
 // test/live/harness.js's own TRAFFIC_SCRIPT, kept as this file's own copy rather than an import so
@@ -125,7 +115,7 @@ async function waitForDeliveredCount(readSignal, count, deadlineMs) {
 }
 
 /**
- * Boots resources.js against `makeScope()`, drives SPAN_COUNT real spans through the real trace-agent
+ * Boots resources.js against `makeScope(root)`, drives SPAN_COUNT real spans through the real trace-agent
  * it starts, and reads the delivered count back through the component's own readDeliverySignal. Every
  * real process this starts - both agents, and the guard's reaper where there is one - is stopped
  * before this returns.
@@ -133,7 +123,7 @@ async function waitForDeliveredCount(readSignal, count, deadlineMs) {
 async function bootDriveAndRead(makeScope) {
 	return withTempDir("dd-equivalence-", async (root) => {
 		const ports = await freshPorts();
-		const scope = makeScope();
+		const scope = makeScope(root);
 		return withEnvs(
 			{
 				ROOTPATH: root,
@@ -169,8 +159,16 @@ async function bootDriveAndRead(makeScope) {
 
 					return { supervision: status.supervision, delivered };
 				} finally {
-					for (const child of scope.children ?? []) halt(child.pid);
-					for (const entry of status?.processes ?? []) halt(entry.pid);
+					// For the native row, status.processes carries the exact pids already in
+					// scope.children; haltedPids keeps that overlap from a second, redundant SIGTERM.
+					const haltedPids = new Set();
+					for (const child of scope.children ?? []) {
+						halt(child.pid);
+						haltedPids.add(child.pid);
+					}
+					for (const entry of status?.processes ?? []) {
+						if (!haltedPids.has(entry.pid)) halt(entry.pid);
+					}
 					if (status?.supervision === "guard") {
 						const pidDir = path.join(root, "datadog", APP_NAME, "pids");
 						halt(lockedPid(pidDir, REAPER));
@@ -185,7 +183,9 @@ async function bootDriveAndRead(makeScope) {
 const ROWS = [
 	{
 		name: "harperSupervisor: native scope.processes (realistic fake Scope, real binaries)",
-		makeScope: nativeScope,
+		// logDir: the same per-boot root bootDriveAndRead already tears down, so each agent's log
+		// lands and is cleaned up alongside everything else that boot wrote.
+		makeScope: (root) => nativeScope({ logDir: root }),
 		expectedSupervision: "harper",
 	},
 	{
@@ -200,6 +200,8 @@ const ROWS = [
 // comparison test treats as its own failure rather than silently skipping it.
 const deliveredByRow = new Map();
 
+// Deliberately skips hideBuildTree: that precaution catches a binary still linked to its build
+// tree, a different property from the supervision equivalence this file proves.
 for (const row of ROWS) {
 	test(`${row.name}: ${SPAN_COUNT} real spans land in the real trace-agent and are read back via readDeliverySignal`, async () => {
 		await withRealBinaries(async () => {

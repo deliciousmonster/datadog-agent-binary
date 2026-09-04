@@ -175,9 +175,11 @@ export const startFor = (scope, name) =>
  * Harper's native supervision, for real: unlike recordingScope's fabricated pid, this spawns
  * descriptor.command for real, writes descriptor.configFiles for real, and calls descriptor.verify
  * against the real child, so a real trace-agent/core-agent binary really has to bind its real port.
- * Every child lands on `.children` so a caller's teardown can stop them all.
+ * Every child lands on `.children` so a caller's teardown can stop them all. `logDir` is where each
+ * child's stdout/stderr goes, since nothing here reads those streams and an unread pipe can stall a
+ * chatty binary's own write() - the same gap test/live/harness.js's own real-spawn site closes.
  */
-export function nativeScope() {
+export function nativeScope({ logDir }) {
 	const children = [];
 	return {
 		children,
@@ -187,9 +189,16 @@ export function nativeScope() {
 			reaper: null,
 			async start(descriptor) {
 				writeConfigFiles(descriptor.configFiles, console);
+				const logFd = fs.openSync(
+					path.join(logDir, `${descriptor.name}.log`),
+					"a"
+				);
 				const child = spawn(descriptor.command, descriptor.args, {
-					stdio: ["ignore", "pipe", "pipe"],
+					stdio: ["ignore", logFd, logFd],
 				});
+				// The child's dup2'd copy survives this: closing the parent's own fd frees it without
+				// touching whatever the child now holds open on the same file.
+				fs.closeSync(logFd);
 				children.push(child);
 				const state = {
 					name: descriptor.name,
@@ -200,6 +209,11 @@ export function nativeScope() {
 					exited: false,
 					adopted: false,
 				};
+				// An unhandled 'error' event crashes the process (guard/src/index.js:128,
+				// guard/src/supervise.js:195,211); reported the same way the 'exit' listener below does.
+				child.on("error", () => {
+					state.exited = true;
+				});
 				// Mutated in place: descriptor.verify's giveUp() reads this same object mid-poll, so a
 				// death after start() returns still has to reach it, not a snapshot taken before it.
 				child.on("exit", (code, signal) => {

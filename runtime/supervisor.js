@@ -111,18 +111,21 @@ const guardSupervisor = (log, spawn) => ({
 				},
 			});
 		} catch (error) {
-			// guard() already isolates a claimLock/preflight/spawn failure per agent inside its own loop; only
-			// an unguarded commitLock write can throw past that, and it takes both agents down in one rejection.
+			// guard() catches claimLock, preflight, ctx.spawn(), and every commitLock/releaseLock write
+			// internally, so none of those reach here. What still can: guard/src/supervise.js calls
+			// child.on('error', ...) right after a successful ctx.spawn() returns, with no try/catch around
+			// that call. spawn here is Harper's own constrained one, not node's plain child_process.spawn, so
+			// a return value that is not a real EventEmitter throws synchronously there and rejects this whole
+			// call - one error for both agents, not a verdict about either agent's binary.
 			const message = error instanceof Error ? error.message : String(error);
 			log.error(
 				`Datadog supervisor: the guard call for both agents threw: ${error.stack ?? message}`
 			);
 			return {
-				// Same translation harperSupervisor's per-agent catch gets, keyed to each agent's own binary:
-				// guard's own error text can't name ENOEXEC/EACCES/ENOENT any better, but this side can.
-				processes: agents.map((agent) =>
-					unstarted(agent, describeSpawnFailure(error, agent.command))
-				),
+				// Not describeSpawnFailure: its ENOEXEC/EACCES/ENOENT translations are harperSupervisor's
+				// per-agent contract, where the error IS that one agent's own spawn rejection. Here the cause
+				// is unproven to be about either binary, so both agents get the same raw message.
+				processes: agents.map((agent) => unstarted(agent, message)),
 				report: [message],
 			};
 		}

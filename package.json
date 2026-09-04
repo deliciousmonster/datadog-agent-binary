@@ -24,7 +24,7 @@
 		"version": "npm run update-optional-deps",
 		"test": "npm run build && node --test \"test/component/**/*.test.js\" \"test/e2e/**/*.test.js\"",
 		"test:live": "npm run build && node --test \"test/live/**/*.test.js\"",
-		"// test:binaries": "needs real binaries at build/<platform>/bin (npm run build-agent); not in `test`, same reason test/live/ isn't",
+		"// test:binaries": "requires real binaries already built at build/<platform>/bin, from a prior `npm run build-agent` or a CI step that already built them; this script itself only runs `npm run build` (tsc), same as test:live for the same real-binaries dependency; excluded from `test` for that reason",
 		"test:binaries": "npm run build && node --test \"test/binaries/**/*.test.js\""
 	},
 	"keywords": [
