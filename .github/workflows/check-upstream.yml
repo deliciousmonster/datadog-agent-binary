@@ -7,10 +7,6 @@ on:
   #- cron: "0 10 * * *"
   workflow_dispatch:
 
-env:
-  # Same repo-level Actions variable build-release.yml uses; see that file's env block.
-  NODE_VERSION: ${{ vars.NODE_VERSION }}
-
 jobs:
   check-upstream:
     runs-on: ubuntu-latest
@@ -27,7 +23,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          # Reads package.json's engines.node, the one already-checked-in source of truth - no
+          # separate Actions variable to keep in sync with it.
+          node-version-file: "package.json"
           cache: "npm"
 
       # Not --omit optional: TypeScript 7 ships its compiler as a platform-specific optional
