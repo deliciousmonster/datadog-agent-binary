@@ -90,8 +90,17 @@ async function withResolveBinaryLock(run) {
 	}
 }
 
+/** Every body this module writes as a stub. A real agent is tens of megabytes and matches none of them. */
+const STUB_BODIES = new Set([EXITS_AT_ONCE, STAYS_UP]);
+
+/** Whether `file` is a stub this module left behind, and so safe to discard rather than a real build. */
+function isFixtureStub(file) {
+	const { size } = fs.statSync(file);
+	return size <= 256 && STUB_BODIES.has(fs.readFileSync(file, "utf8"));
+}
+
 /** Where a dev checkout's `npm run build-agent` leaves each agent, which is also where stubs go. */
-function builtBinaryPaths() {
+export function builtBinaryPaths() {
 	const target = currentTarget();
 	const binDir = path.join(REPO_ROOT, "build", target.name, "bin");
 	return {
@@ -103,18 +112,23 @@ function builtBinaryPaths() {
 }
 
 /**
- * Whatever real binaries sit at build/<platform>/bin moved aside, and the restore that puts them back.
- * A rename, so a 139MB agent costs the same as an empty file and the mode rides along with the inode;
- * copying the bytes back would drop the exec bit and leave an agent nothing can spawn.
+ * Whatever sits at `files` moved aside, and the restore that puts it back. A rename, so a 139MB agent
+ * costs the same as an empty file and the mode rides along with the inode; copying the bytes back would
+ * drop the exec bit and leave an agent nothing can spawn. Takes its paths so a test can drive it against
+ * a temp dir rather than having to stage an interrupted run over a developer's real build.
  */
-export function hideBuiltBinaries() {
-	const { files } = builtBinaryPaths();
+export function hideFiles(files) {
 	const hidden = files.map((file) => `${file}.hidden-by-fixture`);
 	files.forEach((file, index) => {
-		// A run killed between the rename below and its restore (a suite timeout, not a caught throw)
-		// leaves the hidden copy behind with the real path empty; recover it before hiding anything.
-		if (fs.existsSync(hidden[index]) && !fs.existsSync(file))
+		// A run killed before its restore leaves the hidden copy behind, with either nothing at the real
+		// path or the stub it died holding. Both are ours to discard; anything else is a build made since.
+		if (
+			fs.existsSync(hidden[index]) &&
+			(!fs.existsSync(file) || isFixtureStub(file))
+		) {
+			fs.rmSync(file, { force: true });
 			fs.renameSync(hidden[index], file);
+		}
 		if (fs.existsSync(file)) fs.renameSync(file, hidden[index]);
 	});
 	return () =>
@@ -123,6 +137,9 @@ export function hideBuiltBinaries() {
 			if (fs.existsSync(hidden[index])) fs.renameSync(hidden[index], file);
 		});
 }
+
+/** {@link hideFiles} over whatever a real `npm run build-agent` left at build/<platform>/bin. */
+export const hideBuiltBinaries = () => hideFiles(builtBinaryPaths().files);
 
 /**
  * Both agent binaries where resources.js looks for a dev checkout's build output, for the duration of

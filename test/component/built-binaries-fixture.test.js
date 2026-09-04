@@ -1,6 +1,7 @@
 // withBuiltBinaries writes stubs at build/<platform>/bin, the same paths `npm run build-agent` puts the
-// real agents at. What it does with what was already there decides whether running this suite destroys a
-// real build, so that is asserted here rather than left to whoever notices their binaries are gone.
+// real agents at, so what it does with what was already there decides whether running this suite destroys
+// a developer's build. The hide-and-restore that protects them is driven here against a temp directory:
+// staging an interrupted run over the real paths is the very hazard this file exists to keep out.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -8,136 +9,164 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
-	acquireResolveBinaryLock,
+	builtBinaryPaths,
+	hideFiles,
 	withBuiltBinaries,
-	REPO_ROOT,
 	STAYS_UP,
 } from "../support/component.js";
-import { BINARIES, currentTarget } from "../support/generator.js";
+import { withTempDir } from "../support/sandbox.js";
 
-const target = currentTarget();
-const binDir = path.join(REPO_ROOT, "build", target.name, "bin");
-const files = BINARIES.map((binary) =>
-	path.join(binDir, `${binary.shipsAs}${target.exe}`)
-);
+const HIDDEN = ".hidden-by-fixture";
 
-/** Distinct per binary, so a restore that puts the wrong file back is caught rather than averaged out. */
-const realBytes = (file) =>
-	`#!/bin/sh\n# real ${path.basename(file)}\nexit 7\n`;
+/** Identity that survives a rename and not a rewrite, so a restored file is told from a recreated one. */
+const identity = (file) => {
+	const { ino, size, mode } = fs.statSync(file);
+	return { ino, size, mode };
+};
 
-/**
- * `run` with the lock held, so no concurrent withBuiltBinaries can have these paths renamed aside at the
- * moment this reads them. Planting and asserting are what need it; withBuiltBinaries takes it itself.
- */
-async function underLock(run) {
-	const release = await acquireResolveBinaryLock();
-	try {
-		return run();
-	} finally {
-		release();
-	}
-}
+const writeExecutable = (file, body) => {
+	fs.writeFileSync(file, body);
+	fs.chmodSync(file, 0o755);
+};
 
-/**
- * A developer's real build stashed under a suffix of this file's own, then put back byte-for-byte and
- * mode-for-mode. Renamed rather than copied: reading 139MB back through writeFileSync drops the exec bit.
- */
-function stashRealBuild() {
-	const stashed = files.map((file) => `${file}.fixture-test-stash`);
+test("hideFiles gives back the same file, not a copy of it", () =>
+	withTempDir("hide-files-", async (dir) => {
+		const file = path.join(dir, "agent");
+		writeExecutable(file, "#!/bin/sh\nexit 0\n");
+		const before = identity(file);
+
+		const restore = hideFiles([file]);
+		assert.ok(
+			!fs.existsSync(file),
+			"the path was not cleared, so a caller writing a stub would overwrite the original"
+		);
+		writeExecutable(file, STAYS_UP);
+		restore();
+
+		assert.deepEqual(
+			identity(file),
+			before,
+			"the file came back rewritten rather than renamed, which loses the mode and rewrites 139MB"
+		);
+	}));
+
+test("hideFiles leaves a path that held nothing holding nothing", () =>
+	withTempDir("hide-files-", async (dir) => {
+		const file = path.join(dir, "agent");
+
+		const restore = hideFiles([file]);
+		writeExecutable(file, STAYS_UP);
+		restore();
+
+		assert.ok(
+			!fs.existsSync(file),
+			"a stub was left behind at a path that started empty"
+		);
+	}));
+
+test("NEGATIVE: hideFiles recovers a build stranded by an interrupted run", () =>
+	withTempDir("hide-files-", async (dir) => {
+		const file = path.join(dir, "agent");
+		// Exactly what a killed run leaves: renamed aside, never restored, the real path empty.
+		writeExecutable(`${file}${HIDDEN}`, "#!/bin/sh\nexit 0\n");
+		const stranded = identity(`${file}${HIDDEN}`);
+
+		const restore = hideFiles([file]);
+		restore();
+
+		assert.deepEqual(
+			identity(file),
+			stranded,
+			"the stranded build was not recovered to its real path"
+		);
+		assert.ok(
+			!fs.existsSync(`${file}${HIDDEN}`),
+			"the hidden copy was left behind to strand the next run too"
+		);
+	}));
+
+test("NEGATIVE: a run killed holding its stub does not cost the build stashed beside it", () =>
+	withTempDir("hide-files-", async (dir) => {
+		// The sharp case: killed after the stub was written, so the real path holds the stub and the build
+		// sits at the hidden copy. Hiding the stub over it is what silently destroys the build.
+		const file = path.join(dir, "agent");
+		writeExecutable(
+			`${file}${HIDDEN}`,
+			"#!/bin/sh\n# the real build\nexit 0\n"
+		);
+		const real = identity(`${file}${HIDDEN}`);
+		writeExecutable(file, STAYS_UP);
+
+		const restore = hideFiles([file]);
+		writeExecutable(file, STAYS_UP);
+		restore();
+
+		assert.deepEqual(
+			identity(file),
+			real,
+			"the stub was hidden over the real build, which is now gone with nothing naming it"
+		);
+	}));
+
+test("NEGATIVE: hideFiles does not promote a leftover copy over a file that is already there", () =>
+	withTempDir("hide-files-", async (dir) => {
+		// The dangerous shape: something at the real path AND a leftover beside it. Preferring the leftover
+		// would overwrite a real build with whatever an interrupted run happened to leave.
+		const file = path.join(dir, "agent");
+		writeExecutable(file, "#!/bin/sh\n# the real one\nexit 0\n");
+		const real = identity(file);
+		writeExecutable(`${file}${HIDDEN}`, "#!/bin/sh\n# a leftover\nexit 7\n");
+
+		const restore = hideFiles([file]);
+		restore();
+
+		assert.deepEqual(
+			identity(file),
+			real,
+			"a leftover copy displaced the file that was actually there"
+		);
+	}));
+
+test("withBuiltBinaries puts back what it found at build/<platform>/bin", async (t) => {
+	// Only ever runs against a directory it found empty, and only on files it planted there itself. A real
+	// build is left strictly alone: exercising this fixture is what deletes binaries when it misbehaves, so
+	// a version of this test that ran over one would destroy the developer's build to prove it should not.
+	const { binDir, files } = builtBinaryPaths();
 	fs.mkdirSync(binDir, { recursive: true });
-	const present = files.map((file, index) => {
-		if (!fs.existsSync(file)) return false;
-		fs.renameSync(file, stashed[index]);
-		return true;
-	});
-	return () =>
-		files.forEach((file, index) => {
-			fs.rmSync(file, { force: true });
-			if (present[index]) fs.renameSync(stashed[index], file);
-		});
-}
-
-/** A planted stand-in for a real build: distinct bytes, and the exec bit a spawned agent needs. */
-function plantFakeBuild() {
-	for (const file of files) {
-		fs.writeFileSync(file, realBytes(file));
-		fs.chmodSync(file, 0o755);
+	const occupied = files.filter((file) => fs.existsSync(file));
+	if (occupied.length) {
+		t.skip(
+			`a real build is at ${binDir}; the hide-and-restore itself is covered against a temp dir above`
+		);
+		return;
 	}
-}
-
-test("a real build already at build/<platform>/bin survives the stub fixture that writes over it", async () => {
-	const unstash = await underLock(() => {
-		const undo = stashRealBuild();
-		plantFakeBuild();
-		return undo;
-	});
+	const planted = files;
+	for (const file of planted) writeExecutable(file, "#!/bin/sh\nexit 0\n");
+	const before = files.map(identity);
 
 	try {
 		const seen = await withBuiltBinaries(
 			async (stubs) => stubs.map((stub) => fs.readFileSync(stub, "utf8")),
 			STAYS_UP
 		);
-		// Without this the fixture could have been handing back the planted files rather than its own
-		// stubs, and the restore asserted below would pass while proving nothing.
+		// Without this the fixture could have handed back what was already there rather than its own
+		// stubs, and the survival asserted below would hold while proving nothing.
 		for (const body of seen) {
 			assert.equal(body, STAYS_UP, "the fixture did not write its own stub");
 		}
 
-		await underLock(() => {
-			for (const file of files) {
-				assert.ok(
-					fs.existsSync(file),
-					`${path.basename(file)} was deleted by the fixture instead of put back`
-				);
-				assert.equal(
-					fs.readFileSync(file, "utf8"),
-					realBytes(file),
-					`${path.basename(file)} came back as different bytes`
-				);
-				assert.ok(
-					fs.statSync(file).mode & 0o111,
-					`${path.basename(file)} came back without its exec bit, so nothing can spawn it`
-				);
-			}
+		files.forEach((file, index) => {
+			assert.ok(
+				fs.existsSync(file),
+				`${path.basename(file)} was deleted by the fixture instead of put back`
+			);
+			assert.deepEqual(
+				identity(file),
+				before[index],
+				`${path.basename(file)} came back as a different file, so a real build would have been lost`
+			);
 		});
 	} finally {
-		await underLock(unstash);
-	}
-});
-
-test("NEGATIVE: a fixture killed mid-run leaves the real binary recoverable, not stranded", async () => {
-	const unstash = await underLock(() => stashRealBuild());
-
-	try {
-		// Exactly what a suite timeout leaves behind: renamed aside, never restored, the real path empty.
-		await underLock(() => {
-			for (const file of files) {
-				fs.writeFileSync(`${file}.hidden-by-fixture`, realBytes(file));
-				fs.rmSync(file, { force: true });
-			}
-		});
-
-		await withBuiltBinaries(async () => {}, STAYS_UP);
-
-		await underLock(() => {
-			for (const file of files) {
-				assert.equal(
-					fs.readFileSync(file, "utf8"),
-					realBytes(file),
-					`${path.basename(file)} was not recovered from an interrupted prior run`
-				);
-				assert.ok(
-					!fs.existsSync(`${file}.hidden-by-fixture`),
-					`${path.basename(file)} left its hidden copy behind`
-				);
-			}
-		});
-	} finally {
-		await underLock(() => {
-			for (const file of files) {
-				fs.rmSync(`${file}.hidden-by-fixture`, { force: true });
-			}
-			unstash();
-		});
+		for (const file of planted) fs.rmSync(file, { force: true });
 	}
 });
