@@ -1,6 +1,7 @@
 // Loading and driving resources.js the way Harper does. The module keeps per-thread start state and reads
 // its ports once at load, so a suite that varies either needs its own instance rather than a shared import.
 
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,6 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { createRequire } from "node:module";
 
+import { writeConfigFiles } from "../../runtime/config.js";
 import { withEnvs } from "./sandbox.js";
 
 const require = createRequire(import.meta.url);
@@ -114,6 +116,29 @@ export async function withBuiltBinaries(run, body = EXITS_AT_ONCE) {
 }
 
 /**
+ * The real agent binaries already at build/<platform>/bin, under the same exclusive lock
+ * withBuiltBinaries takes. Unlike that fixture, nothing here writes them: the trace-agent and the core
+ * agent are different bytes, so one `body` could never stand in for both, and `npm run build-agent`
+ * is what has to have put them there first.
+ */
+export async function withRealBinaries(run) {
+	return withResolveBinaryLock(async () => {
+		const target = currentTarget();
+		const binDir = path.join(REPO_ROOT, "build", target.name, "bin");
+		const files = BINARIES.map((binary) =>
+			path.join(binDir, `${binary.shipsAs}${target.exe}`)
+		);
+		const missing = files.filter((file) => !fs.existsSync(file));
+		if (missing.length) {
+			throw new Error(
+				`real agent binaries are missing: ${missing.join(", ")}. Run \`npm run build-agent\` first.`
+			);
+		}
+		return run(files);
+	});
+}
+
+/**
  * Harper's process sidecar, recorded. `verify` runs against `state`, so a suite sets the state a real
  * Harper would report and reads back the verdict the component reached from it.
  */
@@ -145,6 +170,49 @@ export function recordingScope({ state = {} } = {}) {
 /** The start options recorded for one agent, by the spawn name Harper locks on. */
 export const startFor = (scope, name) =>
 	scope.starts.find((options) => options.name === name);
+
+/**
+ * Harper's native supervision, for real: unlike recordingScope's fabricated pid, this spawns
+ * descriptor.command for real, writes descriptor.configFiles for real, and calls descriptor.verify
+ * against the real child, so a real trace-agent/core-agent binary really has to bind its real port.
+ * Every child lands on `.children` so a caller's teardown can stop them all.
+ */
+export function nativeScope() {
+	const children = [];
+	return {
+		children,
+		processes: {
+			// A real Harper reaper would sit here; explicit null says this fixture never runs one,
+			// rather than leaving harperSupervisor to read an accidental `undefined`.
+			reaper: null,
+			async start(descriptor) {
+				writeConfigFiles(descriptor.configFiles, console);
+				const child = spawn(descriptor.command, descriptor.args, {
+					stdio: ["ignore", "pipe", "pipe"],
+				});
+				children.push(child);
+				const state = {
+					name: descriptor.name,
+					title: descriptor.title,
+					command: descriptor.command,
+					started: true,
+					pid: child.pid,
+					exited: false,
+					adopted: false,
+				};
+				// Mutated in place: descriptor.verify's giveUp() reads this same object mid-poll, so a
+				// death after start() returns still has to reach it, not a snapshot taken before it.
+				child.on("exit", (code, signal) => {
+					state.exited = true;
+					state.code = code;
+					state.signal = signal;
+				});
+				const verdict = await descriptor.verify(state);
+				return { ...state, verified: verdict.ok, verifyDetail: verdict.detail };
+			},
+		},
+	};
+}
 
 /** Start the component against a scope and hand back the recorded starts plus the status resource. */
 export async function start(scope, componentEnv = {}) {

@@ -173,6 +173,13 @@ jobs:
         shell: bash
         run: node scripts/smoke-test-binaries.js "build/${{ matrix.platform }}/bin"
 
+      # MOD-16's equivalence property (harperSupervisor and guardSupervisor deliver the same trace
+      # count for the same input) against these same real binaries, on every leg this matrix builds -
+      # not just wherever a developer happens to have the locally-patched Harper test/live/ needs.
+      - name: Supervision equivalence test (native vs guard, real binaries)
+        shell: bash
+        run: npm run test:binaries
+
       # Guard against the symbol floor creeping back up. The Harper Pro runtime
       # image (Debian 12) provides glibc 2.36 (libc.so.6) AND libstdc++
       # GLIBCXX_3.4.30 (from GCC 12). These are two SEPARATE libraries: the
