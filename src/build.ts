@@ -50,6 +50,7 @@ function run(
 	logger.debug(`${command} ${args.join(" ")}`);
 	const timeoutMs = options.timeoutMs ?? BUILD_TIMEOUT_MS;
 	return new Promise((fulfil, reject) => {
+		const startedAt = Date.now();
 		const child = spawn(command, args, {
 			cwd,
 			env,
@@ -61,8 +62,8 @@ function run(
 			output += chunk;
 		});
 		child.on("error", reject);
-		// A timeout kills the child rather than raising, so it arrives here with a null code and the
-		// kill signal; reporting only the code names neither the deadline nor what ended the build.
+		// A timeout kills the child rather than raising, so it arrives here as a null code and a kill
+		// signal - as does an OOM kill or a cancelled job. Only the elapsed time tells the three apart.
 		child.on("close", (code, signal) =>
 			code === 0
 				? fulfil(output)
@@ -70,7 +71,7 @@ function run(
 						new Error(
 							`${command} ${args.join(" ")} ${
 								signal
-									? `was killed by ${signal} (timeout ${timeoutMs}ms)`
+									? `was killed by ${signal} ${Date.now() - startedAt}ms into a ${timeoutMs}ms budget`
 									: `exited ${code}`
 							}`
 						)

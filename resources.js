@@ -141,9 +141,12 @@ async function startAgents(scope) {
 	};
 	try {
 		if (!process.env.DD_API_KEY) {
+			// Measured on 7.82.1 rather than inferred from one shared config: the two agents fail differently.
 			log.warn(
-				"Datadog supervisor: DD_API_KEY is not set. Both agents will start and the trace-agent will " +
-					"accept spans, but the intake rejects the payloads. Nothing will appear in Datadog."
+				"Datadog supervisor: DD_API_KEY is not set. The core agent starts and collects, and the intake " +
+					"refuses every payload it sends with a 403. The trace-agent does not start at all: it exits " +
+					'immediately with "you must specify an API Key", so nothing binds the receiver, the supervisor ' +
+					"restarts it until it gives up, and dd-trace has nowhere to send spans."
 			);
 		}
 

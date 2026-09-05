@@ -38,6 +38,15 @@ const reaperStatus = (reaper) =>
 		)
 	);
 
+// Mutated, never copied: the guard writes this same object for the life of the node - a death, a restart,
+// a give-up - and a copy taken here freezes the status endpoint on what was true at boot.
+const identify = (state, agent) =>
+	Object.assign(state, {
+		name: agent.name,
+		title: agent.title,
+		kind: agent.kind,
+	});
+
 // Symmetric with the guard path's own notes: an operator reading the boot log sees this line, and a
 // caller reading status.supervisionReport sees the same words, not just the absence of `kind: "guard"`.
 const GUARD_UNUSED_NOTE =
@@ -70,12 +79,7 @@ const harperSupervisor = (scope, log) => ({
 								`Datadog supervisor: the ${agent.title} started but did not verify: ${state.verifyDetail ?? "no detail"}`
 							);
 						}
-						return {
-							name: agent.name,
-							title: agent.title,
-							...state,
-							kind: agent.kind,
-						};
+						return identify(state, agent);
 					})
 					.catch((error) =>
 						unstarted(agent, describeSpawnFailure(error, agent.command))
@@ -135,7 +139,12 @@ const guardSupervisor = (log, spawn) => ({
 			// that call. spawn here is Harper's own constrained one, not node's plain child_process.spawn, so
 			// a return value that is not a real EventEmitter throws synchronously there and rejects this whole
 			// call - one error for both agents, not a verdict about either agent's binary.
-			const message = error instanceof Error ? error.message : String(error);
+			// guard() starts the agents in order and rejects out of the one it was on, so an agent before it
+			// in the list is running, holding a committed lock, with no reaper and nothing left watching it.
+			const message =
+				`${error instanceof Error ? error.message : String(error)}. Neither agent is reported ` +
+				`started because the call threw before it reported either; an agent it had already spawned ` +
+				`is still running unsupervised, under a lock in ${runtime.paths.pidDir}`;
 			log.error(
 				`Datadog supervisor: the guard call for both agents threw: ${error.stack ?? message}`
 			);
@@ -148,10 +157,9 @@ const guardSupervisor = (log, spawn) => ({
 			};
 		}
 		return {
-			processes: result.processes.map((state, index) => ({
-				...state,
-				kind: agents[index].kind,
-			})),
+			processes: result.processes.map((state, index) =>
+				identify(state, agents[index])
+			),
 			reaper: reaperStatus(result.reaper),
 			report: result.report,
 		};

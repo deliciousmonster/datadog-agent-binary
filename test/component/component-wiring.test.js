@@ -178,12 +178,18 @@ test("the runtime tree comes from Harper, not from a variable this package inven
 		const runtime = await withEnvs({ ROOTPATH: relative }, () =>
 			withHome(home, () => prepareRuntime())
 		);
+		// Read and removed ahead of both assertions: this tree is what a broken guard builds under the repo
+		// root, and leaving it behind fails every later run of the corrected code.
+		const leaked = path.join(process.cwd(), relative);
+		const built = fs.existsSync(leaked);
+		fs.rmSync(leaked, { recursive: true, force: true });
+
 		assert.ok(
 			path.isAbsolute(runtime.paths.pidDir),
 			`the guard locks went to ${runtime.paths.pidDir}, which every worker resolves against its own cwd`
 		);
 		assert.equal(
-			fs.existsSync(path.join(process.cwd(), relative)),
+			built,
 			false,
 			"a relative ROOTPATH built the runtime tree under whatever cwd this worker happened to have"
 		);

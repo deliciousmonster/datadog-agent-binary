@@ -1,7 +1,7 @@
 // withBuiltBinaries writes stubs at build/<platform>/bin, the same paths `npm run build-agent` puts the
 // real agents at, so what it does with what was already there decides whether running this suite destroys
-// a developer's build. The hide-and-restore that protects them is driven here against a temp directory:
-// staging an interrupted run over the real paths is the very hazard this file exists to keep out.
+// a developer's build. hideFiles alone is driven against a temp directory; the last test drives the real
+// paths, with a real build renamed out of the way under a name no part of the fixture knows.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -9,14 +9,18 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
+	acquireResolveBinaryLock,
 	builtBinaryPaths,
 	hideFiles,
-	withBuiltBinaries,
+	plantBuiltBinaries,
+	stub,
 	STAYS_UP,
+	UNEXECUTABLE,
 } from "../support/component.js";
 import { withTempDir } from "../support/sandbox.js";
 
 const HIDDEN = ".hidden-by-fixture";
+const SAVED = ".saved-by-test";
 
 /** Identity that survives a rename and not a rewrite, so a restored file is told from a recreated one. */
 const identity = (file) => {
@@ -32,7 +36,7 @@ const writeExecutable = (file, body) => {
 test("hideFiles gives back the same file, not a copy of it", () =>
 	withTempDir("hide-files-", async (dir) => {
 		const file = path.join(dir, "agent");
-		writeExecutable(file, "#!/bin/sh\nexit 0\n");
+		writeExecutable(file, stub("exit 0"));
 		const before = identity(file);
 
 		const restore = hideFiles([file]);
@@ -40,7 +44,7 @@ test("hideFiles gives back the same file, not a copy of it", () =>
 			!fs.existsSync(file),
 			"the path was not cleared, so a caller writing a stub would overwrite the original"
 		);
-		writeExecutable(file, STAYS_UP);
+		writeExecutable(file, stub(STAYS_UP));
 		restore();
 
 		assert.deepEqual(
@@ -55,7 +59,7 @@ test("hideFiles leaves a path that held nothing holding nothing", () =>
 		const file = path.join(dir, "agent");
 
 		const restore = hideFiles([file]);
-		writeExecutable(file, STAYS_UP);
+		writeExecutable(file, stub(STAYS_UP));
 		restore();
 
 		assert.ok(
@@ -64,11 +68,12 @@ test("hideFiles leaves a path that held nothing holding nothing", () =>
 		);
 	}));
 
-test("NEGATIVE: hideFiles recovers a build stranded by an interrupted run", () =>
+test("NEGATIVE: a build stranded by an interrupted run comes back on the next hide-and-restore", () =>
 	withTempDir("hide-files-", async (dir) => {
 		const file = path.join(dir, "agent");
-		// Exactly what a killed run leaves: renamed aside, never restored, the real path empty.
-		writeExecutable(`${file}${HIDDEN}`, "#!/bin/sh\nexit 0\n");
+		// Exactly what a killed run leaves: renamed aside, never restored, the real path empty. Nothing is
+		// hidden this time round, so the restore is the only thing that can put the build back.
+		writeExecutable(`${file}${HIDDEN}`, stub("exit 0"));
 		const stranded = identity(`${file}${HIDDEN}`);
 
 		const restore = hideFiles([file]);
@@ -95,16 +100,39 @@ test("NEGATIVE: a run killed holding its stub does not cost the build stashed be
 			"#!/bin/sh\n# the real build\nexit 0\n"
 		);
 		const real = identity(`${file}${HIDDEN}`);
-		writeExecutable(file, STAYS_UP);
+		writeExecutable(file, stub(STAYS_UP));
 
 		const restore = hideFiles([file]);
-		writeExecutable(file, STAYS_UP);
+		writeExecutable(file, stub(STAYS_UP));
 		restore();
 
 		assert.deepEqual(
 			identity(file),
 			real,
 			"the stub was hidden over the real build, which is now gone with nothing naming it"
+		);
+	}));
+
+test("NEGATIVE: a run killed holding a broken stand-in costs no more than one holding a stub", () =>
+	withTempDir("hide-files-", async (dir) => {
+		// supervisor-start.test.js overwrites a planted stub to make a spawn fail, so the body left at the
+		// real path is not one stub() produced. Unstamped it reads as a build made since, and the hide below
+		// moves it over the real one.
+		const file = path.join(dir, "agent");
+		writeExecutable(
+			`${file}${HIDDEN}`,
+			"#!/bin/sh\n# the real build\nexit 0\n"
+		);
+		const real = identity(`${file}${HIDDEN}`);
+		writeExecutable(file, UNEXECUTABLE);
+
+		const restore = hideFiles([file]);
+		restore();
+
+		assert.deepEqual(
+			identity(file),
+			real,
+			"a stand-in the fixture wrote was hidden over the real build, which is now gone"
 		);
 	}));
 
@@ -127,32 +155,52 @@ test("NEGATIVE: hideFiles does not promote a leftover copy over a file that is a
 		);
 	}));
 
-test("withBuiltBinaries puts back what it found at build/<platform>/bin", async (t) => {
-	// Only ever runs against a directory it found empty, and only on files it planted there itself. A real
-	// build is left strictly alone: exercising this fixture is what deletes binaries when it misbehaves, so
-	// a version of this test that ran over one would destroy the developer's build to prove it should not.
+/**
+ * Everything the fixture reads at `files` renamed out of the two names it knows, and the put-back. A rename,
+ * not a copy or a hardlink: a link shares the inode, so any in-place write at the real path reaches the
+ * saved copy too, and a 139MB build costs nothing to move either way.
+ */
+function saveAside(files) {
+	const owned = files.flatMap((file) => [file, `${file}${HIDDEN}`]);
+	for (const file of owned) {
+		if (fs.existsSync(file)) fs.renameSync(file, `${file}${SAVED}`);
+	}
+	return () =>
+		owned.forEach((file) => {
+			fs.rmSync(file, { force: true });
+			if (fs.existsSync(`${file}${SAVED}`)) {
+				fs.renameSync(`${file}${SAVED}`, file);
+			}
+		});
+}
+
+test("the built-binaries fixture puts back what it found at build/<platform>/bin", async () => {
+	// The one test that can catch the fixture losing its hide-and-restore, so it runs on a checkout that has
+	// a build as well as one that has not: saveAside takes the real agents out of reach first, and the
+	// stand-ins planted in their place are what the stubs would destroy.
 	const { binDir, files } = builtBinaryPaths();
 	fs.mkdirSync(binDir, { recursive: true });
-	const occupied = files.filter((file) => fs.existsSync(file));
-	if (occupied.length) {
-		t.skip(
-			`a real build is at ${binDir}; the hide-and-restore itself is covered against a temp dir above`
-		);
-		return;
-	}
-	const planted = files;
-	for (const file of planted) writeExecutable(file, "#!/bin/sh\nexit 0\n");
-	const before = files.map(identity);
-
+	// Held across the staging too, not just the fixture call: these are the paths resolveBinary reads, and
+	// test/e2e/harper-component.test.js holds this same lock across a test asserting no trace-agent is here.
+	const release = await acquireResolveBinaryLock();
+	let restoreReal;
 	try {
-		const seen = await withBuiltBinaries(
-			async (stubs) => stubs.map((stub) => fs.readFileSync(stub, "utf8")),
+		restoreReal = saveAside(files);
+		for (const file of files) writeExecutable(file, stub("exit 0"));
+		const before = files.map(identity);
+
+		const seen = await plantBuiltBinaries(
+			async (stubs) => stubs.map((file) => fs.readFileSync(file, "utf8")),
 			STAYS_UP
 		);
 		// Without this the fixture could have handed back what was already there rather than its own
 		// stubs, and the survival asserted below would hold while proving nothing.
 		for (const body of seen) {
-			assert.equal(body, STAYS_UP, "the fixture did not write its own stub");
+			assert.equal(
+				body,
+				stub(STAYS_UP),
+				"the fixture did not write its own stub"
+			);
 		}
 
 		files.forEach((file, index) => {
@@ -167,6 +215,7 @@ test("withBuiltBinaries puts back what it found at build/<platform>/bin", async 
 			);
 		});
 	} finally {
-		for (const file of planted) fs.rmSync(file, { force: true });
+		restoreReal?.();
+		release();
 	}
 });

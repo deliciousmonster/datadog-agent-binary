@@ -25,15 +25,29 @@ export function loadComponent() {
 	return import(`${url}?instance=${instance++}`);
 }
 
+// Stamped into every stub this module writes, and the only thing isFixtureStub looks for. Recognising a
+// stub by its marker rather than by matching a list of known bodies is what keeps the two from drifting.
+const STUB_MARKER = "written-by-withBuiltBinaries";
+
+/** The shell stub this module writes at a built-binary path, running `command`. */
+export const stub = (command) => `#!/bin/sh\n# ${STUB_MARKER}\n${command}\n`;
+
+/**
+ * A planted binary replaced by something no kernel will exec, for a test that needs a spawn to fail. No
+ * `#!`, so execvp answers ENOEXEC; stamped anyway, because a run killed holding an unstamped body reads as
+ * a build made since, and the next hide moves it over the real one.
+ */
+export const UNEXECUTABLE = `# ${STUB_MARKER}\nnot machine code, and no shebang to run it with\n`;
+
 /** A binary that exits at once, which is all a suite driving a recorded Harper ever runs. */
-const EXITS_AT_ONCE = "#!/bin/sh\nexit 0\n";
+const EXITS_AT_ONCE = "exit 0";
 
 /**
  * A binary that stays up. Minutes, not seconds: this is spawned for real and stopped only by its own
  * caller's teardown (SIGTERM), so a lifetime long enough to outlast a slow, loaded machine is what keeps a
  * suite's own wall-clock from being able to race it.
  */
-export const STAYS_UP = "#!/bin/sh\nexec sleep 300\n";
+export const STAYS_UP = "exec sleep 300";
 
 // runtime/binary.js's resolveBinary reads two fixed, shared locations, in order: the installed platform
 // package under node_modules/, then build/<platform>/bin. Both paths are derived from resolveBinary's own
@@ -90,13 +104,12 @@ async function withResolveBinaryLock(run) {
 	}
 }
 
-/** Every body this module writes as a stub. A real agent is tens of megabytes and matches none of them. */
-const STUB_BODIES = new Set([EXITS_AT_ONCE, STAYS_UP]);
-
 /** Whether `file` is a stub this module left behind, and so safe to discard rather than a real build. */
 function isFixtureStub(file) {
-	const { size } = fs.statSync(file);
-	return size <= 256 && STUB_BODIES.has(fs.readFileSync(file, "utf8"));
+	// Total rather than throwing: an absent file gives an undefined size, which fails the comparison and
+	// short-circuits the read. A real agent is tens of megabytes and never reaches it either.
+	const { size } = fs.statSync(file, { throwIfNoEntry: false }) ?? {};
+	return size <= 256 && fs.readFileSync(file, "utf8").includes(STUB_MARKER);
 }
 
 /** Where a dev checkout's `npm run build-agent` leaves each agent, which is also where stubs go. */
@@ -120,16 +133,12 @@ export function builtBinaryPaths() {
 export function hideFiles(files) {
 	const hidden = files.map((file) => `${file}.hidden-by-fixture`);
 	files.forEach((file, index) => {
-		// A run killed before its restore leaves the hidden copy behind, with either nothing at the real
-		// path or the stub it died holding. Both are ours to discard; anything else is a build made since.
-		if (
-			fs.existsSync(hidden[index]) &&
-			(!fs.existsSync(file) || isFixtureStub(file))
-		) {
-			fs.rmSync(file, { force: true });
-			fs.renameSync(hidden[index], file);
-		}
-		if (fs.existsSync(file)) fs.renameSync(file, hidden[index]);
+		// A run killed after writing its stub left that stub at the real path and the build at the hidden
+		// copy; hiding the stub over it is what loses the build, and discarding it leaves the build where
+		// the restore below finds it. A run killed before writing one needs nothing: that restore recovers
+		// the hidden copy whether or not anything was hidden this time.
+		if (fs.existsSync(hidden[index]) && isFixtureStub(file)) fs.rmSync(file);
+		else if (fs.existsSync(file)) fs.renameSync(file, hidden[index]);
 	});
 	return () =>
 		files.forEach((file, index) => {
@@ -146,23 +155,32 @@ export const hideBuiltBinaries = () => hideFiles(builtBinaryPaths().files);
  * `run`. The installed platform package predates the trace-agent and answers every request with the core
  * agent, so without these nothing that needs a trace-agent path can be driven at all.
  */
-export async function withBuiltBinaries(run, body = EXITS_AT_ONCE) {
-	return withResolveBinaryLock(async () => {
-		const { binDir, files } = builtBinaryPaths();
-		fs.mkdirSync(binDir, { recursive: true });
-		// A developer's real build lives at these exact paths, so the stubs written over it have to give it
-		// back: deleting instead means running this suite destroys an `npm run build-agent` as a side effect.
-		const restore = hideBuiltBinaries();
-		for (const file of files) {
-			fs.writeFileSync(file, body);
-			fs.chmodSync(file, 0o755);
-		}
-		try {
-			return await run(files);
-		} finally {
-			restore();
-		}
-	});
+export async function withBuiltBinaries(run, command = EXITS_AT_ONCE) {
+	return withResolveBinaryLock(() => plantBuiltBinaries(run, command));
+}
+
+/**
+ * {@link withBuiltBinaries} without the lock, for the one caller that has to hold it across more than this
+ * call: test/component/built-binaries-fixture.test.js stages the paths this plants at, and that staging is
+ * as visible to a concurrent resolveBinary() as the stubs are.
+ */
+export async function plantBuiltBinaries(run, command = EXITS_AT_ONCE) {
+	const { binDir, files } = builtBinaryPaths();
+	fs.mkdirSync(binDir, { recursive: true });
+	// A developer's real build lives at these exact paths, so the stubs written over it have to give it
+	// back: deleting instead means running this suite destroys an `npm run build-agent` as a side effect.
+	const restore = hideBuiltBinaries();
+	for (const file of files) {
+		// "wx", not the default truncating write: if the hide above ever stops running, this fails EEXIST
+		// instead of emptying a 139MB agent in place, which no hardlink or backup taken beforehand survives.
+		fs.writeFileSync(file, stub(command), { flag: "wx" });
+		fs.chmodSync(file, 0o755);
+	}
+	try {
+		return await run(files);
+	} finally {
+		restore();
+	}
 }
 
 /**

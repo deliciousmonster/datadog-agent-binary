@@ -4,6 +4,7 @@
 import { threadId } from "node:worker_threads";
 
 import { describeExit } from "./agent-exit.js";
+import { debugVarsUrl } from "./delivery.js";
 import { parseJson, pollEndpoint } from "./probe.js";
 
 /** The path dd-trace posts spans to. A receiver that does not advertise it is not one this node can use. */
@@ -27,12 +28,28 @@ const slowBindLogger =
 
 // Both verifiers poll the same way and differ only in title and url; state.exited is the one giveUp
 // condition either agent has, since a dead process cannot bind the port it is being polled for.
-const pollAgent = (url, title, state, logInfo) =>
+const pollAgent = (url, title, state, logInfo, insecureTls = false) =>
 	pollEndpoint({
 		url,
+		insecureTls,
 		giveUp: () => state.exited === true,
 		onRetried: slowBindLogger(title, url, logInfo),
 	});
+
+/** The pid this node's supervisor started, or null. A guard attempt that never reached a spawn leaves it undefined (guard/src/supervise.js:156), and comparing against that reads a healthy agent as stale. */
+const heldPid = (state) => (typeof state?.pid === "number" ? state.pid : null);
+
+/** The pid an expvar body reports, or null when it publishes none. The trace-agent publishes it as a string, so a strict number test reads a real pid as no pid at all. */
+function expvarPid(vars) {
+	const pid = Number(vars?.pid);
+	return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+/** Both agents get the same verdict for the same reason, so the operator reads one sentence either way. */
+const foreignPid = (answering, held, url, title) =>
+	`a ${title} answered ${url} as pid ${answering}, not the pid ${held} this node started, so the port ` +
+	`belongs to a process nothing here supervises; stop it, or remove the stale .pid file under the node's ` +
+	`pids/ directory, and restart`;
 
 /** What the process did, when it did anything. A signalled exit reports no code, so `code || 0` reads it as a clean stop. */
 function exitDetail(state) {
@@ -44,7 +61,7 @@ function exitDetail(state) {
 	return ` The process this node started ${detail}.`;
 }
 
-/** Prove the trace-agent serves the endpoint dd-trace posts to; a bare TCP connect is satisfied by any stray socket, and dd-trace reports a successful flush either way. */
+/** Prove the trace-agent serves the endpoint dd-trace posts to and is the process this node started; a bare TCP connect is satisfied by any stray socket, and dd-trace reports a successful flush either way. */
 async function verifyTraceAgent(state, { paths, ports, logInfo }) {
 	if (ports.receiver === 0) {
 		return {
@@ -52,6 +69,14 @@ async function verifyTraceAgent(state, { paths, ports, logInfo }) {
 			detail:
 				"apm_config.receiver_port is 0 (DD_APM_RECEIVER_PORT): the HTTP receiver is off, and " +
 				"dd-trace drops every span unless it is pointed at a Unix socket instead",
+		};
+	}
+	if (ports.debug === 0) {
+		return {
+			ok: false,
+			detail:
+				"apm_config.debug.port is 0 (DD_APM_DEBUG_PORT), so the trace-agent publishes no expvar and " +
+				"nothing can tie whatever holds the receiver port to the process this node started",
 		};
 	}
 	const url = receiverInfoUrl(ports.receiver);
@@ -62,19 +87,42 @@ async function verifyTraceAgent(state, { paths, ports, logInfo }) {
 		endpoints.some(
 			(entry) => typeof entry === "string" && entry.includes(TRACE_ENDPOINT)
 		);
-	if (serving) {
+	if (!serving) {
 		return {
-			ok: true,
-			detail: `the APM receiver serves ${TRACE_ENDPOINT} on 127.0.0.1:${ports.receiver}; dd-trace has somewhere to send spans`,
+			ok: false,
+			detail:
+				body === null
+					? `nothing answered ${url}, so dd-trace has nowhere to send spans.${exitDetail(state)} ` +
+						`Check apm_config.enabled in ${paths.configFile} and DD_APM_ENABLED, then read ${paths.traceLog}`
+					: `whatever answered ${url} does not advertise ${TRACE_ENDPOINT}, so it is not a trace-agent this node can rely on`,
+		};
+	}
+	// /info identifies nobody: an agent left from an earlier boot answers it exactly like this node's own,
+	// and it is the one holding the port this node's agent could not bind. The expvar names the pid.
+	const identity = debugVarsUrl(ports.debug);
+	const vars = parseJson(
+		await pollAgent(identity, "the trace-agent's expvar", state, logInfo, true)
+	);
+	const answering = expvarPid(vars);
+	if (answering === null) {
+		return {
+			ok: false,
+			detail:
+				`something serves ${TRACE_ENDPOINT} on 127.0.0.1:${ports.receiver}, but nothing answering ` +
+				`${identity} named a pid, so it cannot be shown to be the trace-agent this node ` +
+				`started.${exitDetail(state)} Read ${paths.traceLog}`,
+		};
+	}
+	const held = heldPid(state);
+	if (held !== null && answering !== held) {
+		return {
+			ok: false,
+			detail: foreignPid(answering, held, identity, "trace-agent"),
 		};
 	}
 	return {
-		ok: false,
-		detail:
-			body === null
-				? `nothing answered ${url}, so dd-trace has nowhere to send spans.${exitDetail(state)} ` +
-					`Check apm_config.enabled in ${paths.configFile} and DD_APM_ENABLED, then read ${paths.traceLog}`
-				: `whatever answered ${url} does not advertise ${TRACE_ENDPOINT}, so it is not a trace-agent this node can rely on`,
+		ok: true,
+		detail: `the APM receiver serves ${TRACE_ENDPOINT} on 127.0.0.1:${ports.receiver} as pid ${answering}; dd-trace has somewhere to send spans`,
 	};
 }
 
@@ -101,13 +149,14 @@ async function verifyCoreAgent(state, { paths, ports, logInfo }) {
 				`the wrong process produces exactly this; read ${paths.coreLog} and check ${paths.configFile}`,
 		};
 	}
-	// A guard attempt that never reached a spawn leaves state.pid undefined (guard/src/supervise.js:155), and
-	// comparing against that reads a healthy agent as stale and sends the operator to delete its live lock.
-	const held = typeof state?.pid === "number" ? state.pid : null;
-	if (typeof vars.pid === "number" && held !== null && vars.pid !== held) {
+	// Measured on 7.82.1: the core agent's expvar publishes no pid at all, so this engages only against a
+	// build that grows one. What it cannot do is refuse a healthy agent for not publishing it.
+	const held = heldPid(state);
+	const answering = expvarPid(vars);
+	if (answering !== null && held !== null && answering !== held) {
 		return {
 			ok: false,
-			detail: `a core agent answered ${url} as pid ${vars.pid}, not the pid ${held} this node holds the lock for; remove the stale .pid file under the node's pids/ directory and restart`,
+			detail: foreignPid(answering, held, url, "core agent"),
 		};
 	}
 	return {
@@ -118,8 +167,21 @@ async function verifyCoreAgent(state, { paths, ports, logInfo }) {
 	};
 }
 
+// A supervisor that never started it has nothing to verify: both verifiers would poll on, and read whatever
+// else holds the port. Strictly false, because a caller that reports no `started` field does have a process.
+const notStarted = (state) =>
+	state?.started === false
+		? {
+				ok: false,
+				detail:
+					`this node never started it${state.error ? `: ${state.error}` : ""}, so nothing was ` +
+					`polled and anything answering its port belongs to another process`,
+			}
+		: null;
+
 /** The verdict for one launched agent. Both supervisors call this, so neither can reach a verdict the other cannot. */
 export const verifyLaunch = (agent, state, context) =>
-	agent.kind === "trace"
+	notStarted(state) ??
+	(agent.kind === "trace"
 		? verifyTraceAgent(state, context)
-		: verifyCoreAgent(state, context);
+		: verifyCoreAgent(state, context));

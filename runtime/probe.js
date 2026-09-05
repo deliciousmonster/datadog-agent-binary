@@ -40,24 +40,37 @@ export function parseJson(body) {
 /** GET over https accepting a self-signed certificate. Loopback only: never point this off 127.0.0.1. */
 function fetchInsecure(url, timeoutMs) {
 	return new Promise((resolve) => {
+		let deadline;
+		const settle = (body) => {
+			clearTimeout(deadline);
+			resolve(body);
+		};
 		const call = httpsRequest(
 			url,
-			{ rejectUnauthorized: false, timeout: timeoutMs },
+			{ rejectUnauthorized: false },
 			(response) => {
 				const status = response.statusCode;
 				if (status === undefined || status < 200 || status >= 300) {
 					response.resume();
-					resolve(null);
+					settle(null);
 					return;
 				}
 				let body = "";
 				response.setEncoding("utf-8");
 				response.on("data", (chunk) => (body += chunk));
-				response.on("end", () => resolve(body));
+				response.on("end", () => settle(body));
+				// The reset a destroy() lands on an open response arrives here, not on the request, and an
+				// unheard one leaves this promise pending for the life of the process.
+				response.on("error", () => settle(null));
 			}
 		);
-		call.on("timeout", () => call.destroy());
-		call.on("error", () => resolve(null));
+		call.on("error", () => settle(null));
+		// One deadline over the whole exchange rather than the socket's own inactivity timeout: a response
+		// that starts and then stalls, or drips a byte at a time, never trips that one.
+		deadline = setTimeout(() => {
+			call.destroy();
+			settle(null);
+		}, timeoutMs);
 		call.end();
 	});
 }

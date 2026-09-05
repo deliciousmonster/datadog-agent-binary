@@ -6,7 +6,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 
-import { pollEndpoint } from "../../runtime/probe.js";
+import { parseJson, pollEndpoint } from "../../runtime/probe.js";
+import { createStallingTlsStub, createTlsStub } from "../fixtures/tls-stub.js";
 import { createStub, findFreePort, withServer } from "../support/loopback.js";
 import { withPatchedSetTimeout } from "../support/sandbox.js";
 
@@ -178,5 +179,64 @@ test("NEGATIVE: the insecure branch answers null rather than rejecting, same as 
 		answered,
 		null,
 		"a request the https client refused outright rejected out of a poll documented never to throw"
+	);
+});
+
+test("the insecure branch reads a body back off a real TLS endpoint", async () => {
+	// The half of probe.js the trace-agent's own expvar is behind. Nothing else in the suite dials TLS, so
+	// without this every insecure-branch test could pass against a client that can only ever answer null.
+	const body = await withServer(
+		createTlsStub({ body: { pid: "4321" } }),
+		(port) =>
+			pollEndpoint({
+				url: `https://127.0.0.1:${port}/debug/vars`,
+				insecureTls: true,
+				giveUp: () => true,
+			})
+	);
+
+	assert.equal(
+		parseJson(body)?.pid,
+		"4321",
+		`the insecure branch answered ${body} for a body a plain curl reads back whole`
+	);
+});
+
+test("NEGATIVE: a TLS response that starts and then stalls settles rather than hanging its caller", async () => {
+	// The request-level timeout fires and destroys the socket, but by then the request is long finished: the
+	// reset lands on the response, and a listener on the request alone never hears it. readDeliverySignal is
+	// on the unconditional path of GET /DatadogStatus/, so an unsettled probe there is an endpoint that
+	// never answers and one leaked promise per call.
+	const held = [];
+	const settled = await withServer(
+		createStallingTlsStub(held),
+		async (port) => {
+			const answered = await Promise.race([
+				pollEndpoint({
+					url: `https://127.0.0.1:${port}/debug/vars`,
+					insecureTls: true,
+					timeoutMs: 2000,
+					giveUp: () => true,
+				}).then(() => "settled"),
+				new Promise((resolve) =>
+					setTimeout(() => resolve("still pending"), 8000)
+				),
+			]);
+			// Whatever the race said, the held responses have to end here: the server cannot close while one is
+			// open, and a poll still waiting on one would keep this test's own teardown from finishing.
+			held.forEach((response) => response.end("null}"));
+			return answered;
+		}
+	);
+
+	assert.equal(
+		settled,
+		"settled",
+		"a probe against a stalled response never came back, so every status read after it hangs too"
+	);
+	assert.equal(
+		held.length,
+		1,
+		"the stub was supposed to be dialled exactly once"
 	);
 });

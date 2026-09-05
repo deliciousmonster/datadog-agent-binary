@@ -111,6 +111,19 @@ test("NEGATIVE: a guard() rejection reports both agents with the same untranslat
 			`expected the untranslated TypeError from guard/src's attempt(); got: ${result.processes[0].error}`
 		);
 
+		// guard() starts the agents in order and rejects out of the one it was on, so an agent ahead of it in
+		// the list is already running under a committed lock. Reporting both unstarted and saying nothing
+		// else leaves an operator with no reason to look for it.
+		assert.match(
+			result.processes[0].error,
+			/running unsupervised/,
+			`the report claims neither agent started without saying one of them may be running: ${result.processes[0].error}`
+		);
+		assert.ok(
+			result.processes[0].error.includes(pidDir),
+			`an operator told an agent is unsupervised needs the directory its lock is in: ${result.processes[0].error}`
+		);
+
 		assert.ok(
 			logged.errors.some((line) =>
 				line.includes("the guard call for both agents threw")

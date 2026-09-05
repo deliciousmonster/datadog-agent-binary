@@ -83,6 +83,28 @@ function verifyPlatformPackage(dirName) {
 		return;
 	}
 
+	// npm filters optionalDependencies on process.platform and process.arch, so a wrong os or cpu is
+	// never an install error: npm skips the package, exits 0, and leaves the host with no agent.
+	const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+	for (const [field, want] of [
+		["os", target.npmOs],
+		["cpu", target.npmCpu],
+	]) {
+		// The absence check cannot be folded into the comparison: a dist compiled before these fields
+		// moved onto Target leaves both sides undefined, and a null that agrees with a null still ships.
+		if (!want) {
+			failures.push(
+				`${dirName}: src/targets.ts carries no npm ${field} for this target, so nothing can be ` +
+					"verified against - dist/ is stale, rebuild it with npm run build"
+			);
+		} else if (JSON.stringify(manifest[field]) !== JSON.stringify([want])) {
+			failures.push(
+				`${dirName}: package.json ${field} is ${JSON.stringify(manifest[field])}, must be ` +
+					`["${want}"] - npm would skip this package on every host, in silence`
+			);
+		}
+	}
+
 	for (const binary of BINARIES) {
 		const relPath = `bin/${binaryFilename(binary, target)}`;
 		if (!binFiles.includes(relPath)) {

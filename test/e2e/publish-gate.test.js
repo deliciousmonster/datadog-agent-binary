@@ -32,6 +32,10 @@ function writePlatformPackage(workDir, target, binOverrides = {}) {
 			name: `platform-fixture-${target.name}`,
 			version: "0.0.0",
 			files: ["bin/"],
+			// What create-platform-packages.js writes off the descriptor. Omitted, npm skips the package on
+			// every host and the gate has nothing to compare, so a fixture without these tests neither.
+			os: [target.npmOs],
+			cpu: [target.npmCpu],
 		})
 	);
 	for (const binary of BINARIES) {
@@ -189,6 +193,49 @@ test("NEGATIVE: a shipped binary carrying the forbidden symbol refuses the relea
 	);
 	assert.notEqual(result.status, 0);
 	assert.match(result.stderr, /forbidden symbol .* is present/);
+});
+
+// npm filters optionalDependencies on process.platform, so this never surfaces as an install error:
+// the package is skipped, npm exits 0, and the host ends up with no agent and no warning.
+test("NEGATIVE: a platform package whose os does not match its target refuses the release", () => {
+	const workDir = buildFixture();
+	const manifest = path.join(workDir, "npm", TARGET.name, "package.json");
+	const written = JSON.parse(fs.readFileSync(manifest, "utf8"));
+	fs.writeFileSync(
+		manifest,
+		JSON.stringify({ ...written, os: ["not-an-npm-platform"] })
+	);
+	const result = runGate(workDir);
+	assert.notEqual(result.status, 0);
+	assert.match(
+		result.stderr,
+		new RegExp(
+			`${TARGET.name}: package.json os is \\["not-an-npm-platform"\\], must be \\["${TARGET.npmOs}"\\]`
+		)
+	);
+});
+
+// A dist/ compiled before npmOs/npmCpu moved onto Target leaves both sides of the comparison undefined,
+// and a null agreeing with a null still ships. scaffoldWorkDir copies dist/src wholesale, so the stale
+// table is reproducible by editing the copy.
+test("NEGATIVE: a stale dist/ carrying no npm os refuses the release rather than agreeing with itself", () => {
+	const workDir = buildFixture();
+	const table = path.join(workDir, "dist", "src", "targets.js");
+	fs.writeFileSync(
+		table,
+		fs
+			.readFileSync(table, "utf8")
+			.replace(/npmOs: "[^"]*",/g, "")
+			.replace(/npmCpu: "[^"]*"/g, "npmCpu: undefined")
+	);
+	const result = runGate(workDir);
+	assert.notEqual(result.status, 0);
+	assert.match(
+		result.stderr,
+		new RegExp(
+			`${TARGET.name}: src/targets.ts carries no npm os for this target`
+		)
+	);
 });
 
 test("every binary in the table declares a required symbol, so this gate has something to check", () => {

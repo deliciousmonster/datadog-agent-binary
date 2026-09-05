@@ -18,6 +18,7 @@ import {
 	start,
 	startFor,
 	STAYS_UP,
+	UNEXECUTABLE,
 	waitForLocksCleared,
 	withBuiltBinaries,
 } from "../support/component.js";
@@ -28,28 +29,38 @@ import {
 	findFreePort,
 	withServer,
 } from "../support/loopback.js";
+import { createTlsStub } from "../fixtures/tls-stub.js";
 
 const TRACE_AGENT = "datadog-trace-agent";
 const CORE_AGENT = "datadog-agent";
 // prepareRuntime nests the runtime tree under the component's own directory name.
 const APP_NAME = path.basename(REPO_ROOT);
 
-/** A receiver answering /info, an expvar endpoint answering /debug/vars, and the component pointed at both. */
-async function withAgentsAnswering({ info, expvar }, run) {
+// What a recordingScope-driven start reports as the trace-agent's pid, in the shape the real trace-agent
+// publishes it: a string. A number here would let a strict typeof test pass that the real agent fails.
+const TRACE_DEBUG = { pid: "4321" };
+
+/** A receiver answering /info, a core expvar answering /debug/vars, the trace-agent's own expvar over TLS, and the component pointed at all three. */
+async function withAgentsAnswering({ info, expvar, debug = TRACE_DEBUG }, run) {
 	return withServer(createStub({ answers: "/info", body: info }), (receiver) =>
 		withServer(
 			createStub({ answers: "/debug/vars", body: expvar }),
 			(expvarPort) =>
-				withTempDir("dd-runtime-", (root) =>
-					withEnvs(
-						{
-							ROOTPATH: root,
-							DD_APM_RECEIVER_PORT: String(receiver),
-							DD_EXPVAR_PORT: String(expvarPort),
-							DD_API_KEY: "test-key-not-a-real-one",
-						},
-						() => run({ root, receiver, expvarPort })
-					)
+				withServer(
+					createTlsStub({ answers: "/debug/vars", body: debug }),
+					(debugPort) =>
+						withTempDir("dd-runtime-", (root) =>
+							withEnvs(
+								{
+									ROOTPATH: root,
+									DD_APM_RECEIVER_PORT: String(receiver),
+									DD_EXPVAR_PORT: String(expvarPort),
+									DD_APM_DEBUG_PORT: String(debugPort),
+									DD_API_KEY: "test-key-not-a-real-one",
+								},
+								() => run({ root, receiver, expvarPort, debugPort })
+							)
+						)
 				)
 		)
 	);
@@ -342,6 +353,43 @@ test("NEGATIVE: an unparseable port warns and falls back rather than being read 
 	}
 });
 
+test("the warning for a missing DD_API_KEY reports what each agent actually does", async () => {
+	// Measured against the shipped 7.82.1 binaries: the core agent starts and the intake refuses its payloads
+	// with a 403, while the trace-agent exits 255 with "you must specify an API Key" and binds nothing. An
+	// operator told both agents start looks for the receiver's spans rather than for the key.
+	const receiver = await findFreePort();
+	const expvarPort = await findFreePort();
+	const lines = await withTempDir("dd-runtime-", (root) =>
+		captureLogs(() =>
+			withBuiltBinaries(() =>
+				// exited, so the verifies give up on the first failed probe instead of waiting out a bind.
+				start(recordingScope({ state: { exited: true } }), {
+					ROOTPATH: root,
+					DD_APM_RECEIVER_PORT: String(receiver),
+					DD_EXPVAR_PORT: String(expvarPort),
+					DD_API_KEY: undefined,
+				})
+			)
+		)
+	);
+
+	const warning = lines.find((line) => line.includes("DD_API_KEY is not set"));
+	assert.ok(
+		warning,
+		`no missing-key warning was logged at all; logged: ${JSON.stringify(lines)}`
+	);
+	assert.match(
+		warning,
+		/trace-agent does not start/,
+		`the trace-agent exits 255 without a key; the warning has to say so: ${warning}`
+	);
+	assert.doesNotMatch(
+		warning,
+		/trace-agent will accept spans|[Bb]oth agents will start/,
+		`the warning promises a receiver that never binds: ${warning}`
+	);
+});
+
 test("NEGATIVE: an agent the kernel killed is reported as killed, not as a stop", async () => {
 	const receiver = await findFreePort();
 	const expvarPort = await findFreePort();
@@ -386,11 +434,21 @@ const alive = (pid) => {
 	}
 };
 
+/** The core agent's binary, overwritten with something no kernel will exec. preflight passes on it (it exists and is executable), so the guard gets as far as spawning and refusing it, which is the failure that still reaches a verify. */
+function breakCoreBinary(files) {
+	const core = files.find((file) => path.basename(file).startsWith(CORE_AGENT));
+	fs.writeFileSync(core, UNEXECUTABLE);
+	fs.chmodSync(core, 0o755);
+}
+
 /**
  * The guard path, with everything it spawned stopped before the runtime tree goes. Waiting for the locks to
  * clear is what keeps a release still in flight from writing into a deleted directory.
  */
-async function withGuardStarted(run, { stalePid } = {}) {
+async function withGuardStarted(
+	run,
+	{ stalePid, staleTracePid, breakCoreAgent } = {}
+) {
 	// Answered per request, not once: verification compares the pid on the lock against the pid the agent
 	// reports, so a body fixed before the spawn can only ever describe a mismatch.
 	let taken;
@@ -398,20 +456,35 @@ async function withGuardStarted(run, { stalePid } = {}) {
 		...CORE_EXPVAR,
 		pid: stalePid ?? (taken ? lockedPid(taken, CORE_AGENT) : 0),
 	});
-	return withAgentsAnswering({ info: SERVING, expvar }, async ({ root }) => {
-		const pidDir = path.join(root, "datadog", APP_NAME, "pids");
-		taken = pidDir;
-		let status;
-		try {
-			// A Scope with no `processes` is what released Harper hands a plugin, and it used to be refused.
-			({ status } = await withBuiltBinaries(() => start({}), STAYS_UP));
-			return await run({ pidDir, status });
-		} finally {
-			for (const state of status?.processes ?? []) halt(state.pid);
-			halt(lockedPid(pidDir, REAPER));
-			await waitForLocksCleared(pidDir, BOTH_AGENTS);
-		}
+	// The receiver port identifies nobody, so the trace-agent's verdict rests on this: the pid its own
+	// expvar reports has to be the pid the guard locked.
+	const debug = () => ({
+		pid: String(staleTracePid ?? (taken ? lockedPid(taken, TRACE_AGENT) : 0)),
 	});
+	return withAgentsAnswering(
+		{ info: SERVING, expvar, debug },
+		async ({ root }) => {
+			const pidDir = path.join(root, "datadog", APP_NAME, "pids");
+			taken = pidDir;
+			let status;
+			let statusResource;
+			try {
+				// A Scope with no `processes` is what released Harper hands a plugin, and it used to be refused.
+				({ status, DatadogStatus: statusResource } = await withBuiltBinaries(
+					(files) => {
+						if (breakCoreAgent) breakCoreBinary(files);
+						return start({});
+					},
+					STAYS_UP
+				));
+				return await run({ pidDir, status, statusResource });
+			} finally {
+				for (const state of status?.processes ?? []) halt(state.pid);
+				halt(lockedPid(pidDir, REAPER));
+				await waitForLocksCleared(pidDir, BOTH_AGENTS);
+			}
+		}
+	);
 }
 
 test("where Harper has no processes.start, the bundled guard starts both agents and locks each one", async () => {
@@ -486,6 +559,96 @@ test("NEGATIVE: a core agent answering as another pid does not verify", async ()
 		},
 		{ stalePid: 4321 }
 	);
+});
+
+// The receiver port identifies nobody: an agent left from an earlier boot answers /info exactly like this
+// node's own, and it is the one holding the port this node's agent could not bind.
+test("NEGATIVE: a trace-agent answering as another pid does not verify", async () => {
+	await withGuardStarted(
+		({ status }) => {
+			const trace = status.processes.find((state) => state.kind === "trace");
+			assert.equal(
+				trace.verified,
+				false,
+				`whatever holds the receiver port was taken for this node's own agent: ${trace.verifyDetail}`
+			);
+			assert.match(trace.verifyDetail, /not the pid/);
+		},
+		{ staleTracePid: 4321 }
+	);
+});
+
+test("NEGATIVE: an agent the guard could not start is not verified off whatever answers its port", async () => {
+	// Four guard paths end with started:false and no pid (guard/src/supervise.js:172-231), and
+	// guard/src/index.js:230 verifies those states anyway. Both stubs answer throughout this test, so a
+	// poll that runs at all reports a stub as the agent this node started.
+	await withGuardStarted(
+		({ status }) => {
+			const core = status.processes.find((state) => state.kind === "core");
+			assert.equal(
+				core.started,
+				false,
+				"the fixture was supposed to leave the core agent unstartable"
+			);
+			assert.equal(
+				core.verified,
+				false,
+				`an agent this node never started was verified off the stub that answered its port: ${core.verifyDetail}`
+			);
+			assert.match(core.verifyDetail, /never started it/);
+			// Same boot, same stubs: the agent that did start still has to verify, or the gate above is just
+			// refusing everything.
+			assert.equal(
+				status.processes.find((state) => state.kind === "trace").verified,
+				true,
+				"the trace-agent started and answered both its endpoints, and was refused anyway"
+			);
+		},
+		{ breakCoreAgent: true }
+	);
+});
+
+/** Polls `read` every 100ms until it returns something other than null, or gives up after ~15s. */
+async function until(read) {
+	for (let attempt = 0; attempt < 150; attempt++) {
+		const value = await read();
+		if (value !== null) return value;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	return null;
+}
+
+test("the status endpoint reports each agent as it is now, not as it was at boot", async () => {
+	// The guard writes its ProcessState for the life of the node - a death, a restart, a give-up - so a copy
+	// taken at boot goes on reporting healthy for an agent that is gone.
+	await withGuardStarted(async ({ statusResource }) => {
+		const traceOf = (status) =>
+			status.processes.find((state) => state.kind === "trace");
+		const boot = traceOf(await statusResource.get());
+		assert.ok(
+			alive(boot.pid),
+			`the guard reported pid ${boot.pid} for the trace-agent, which is not running`
+		);
+		assert.equal(boot.exited, false);
+
+		// SIGTERM: the guard reads a signalled stop as deliberate, so it releases the lock and starts nothing
+		// in its place, which leaves the endpoint as the only thing that can still say the agent is gone.
+		process.kill(boot.pid, "SIGTERM");
+		const stopped = await until(async () => {
+			const state = traceOf(await statusResource.get());
+			return state.exited === true ? state : null;
+		});
+
+		assert.ok(
+			stopped,
+			`the endpoint still reports exited:false for pid ${boot.pid}, which the guard has already buried`
+		);
+		assert.equal(
+			alive(stopped.pid),
+			false,
+			`the endpoint reports pid ${stopped.pid} as this node's trace-agent, and it is not running`
+		);
+	});
 });
 
 test("a deliberate stop releases the lock, so the next boot starts rather than adopting a corpse", async () => {
@@ -641,9 +804,11 @@ test("an agent still running under a configuration this node no longer has is st
 				// The whole point of folding the credentials into the fingerprint: left running, the old agent
 				// keeps posting under the old key and holds the ports its replacement needs, and once the lock
 				// names the replacement instead, not even the reaper can find it again.
+				// Polled, not read once: the guard sends SIGTERM and returns without waiting on it
+				// (guard/src/lock.js:247), so the death lands after start() has already resolved.
 				assert.equal(
-					alive(orphan.pid),
-					false,
+					await until(() => (alive(orphan.pid) ? null : "gone")),
+					"gone",
 					`pid ${orphan.pid} survived a start under a fingerprint it does not match`
 				);
 
@@ -656,8 +821,13 @@ test("an agent still running under a configuration this node no longer has is st
 					core.pid,
 					"the replacement did not end up holding the lock the orphan left"
 				);
+				// The report names the signal and the pid it went to, not a death: the guard watches for
+				// nothing, and an orphan that ignores SIGTERM is what the operator has to go looking for.
 				assert.ok(
-					status.supervisionReport?.some((line) => /stopped pid/.test(line)),
+					status.supervisionReport?.some(
+						(line) =>
+							line.includes(`pid ${orphan.pid}`) && /sent SIGTERM/.test(line)
+					),
 					`the stop must reach an operator reading the status: ${JSON.stringify(status.supervisionReport)}`
 				);
 			} finally {

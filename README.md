@@ -45,7 +45,7 @@ This package ships the full agent; **configuring** it is independent of this pac
 
 | Variable | Purpose | Notes |
 |---|---|---|
-| `DD_API_KEY` | Authenticates to Datadog | Without it the agent starts but **disables** its connection — nothing is sent. |
+| `DD_API_KEY` | Authenticates to Datadog | Measured on 7.82.1: without it the core agent starts and the intake refuses every payload with a 403, while the trace-agent exits at once with "you must specify an API Key" and binds no receiver. |
 | `DD_SITE` | Destination site | e.g. `datadoghq.com`, `datadoghq.eu`. Defaults to `datadoghq.com`. |
 | `DD_ENV` | `env` tag on all data | e.g. `production`, `development`. |
 | `DD_LOGS_ENABLED` | Enables **log collection** | Defaults to `false` — logs only forward when set to `true`. Separate from the agent connecting at all. |
@@ -121,8 +121,10 @@ datadog-agent-binary: { package: "@harperfast/datadog-agent-binary" }
 ```
 
 `DD_API_KEY` and `DD_SITE` are read from the environment and are deliberately never written to the
-rendered `datadog.yaml`. `DD_APM_RECEIVER_PORT` and `DD_EXPVAR_PORT` move the two ports the component
-pins and polls. `GET /DatadogStatus/` reports what startup did on the thread that answers it; verify
+rendered `datadog.yaml`. `DD_APM_RECEIVER_PORT`, `DD_EXPVAR_PORT` and `DD_APM_DEBUG_PORT` move the three
+ports the component pins and polls; the debug port carries the trace-agent's own expvar, which is the only
+thing that ties whatever holds the receiver port to the process this node started, so setting it to 0 makes
+the trace verify refuse. `GET /DatadogStatus/` reports what startup did on the thread that answers it; verify
 the agents themselves with `curl` from a shell rather than through that endpoint, which is inside the
 traced request path it would be reporting on.
 
