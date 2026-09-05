@@ -3,9 +3,6 @@
 	"version": "7.75.5",
 	"description": "Harper component that runs the Datadog trace-agent and core-agent alongside a node, with pre-built binaries installed per platform",
 	"type": "module",
-	"bin": {
-		"datadog-agent": "bin/datadog-agent"
-	},
 	"scripts": {
 		"build": "tsc",
 		"dev": "tsc --watch",
@@ -48,7 +45,6 @@
 		"typescript": "^7.0.2"
 	},
 	"files": [
-		"bin/",
 		"conf.d/",
 		"config.yaml",
 		"resources.js",

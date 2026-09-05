@@ -7,7 +7,7 @@ import {
 	pinnedVersion,
 } from "./downloader.js";
 import { buildTree } from "./layout.js";
-import { logger } from "../runtime/log.js";
+import { logger } from "./log.js";
 import { Target } from "./targets.js";
 
 export interface BuildRequest {

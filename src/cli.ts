@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
-import { logger } from "../runtime/log.js";
+import { logger } from "./log.js";
 import {
 	buildAgents,
 	currentTarget,

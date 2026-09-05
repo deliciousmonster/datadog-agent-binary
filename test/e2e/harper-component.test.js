@@ -7,7 +7,6 @@ const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
 
 // Lives here, not beside the other supervisor tests, because it needs the platform-package fixture
 // this file plants in the repo's real node_modules. That fixture is global, so it cannot be shared.
@@ -33,7 +32,6 @@ const { resolveBinary } = await import("../../runtime/binary.js");
 const platform = currentTarget();
 const platformName = platform.name; // e.g. linux-x86_64
 const binaryName = `${BINARIES[0].shipsAs}${platform.exe}`; // datadog-agent[.exe]
-const isWindows = process.platform === "win32";
 
 const TRACE_AGENT = "datadog-trace-agent";
 const CORE_AGENT = "datadog-agent";
@@ -128,17 +126,6 @@ function createFakePlatformPackage() {
 	fs.chmodSync(stubBinaryPath, 0o755);
 }
 
-function runToCompletion(child) {
-	return new Promise((resolve, reject) => {
-		let stdout = "";
-		let stderr = "";
-		if (child.stdout) child.stdout.on("data", (d) => (stdout += d));
-		if (child.stderr) child.stderr.on("data", (d) => (stderr += d));
-		child.on("error", reject);
-		child.on("exit", (code) => resolve({ code, stdout, stderr }));
-	});
-}
-
 // Held for the whole file, not just one test: the fixture below is a shared, mutable path
 // (node_modules/@harperfast/datadog-agent-binary-<platform>) that resolveBinary() also reads from any
 // other concurrently-running file, for as long as this fixture is on disk - not only while a given test
@@ -172,76 +159,6 @@ test("the installed platform package is preferred over a local build (no network
 	);
 	assert.ok(path.isAbsolute(resolved), "resolved path must be absolute");
 	assert.ok(fs.existsSync(resolved), "resolved binary must exist on disk");
-});
-
-test("end-to-end: the datadog-agent shim resolves and executes the agent", async (t) => {
-	if (isWindows) {
-		t.skip("stub executable is not runnable as a .exe on Windows");
-		return;
-	}
-	const shim = path.join(REPO_ROOT, "bin", "datadog-agent");
-	const child = spawn(process.execPath, [shim, "version"], {
-		stdio: ["ignore", "pipe", "pipe"],
-		env: process.env,
-	});
-	const { code, stdout, stderr } = await runToCompletion(child);
-	assert.equal(code, 0, `shim should exit 0 (stderr: ${stderr})`);
-	assert.match(
-		stdout,
-		new RegExp(STUB_MARKER),
-		"the resolved agent binary should have actually run"
-	);
-	assert.match(
-		stdout,
-		new RegExp(`${STUB_MARKER} version`),
-		"user args should reach the agent, not just the shim's own log line"
-	);
-});
-
-test("NEGATIVE: the shim does not exit 0 for an agent the kernel killed", async (t) => {
-	if (isWindows) {
-		t.skip("no POSIX signals to kill the stub with");
-		return;
-	}
-	// A signalled child reports exit code null, which `code || 0` turns into success. That is what an OOM
-	// kill of the core agent looked like to anything watching the shim.
-	const original = fs.readFileSync(stubBinaryPath, "utf8");
-	fs.writeFileSync(stubBinaryPath, "#!/bin/sh\nkill -9 $$\n");
-	try {
-		const shim = path.join(REPO_ROOT, "bin", "datadog-agent");
-		const child = spawn(process.execPath, [shim], {
-			stdio: ["ignore", "pipe", "pipe"],
-			env: process.env,
-		});
-		const { code, stderr } = await runToCompletion(child);
-		assert.notEqual(
-			code,
-			0,
-			"the shim reported success for a SIGKILLed agent, so a supervisor sees a clean stop"
-		);
-		assert.match(
-			stderr,
-			/SIGKILL/,
-			"the signal has to reach the log as well as the exit code"
-		);
-	} finally {
-		fs.writeFileSync(stubBinaryPath, original);
-		fs.chmodSync(stubBinaryPath, 0o755);
-	}
-});
-
-test("the bin shim passes the Harper-required `name` option", () => {
-	// Regression guard: the spawn call inside the bin shim and the generated
-	// wrappers must keep the `name: "datadog-agent"` option.
-	const shimSrc = fs.readFileSync(
-		path.join(REPO_ROOT, "bin", "datadog-agent"),
-		"utf8"
-	);
-	assert.match(
-		shimSrc,
-		/name:\s*["']datadog-agent["']/,
-		"the bin shim must spawn with a name option or Harper rejects the spawn"
-	);
 });
 
 test("a binary that resolves to the wrong agent is refused rather than started twice", async () => {

@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { AgentBinary, BINARIES, binaryFilename } from "./binaries.js";
 import { buildTree } from "./layout.js";
-import { logger } from "../runtime/log.js";
+import { logger } from "./log.js";
 import { Target } from "./targets.js";
 
 export interface BuildOptions {

@@ -1,11 +1,13 @@
 import { styleText } from "node:util";
 
-// One prefix for both entry points. The build CLI and the runtime shim both speak as the package,
-// not as the tool the reader is being told to run next.
+// One prefix for the build CLI, which speaks as the package rather than as the tool the reader is
+// being told to run next. Nothing under runtime/ logs through this: the component uses Harper's log.
 const PREFIX = "[datadog-agent]";
 
-/** @type {Record<"info" | "warn" | "error" | "debug", (message: string) => void>} */
-export const logger = {
+export const logger: Record<
+	"info" | "warn" | "error" | "debug",
+	(message: string) => void
+> = {
 	info: (message) => console.log(styleText("blue", PREFIX), message),
 	warn: (message) =>
 		console.warn(styleText("yellow", PREFIX), styleText("yellow", message)),

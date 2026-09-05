@@ -79,10 +79,10 @@ test("every file the component and the shim read at runtime is in the published 
 			`${file} is read at runtime and would not be in the tarball`
 		);
 	}
-	// Walked rather than listed, from both shipped entries: a helper added under runtime/ is covered by the
+	// Walked rather than listed from the one shipped entry: a helper added under runtime/ is covered by the
 	// directory entry, one added beside resources.js is not, and an import of dist/ reaches build output the
 	// tarball no longer carries. A list of known names catches none of the three.
-	const imported = importedFrom("resources.js", "bin/datadog-agent");
+	const imported = importedFrom("resources.js");
 	assert.ok(
 		imported.length > 6 && imported.includes("guard/src/index.js"),
 		`the walk reached ${imported.length} files and cannot have followed the component's imports: ${JSON.stringify(imported)}`
