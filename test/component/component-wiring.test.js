@@ -72,7 +72,7 @@ const ships = (files, relative) =>
 		entry.endsWith("/") ? relative.startsWith(entry) : entry === relative
 	);
 
-test("every file the component and the shim read at runtime is in the published package", () => {
+test("every file the component reads at runtime is in the published package", () => {
 	for (const file of ["config.yaml", "conf.d/"]) {
 		assert.ok(
 			manifest.files.includes(file),

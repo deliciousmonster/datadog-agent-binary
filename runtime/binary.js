@@ -1,5 +1,4 @@
-// The one binary resolver. The component and the bin shim take the same path, so a resolution the component
-// refuses cannot still be launched by the shim.
+// The one binary resolver: the installed platform package first, then a dev checkout's build output.
 
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";

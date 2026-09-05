@@ -1,5 +1,5 @@
-// Shared by the bin shim and resources.js: both launch the same two binaries, and both used to report every
-// failure as one sentence, when "failed to execute" and exit code 0 are the two readings that mislead most.
+// One reading per way an agent can fail to run. "failed to execute" and a zero exit are the two that
+// mislead most, so each gets a sentence naming what actually happened rather than one shared line.
 
 import { constants } from "node:os";
 
