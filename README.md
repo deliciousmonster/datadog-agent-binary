@@ -1,121 +1,88 @@
-# Datadog Agent Binary
+# @harperfast/datadog-agent-binary
 
 [![Datadog Agent Binaries](https://github.com/HarperFast/datadog-agent-binary/actions/workflows/build-release.yml/badge.svg)](https://github.com/HarperFast/datadog-agent-binary/actions/workflows/build-release.yml)
 
-A Harper v5 component that runs the Datadog core agent and trace-agent alongside a node, so traces and host metrics reach Datadog. It ships the agents as pre-compiled binaries installed per platform, versioned as ordinary Node dependencies rather than through a system package manager or a container sidecar.
+A Harper v5 plugin that runs the Datadog core agent and trace-agent alongside a node, so host metrics and the spans the host application's own `dd-trace` produces reach Datadog. `dd-trace` itself is the application's, not shipped here. Both agents arrive as pre-compiled binaries, one npm package per platform, picked by `optionalDependencies`; nothing is downloaded at install time and no install script runs.
 
-The repo covers two things:
+The binaries are how the plugin does its job, not a product of their own. Running them outside a Harper node is not a surface this package supports.
 
-- **Runtime:** the component Harper loads, plus the agent binaries for the current platform. This is what consumers depend on.
-- **Build:** tooling to compile the agent from Datadog source for each supported platform, used to produce the published binaries. Most consumers don't need this.
-
-## What it does
-
-- Installs the agent binary for the current platform via `optionalDependencies`. The main package is platform-agnostic and declares one optional dependency per platform (e.g. `@harperfast/datadog-agent-binary-linux-x86_64`), each tagged with npm `os`/`cpu`, so `npm install` fetches only the matching one. No install scripts; no download at install time.
-- Passes the `name` option that Harper v5's spawn enforcement requires, so the agent can be launched from a Harper component. See [Harper v5 compatibility](#harper-v5-lincoln-compatibility).
-- Logs binary resolution, the spawn (path, args, PID), exit status, and which Datadog environment variables are present — useful when diagnosing why no data reaches Datadog. The `DD_API_KEY` value is not logged, only whether it is set. See [Startup logging](#startup-logging).
-- Builds the agent from source for Linux on x86_64 and arm64, Windows on x86_64, and macOS on arm64.
-
-It does not configure Datadog. API key, site, and collection settings are provided the usual Datadog way — environment variables or `datadog.yaml`. See [Connecting to Datadog](#connecting-to-datadog).
-
-## Installation
+## Install
 
 ```bash
 npm install @harperfast/datadog-agent-binary
 ```
 
-Installing pulls in the pre-built agent binary for your platform automatically via `optionalDependencies` — only the package whose `os`/`cpu` match your machine is fetched.
+npm fetches only the platform package whose `os`/`cpu` match the host, so one agent pair arrives with the install. Two things in the node's own config then decide whether either agent starts.
 
-## Usage
+### Name it in the root config
 
-### Connecting to Datadog
+Harper hands a component a `Scope`, and so calls this plugin at all, only for one the node's root `harper-config.yaml` names. A directory it found by scanning `componentsRoot` loads, serves its resources and supervises nothing. The file is the one `settings_path` names in `~/.harperdb/hdb_boot_properties.file`, and the key is the component directory's own name, because a root entry resolves to `<componentsRoot>/<key>`:
 
-This package ships the full agent; **configuring** it is independent of this package and done the standard Datadog way. The variables that matter most:
-
-| Variable | Purpose | Notes |
-|---|---|---|
-| `DD_API_KEY` | Authenticates to Datadog | Measured on 7.82.1: without it the core agent starts and the intake refuses every payload with a 403, while the trace-agent exits at once with "you must specify an API Key" and binds no receiver. |
-| `DD_SITE` | Destination site | e.g. `datadoghq.com`, `datadoghq.eu`. Defaults to `datadoghq.com`. |
-| `DD_ENV` | `env` tag on all data | e.g. `production`, `development`. |
-| `DD_LOGS_ENABLED` | Enables **log collection** | Defaults to `false` — logs only forward when set to `true`. Separate from the agent connecting at all. |
-| `DD_LOG_TO_CONSOLE` | Agent's own logs to stdout | Defaults to `true`. |
-
-See Datadog's [Agent environment variables](https://docs.datadoghq.com/agent/guide/environment-variables/) for the full list, or use a `datadog.yaml`.
-
-### Startup logging
-
-The component emits diagnostics at `info`/`warn` (visible without any debug flag) before and around each spawn:
-
-- the detected platform/arch and the resolved binary path (or a warning if no platform package is installed);
-- the spawn itself — binary path, args, child PID — and the exit code or terminating signal;
-- which Datadog env vars are present: `DD_API_KEY` (reported only as `set`/`MISSING`, never the value), `DD_SITE`, `DD_ENV`, `DD_LOGS_ENABLED`, `DD_LOG_TO_CONSOLE`;
-- a clear error naming the path to allowlist if Harper's spawn enforcement rejects the launch.
-
-This makes the common failure modes ("agent disabling," "no logs flowing," "spawn blocked") diagnosable straight from the container logs.
-
-## Supported platforms
-
-| OS | Architecture | Status |
-|----|-------------|--------|
-| Linux | x86_64 | ✅ |
-| Linux | arm64 | ✅ |
-| Windows | x86_64 | ✅ |
-| Windows | arm64 | 🚫 |
-| macOS | x86_64 | 🚫 |
-| macOS | arm64 | ✅ |
-
-Windows arm64 is blocked by [Chocolatey](https://chocolatey.org) not supporting arm64 natively.
-macOS x86_64 is out because the release matrix has no runner for it; a target with no matrix leg
-publishes an optional dependency npm skips in silence.
-
-## Harper v5 (Lincoln) compatibility
-
-Running the agent from inside a Harper v5 application has two requirements; this package handles one of them and the consuming app handles the other.
-
-### Spawning the agent from a Harper component
-
-Harper v5 only lets a component `spawn`/`exec` an executable that is (a) launched with a `name` option (so Harper can dedupe the child across worker threads) and (b) listed by its **exact absolute path** in `applications.allowedSpawnCommands`.
-
-The component already passes the required `name` on every spawn, so all the consuming app must do is allowlist the resolved binary paths. They are the ones the platform package installed:
-
-```sh
-ls node_modules/@harperfast/datadog-agent-binary-*/bin/datadog-agent
-# e.g. /app/node_modules/@harperfast/datadog-agent-binary-linux-x86_64/bin/datadog-agent
+```yaml
+datadog-agent-binary: { package: "@harperfast/datadog-agent-binary" }
 ```
 
-Then add that exact path to `harperdb-config.yaml`:
+Sixty seconds after the module loads with no plugin call, the component logs the entry it needs and the reason nothing started.
+
+### Allowlist both binaries
+
+Harper only lets a component spawn an executable listed by its exact absolute path in `applications.allowedSpawnCommands`. The other half of that gate, a `name` option on every spawn, the plugin passes itself. Two binaries launch here, not one:
+
+```sh
+ls -d "$PWD"/node_modules/@harperfast/datadog-agent-binary-*/bin/*
+```
 
 ```yaml
 applications:
   allowedSpawnCommands:
+    - node
     - /app/node_modules/@harperfast/datadog-agent-binary-linux-x86_64/bin/datadog-agent
+    - /app/node_modules/@harperfast/datadog-agent-binary-linux-x86_64/bin/trace-agent
 ```
 
-A bare command name will not match — the full absolute path is required. The path has no version number in it, so it does not change when you upgrade the package.
+A bare command name matches neither one. The paths carry no version, so an upgrade leaves them where they are; on Windows both end `.exe`. Keep `node` in the list too: where Harper does not supervise natively, the bundled guard spawns its reaper as `process.execPath` and then as a bare `node`, and a reaper that cannot start leaves the agents running after the node stops.
 
-### Running it as a Harper component
+Harper installs with `--ignore-scripts`, which costs this package nothing. `applications.allowInstallScripts` can stay off.
 
-The package is also a Harper component. Installed and named in the node's root config, it starts and
-supervises both agents itself, renders their `datadog.yaml`, ships the core-check configuration that
-host metrics need, and holds the launch open until the APM receiver actually answers.
+## Configure
 
-Naming it in the root config is not optional. Harper hands a component a `Scope` only for one its root
-`harper-config.yaml` names, and discards the module of a component it found by scanning
-`componentsRoot`. A scanned copy loads, serves its resources, and supervises nothing.
+The plugin does not configure Datadog. What follows is read from the environment, and `datadog.yaml` is rendered fresh on every worker start, so editing that file changes nothing.
 
-```yaml
-# The file settings_path names in ~/.harperdb/hdb_boot_properties.file. The key is the component
-# directory's own name, because a root entry resolves to <componentsRoot>/<key>.
-datadog-agent-binary: { package: "@harperfast/datadog-agent-binary" }
-```
+| Variable | Effect |
+| --- | --- |
+| `DD_API_KEY` | Measured on 7.82.1: without it the core agent starts and collects while the intake refuses every payload with a 403, and the trace-agent exits at once with "you must specify an API Key", binding no receiver. |
+| `DD_SITE` | Destination site, e.g. `datadoghq.eu`. Datadog's own default is `datadoghq.com`. |
+| `DD_ENV` | The `env` tag on everything sent. |
+| `DD_APM_RECEIVER_PORT` | Where `dd-trace` posts spans. Default 8126. |
+| `DD_EXPVAR_PORT` | The core agent's expvar. Default 5000. |
+| `DD_APM_DEBUG_PORT` | The trace-agent's own expvar. Default 5012. |
 
-`DD_API_KEY` and `DD_SITE` are read from the environment and are deliberately never written to the
-rendered `datadog.yaml`. `DD_APM_RECEIVER_PORT`, `DD_EXPVAR_PORT` and `DD_APM_DEBUG_PORT` move the three
-ports the component pins and polls; the debug port carries the trace-agent's own expvar, which is the only
-thing that ties whatever holds the receiver port to the process this node started, so setting it to 0 makes
-the trace verify refuse. `GET /DatadogStatus/` reports what startup did on the thread that answers it; verify
-the agents themselves with `curl` from a shell rather than through that endpoint, which is inside the
-traced request path it would be reporting on:
+`DD_API_KEY` and `DD_SITE` are never written to disk; both agents read them from the inherited environment. Those two and `DD_ENV` are also part of the fingerprint each agent's PID lock carries, so changing one makes the next worker start take the lock and SIGTERM the agent still running under the old value.
+
+Setting a port to `0` turns that endpoint off, and each one is load-bearing. Without the receiver `dd-trace` drops every span; without either expvar nothing can show that the process holding the port is the one this node started, and startup verification refuses rather than reporting healthy.
+
+## Diagnose
+
+Everything the plugin writes lands under `<rootPath>/datadog/<component directory>/`, with `rootPath` read from the node's own config chain, or from `ROOTPATH` where that is absolute. When no root resolves it falls back to `~/.harper-datadog/<component directory>/`. Under either root:
+
+| Path | What it holds |
+| --- | --- |
+| `datadog.yaml` | The config both agents read. |
+| `conf.d/` | The core checks this platform gets. Without them the core agent runs, reports healthy and collects no host metrics. |
+| `logs/agent.log`, `logs/trace-agent.log` | The agents' own logs. `log_to_console` is off, so none of this reaches the container's stdout. |
+| `logs/reaper.log` | The guard's reaper, where Harper is not supervising natively. |
+| `pids/` | One lock per agent, which is what holds a node to one agent pair rather than one trace-agent per worker thread. Clear it when a killed node leaves a stale lock behind. |
+
+The directory is named for the component, not just `datadog`: two installed copies sharing one `pids/` would share one lock.
+
+`GET /DatadogStatus/` is the plugin's one resource and takes Harper's own auth. It re-reads process state and the trace-agent's delivery counters on each request rather than replaying what boot found. Read in this order:
+
+- `supervision` is `harper` when the node's `Scope` carries the process sidecar API, `guard` when the bundled guard is holding the agents up instead.
+- `apiKey` is `set` or `MISSING`, never the value.
+- `processes[].verified` is a verdict on identity, not on liveness. The trace-agent's is taken by reading its expvar off the debug port and comparing the pid published there against the pid this node spawned, so something else holding the receiver port fails it rather than passing as healthy. `verifyDetail` names the case.
+- `delivery.verdict` is how far a span got. `delivering` and `rejected` are evidence either way; `traces-unconfirmed` means the stats hop landed and the trace hop is unproven. Every counter behind it is a one-minute window the agent resets, so read it twice before believing it.
+
+The agents answer directly too, which is the check that does not depend on the plugin:
 
 ```sh
 curl -s  http://127.0.0.1:8126/info        # the APM receiver, at DD_APM_RECEIVER_PORT
@@ -123,68 +90,49 @@ curl -s  http://127.0.0.1:5000/debug/vars  # the core agent's expvar, at DD_EXPV
 curl -sk https://127.0.0.1:5012/debug/vars # the trace-agent's expvar, at DD_APM_DEBUG_PORT
 ```
 
-The last one is `-k` because the trace-agent serves its debug port under the self-signed IPC certificate
-it writes into the runtime tree.
+The last takes `-k` because the trace-agent serves its debug port under the self-signed IPC certificate it writes into `run/`.
 
-A Harper build whose `Scope` carries the process sidecar API supervises both agents itself. Where it
-does not, the bundled guard supervises instead: one lock per agent under
-`<harper root>/datadog/<component directory>/pids/`, its own rather than the node's, plus a detached
-reaper that stops them when the node goes. The component-directory segment is load-bearing- two
-installed copies sharing one `pids/` would share one lock. It is also the directory to clear when a
-killed node leaves a stale lock behind. Either way a PID lock is what holds it to one agent pair per
-node instead of one trace-agent per worker thread; only who holds the lock changes.
-`GET /DatadogStatus/` reports which of the two ran, as `supervision`.
+## Supported platforms
 
-### Install scripts
+| OS | Architecture | Status |
+| --- | --- | --- |
+| Linux | x86_64 | yes |
+| Linux | arm64 | yes |
+| Windows | x86_64 | yes |
+| Windows | arm64 | no |
+| macOS | x86_64 | no |
+| macOS | arm64 | yes |
 
-Harper v5 installs packages with `--ignore-scripts` by default. This package and its platform sub-packages **do not** rely on install scripts — the right binary is selected through `optionalDependencies`. You do **not** need `applications.allowInstallScripts: true`.
-
-### Build-time tooling is not for the runtime
-
-The source-build path shells out to `dda`, `go`, `pip` and the rest. It is for a developer shell or CI runner, not for use inside a Harper-managed process, and it is not in the published tarball. The runtime entry point is the component at `resources.js`.
+Windows arm64 waits on [Chocolatey](https://chocolatey.org) supporting arm64 natively. macOS x86_64 is out because GitHub retired the Intel runner, and a target with no leg in the release matrix publishes an optional dependency npm skips in silence.
 
 ## Building from source (maintainers)
 
-Most consumers never need this — it's how the published binaries are produced. The build CLI is not published, so it runs from a checkout:
+This is how the published binaries are made; consumers do not need it. The build CLI is not in the published tarball, so it runs from a checkout, and it shells out to `dda`, `go` and `pip`, which belong in a developer shell or a CI runner rather than inside a Harper-managed process.
 
 ```bash
-# Build for the current platform
-npm run build-agent
+npm run build-agent               # current platform, at the version .datadog-agent-version pins
+node dist/src/cli.js platforms    # supported platforms
+node dist/src/cli.js version      # latest upstream version
 
-# Build a specific version instead of the pin in .datadog-agent-version
+# a version other than the pin
 npm run build && node dist/src/cli.js build --datadog-version 7.50.0
-
-# Other commands
-node dist/src/cli.js platforms   # list supported platforms
-node dist/src/cli.js version     # latest upstream version
 ```
 
-The tree is always `build/<platform>/` under the checkout: `src/` is the clone, `go/` the GOPATH it
-is linked into, and `bin/` the built binaries. There is no flag to move it, because
-`scripts/create-platform-packages.js` reads those binaries back out of that path to build the npm
-packages, and a relocated tree is one it cannot find.
+Requires Go 1.23, Python 3.12, CMake, Git, a C toolchain, and the Node in `engines` (22.18+ or 24+).
 
-### Build requirements
+Output goes to `build/<platform>/` under the directory you run from: `src/` is the clone, `go/` the GOPATH it is symlinked into, `bin/` the built binaries. No flag moves it, because `scripts/create-platform-packages.js` reads the binaries back out of that path.
 
-Go 1.23, Node 18+, Python 3.12, CMake, Git, plus a C toolchain per platform: GCC (Linux), Xcode Command Line Tools (macOS), MinGW-w64 GCC (Windows).
-
-## How it works
-
-1. **Pre-built binaries via optional dependencies.** The main package is platform-agnostic and declares one `optionalDependency` per platform. Each contains the pre-built agent and is tagged with npm `os`/`cpu`, so `npm install` pulls only the matching one. At runtime `runtime/binary.js` resolves the binary from that installed package, falling back to a locally built binary for the source-build workflow. It checks the resolved basename: a platform package published before the trace-agent answers every request with the core agent at a path that exists, so an unchecked resolve starts two core agents and no receiver.
-2. **Release process.** GitHub Actions builds the agent for all platforms from Datadog source, smoke-tests that each binary runs standalone, publishes each as its own npm package, and publishes the main package referencing them as optional dependencies. Standalone archives are also attached to the GitHub Release.
-
-## Development
+Publishing is gated on the packed tarball rather than the working tree: `guard/` populated, both binaries present in every platform package, each carrying its required symbol and free of the Go build tag `--build-exclude` is there to drop.
 
 ```bash
-npm install         # dependencies
-npm run build       # compile TypeScript
-npm run typecheck   # type-check only
-npm run build-agent # build the agent for the current platform
-npm test            # run the tests
+npm test                 # component and e2e tiers
+npm run typecheck
+npm run test:binaries    # needs real binaries from a prior build-agent
+npm run test:live        # boots a real node; released Harper is pinned at 5.2.9, and the
+                         # native-supervision row needs DD_LIVE_HARPER_NATIVE set to a
+                         # Harper worktree whose Scope carries scope.processes
 ```
 
 ## License
 
-Apache License 2.0.
-
-The binaries this package downloads, builds, and distributes are licensed under the Apache License 2.0 as specified in the [Datadog Agent repository](https://github.com/DataDog/datadog-agent). The datadog-agent source code is copyrighted by Datadog, Inc.
+Apache License 2.0. The agent binaries built and distributed here are Apache 2.0 as specified in the [Datadog Agent repository](https://github.com/DataDog/datadog-agent), and the datadog-agent source is copyright Datadog, Inc.
