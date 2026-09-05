@@ -9,6 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { createRequire } from "node:module";
 
+import { PACKAGE_NAME } from "../../runtime/binary.js";
 import { writeConfigFiles } from "../../runtime/config.js";
 import { withEnvs } from "./sandbox.js";
 
@@ -147,8 +148,27 @@ export function hideFiles(files) {
 		});
 }
 
-/** {@link hideFiles} over whatever a real `npm run build-agent` left at build/<platform>/bin. */
-export const hideBuiltBinaries = () => hideFiles(builtBinaryPaths().files);
+/**
+ * The same binaries inside an installed platform package, which resolveBinary consults BEFORE
+ * build/<platform>/bin. Empty unless the optional dependency for this platform is installed, which a
+ * clean `npm install` does: a fixture that hides only the build output is shadowed by these.
+ */
+function installedPlatformBinaries() {
+	const target = currentTarget();
+	const binDir = path.join(
+		REPO_ROOT,
+		"node_modules",
+		`${PACKAGE_NAME}-${target.name}`,
+		"bin"
+	);
+	return BINARIES.map((binary) =>
+		path.join(binDir, `${binary.shipsAs}${target.exe}`)
+	).filter((file) => fs.existsSync(file));
+}
+
+/** Every path resolveBinary would answer with, hidden together so only a fixture's own stubs resolve. */
+export const hideBuiltBinaries = () =>
+	hideFiles([...installedPlatformBinaries(), ...builtBinaryPaths().files]);
 
 /**
  * Both agent binaries where resources.js looks for a dev checkout's build output, for the duration of
