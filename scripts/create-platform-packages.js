@@ -125,20 +125,8 @@ license per the [Datadog Agent repository](https://github.com/DataDog/datadog-ag
 	writeFileSync(join(platformPackageDir(platform.name), "README.md"), readme);
 }
 
-// In --all mode (release), tolerate a platform whose binary didn't build: skip it with a warning
-// so the platforms that did build still publish. Single-platform mode fails hard instead.
-const tolerateMissing = lastArg === "--all";
-
 platforms.forEach((platform) => {
-	try {
-		copyPlatformBinary(platform);
-	} catch (err) {
-		if (tolerateMissing) {
-			console.warn(`Skipping ${platform.name}: ${err.message}`);
-			return;
-		}
-		throw err;
-	}
+	copyPlatformBinary(platform);
 	const packageJson = writePlatformPackageJson(platform);
 	writePlatformIndexJs(platform);
 	writePlatformReadme(platform);

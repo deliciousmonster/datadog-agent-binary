@@ -14,16 +14,32 @@ import {
 } from "./runtime/delivery.js";
 import { untraceAgentProbes } from "./runtime/probe.js";
 import { supervisorFor, unstarted } from "./runtime/supervisor.js";
-import { expvarUrl, receiverInfoUrl, verifyLaunch } from "./runtime/verify.js";
+import {
+	currentVerdict,
+	expvarUrl,
+	receiverInfoUrl,
+	verifyLaunch,
+} from "./runtime/verify.js";
 
 /** Harper seeds every component compartment with `logger` and `Resource`; stubs keep the module importable in tests. */
-const log = typeof logger === "undefined" ? console : logger;
+const host = typeof logger === "undefined" ? console : logger;
 const ResourceBase = typeof Resource === "undefined" ? class {} : Resource;
 
-// Every method on Harper's Logger is declared optional, and the lines this module reports at info level have
-// no second channel. Resolved per call, and down to `warn`, which it already relies on everywhere else.
-const logInfo = (message) =>
-	(log.info ?? log.warn ?? console.log).call(log, message);
+// Every method on Harper's Logger is declared optional. Normalised once here rather than defended per call,
+// because the guard calls ctx.log.info and ctx.log.warn unguarded after it has committed an agent's lock.
+const channel =
+	(...names) =>
+	(message) =>
+		(
+			names
+				.map((name) => host[name])
+				.find((write) => typeof write === "function") ?? console.log
+		).call(host, message);
+const log = {
+	info: channel("info", "warn"),
+	warn: channel("warn", "info"),
+	error: channel("error", "warn"),
+};
 
 /** Both agents read these variables, so an unparseable value must not be quietly reinterpreted. */
 function resolvePort(name, fallback) {
@@ -46,8 +62,6 @@ const ports = {
 	receiver: resolvePort("DD_APM_RECEIVER_PORT", 8126),
 	expvar: resolvePort("DD_EXPVAR_PORT", 5000),
 	debug: resolvePort("DD_APM_DEBUG_PORT", 5012),
-	dogstatsd: resolvePort("DD_DOGSTATSD_PORT", 8125),
-	cmd: resolvePort("DD_CMD_PORT", 5001),
 };
 
 // Every URL this module polls. probe.js already suppresses these at the call site; this is the public half,
@@ -181,7 +195,7 @@ async function startAgents(scope) {
 			...binaries,
 		];
 
-		const verifyContext = { paths: runtime.paths, ports, logInfo };
+		const verifyContext = { paths: runtime.paths, ports };
 		const declared = AGENTS.map((agent, index) => ({
 			...agent,
 			command: binaries[index],
@@ -263,16 +277,12 @@ export class DatadogStatus extends ResourceBase {
 		]);
 		return {
 			...status,
+			// Read here rather than copied at boot: a verdict the supervisor took before a restart describes
+			// a process this node no longer runs.
+			processes: status.processes.map(currentVerdict),
 			// Which thread answered; every field above it is per-thread state.
 			threadId,
 			delivery,
-			// Run these from a shell, not from inside this process: an endpoint reached through the tracing
-			// pipeline is itself traced, and reading it changes what it reports.
-			verify: {
-				receiver: `curl -s ${receiverInfoUrl(status.receiverPort)}`,
-				coreAgent: `curl -s ${expvarUrl(ports.expvar)}`,
-				delivery: `curl -sk ${debugVarsUrl(ports.debug)}`,
-			},
 		};
 	}
 }

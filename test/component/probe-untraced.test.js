@@ -27,17 +27,16 @@ const once = (extra) => ({ timeoutMs: 2000, giveUp: () => true, ...extra });
 	const resources = await import(pathToFileURL(process.env.RESOURCES_FILE).href);
 
 	const probeBoth = async () => {
-		await pollEndpoint(once({ url: process.env.FETCH_PROBE_URL }));
-		await pollEndpoint(once({ url: process.env.HTTPS_PROBE_URL, insecureTls: true }));
+		await pollEndpoint(once({ url: process.env.HTTP_PROBE_URL }));
+		await pollEndpoint(once({ url: process.env.HTTPS_PROBE_URL }));
 		await settle();
 	};
 
 	mark('boot');
 	await probeBoth();
 
-	// Another component, or the host application, configuring the same plugins for its own reasons.
+	// Another component, or the host application, configuring the same plugin for its own reasons.
 	tracer.use('http', { headers: ['x-request-id'] });
-	tracer.use('fetch', { headers: ['x-request-id'] });
 	mark('reconfigured');
 	await probeBoth();
 
@@ -94,7 +93,7 @@ function runChild(env) {
 
 test("NEGATIVE: a quiet boot exports no span for the plugin's own probes or its delivery read, and a later tracer.use does not put them back", async () => {
 	// The receiver port resources.js really polls, so the blocklist it installs at import covers this one.
-	const fetchProbeUrl = "http://127.0.0.1:8126/info";
+	const httpProbeUrl = "http://127.0.0.1:8126/info";
 	// Deliberately not a blocklisted URL: a refused https read emits a ROOT tcp.connect error span from the
 	// net plugin, with no http.request sibling for any blocklist entry to match. Only the store reaches it.
 	const httpsProbePort = await findFreePort();
@@ -105,7 +104,7 @@ test("NEGATIVE: a quiet boot exports no span for the plugin's own probes or its 
 
 	const phases = spansByPhase(
 		runChild({
-			FETCH_PROBE_URL: fetchProbeUrl,
+			HTTP_PROBE_URL: httpProbeUrl,
 			HTTPS_PROBE_URL: httpsProbeUrl,
 			DELIVERY_PORT: String(deliveryPort),
 			CONTROL_URL: `http://127.0.0.1:${controlPort}/control`,
@@ -141,7 +140,7 @@ test("NEGATIVE: a quiet boot exports no span for the plugin's own probes or its 
 	assert.deepEqual(
 		probeSpans("reconfigured"),
 		[],
-		"the probes are traced again once another caller reconfigures the http and fetch plugins, which is what a blocklist alone cannot survive"
+		"the probes are traced again once another caller reconfigures the http plugin, which is what a blocklist alone cannot survive"
 	);
 	assert.deepEqual(
 		probeSpans("delivery"),

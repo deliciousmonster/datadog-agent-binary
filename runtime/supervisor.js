@@ -9,8 +9,8 @@ import { fingerprint, guard } from "../guard/src/index.js";
 import { describeSpawnFailure } from "./agent-exit.js";
 import { writeConfigFiles } from "./config.js";
 
-// Released Harper's Scope has no `processes` at all, so its absence is the whole version check and no config
-// selects between the two.
+// No released Harper has `scope.processes` - harper@5.2.9 is latest and its Scope carries no such member - so
+// this answers false on every node a customer can run today, and the guard below is the only shipping path.
 const supervisesNatively = (scope) =>
 	typeof scope?.processes?.start === "function";
 
@@ -27,10 +27,10 @@ export const unstarted = (agent, error) => ({
 	error,
 });
 
-// What either supervisor publishes about the reaper. guard/src/index.js sets `error` both when the reaper
-// never started and when it started and only its lock write failed, so `started` is what tells those apart.
+// What the NATIVE path publishes about the reaper, where the object comes from a Harper this package does not
+// ship and may carry anything. The guard's own reaper state is a documented shape and is published whole.
 const REAPER_FIELDS = ["name", "started", "adopted", "error"];
-const reaperStatus = (reaper) =>
+const knownReaperFields = (reaper) =>
 	reaper &&
 	Object.fromEntries(
 		REAPER_FIELDS.filter((field) => reaper[field] !== undefined).map(
@@ -52,7 +52,8 @@ const identify = (state, agent) =>
 const GUARD_UNUSED_NOTE =
 	"the bundled process guard is present but unused: this Harper supervises the agents natively, so the guard never runs.";
 
-/** Harper's own sidecar, one call per process. It writes the config files behind its own sweep. */
+// Harper's own sidecar, one call per process; it writes the config files behind its own sweep. Also the seam
+// test/support/component.js fakes, so most of the component's supervision tests run through this branch.
 const harperSupervisor = (scope, log) => ({
 	kind: "harper",
 	async start(agents, { configFiles, fingerprintParts }) {
@@ -88,7 +89,7 @@ const harperSupervisor = (scope, log) => ({
 		);
 		return {
 			processes,
-			reaper: reaperStatus(scope.processes.reaper),
+			reaper: knownReaperFields(scope.processes.reaper),
 			report: [GUARD_UNUSED_NOTE],
 		};
 	},
@@ -133,14 +134,9 @@ const guardSupervisor = (log, spawn) => ({
 				},
 			});
 		} catch (error) {
-			// guard() catches claimLock, preflight, ctx.spawn(), and every commitLock/releaseLock write
-			// internally, so none of those reach here. What still can: guard/src/supervise.js calls
-			// child.on('error', ...) right after a successful ctx.spawn() returns, with no try/catch around
-			// that call. spawn here is Harper's own constrained one, not node's plain child_process.spawn, so
-			// a return value that is not a real EventEmitter throws synchronously there and rejects this whole
-			// call - one error for both agents, not a verdict about either agent's binary.
-			// guard() starts the agents in order and rejects out of the one it was on, so an agent before it
-			// in the list is running, holding a committed lock, with no reaper and nothing left watching it.
+			// Anything guard() does not catch itself reaches here, and no enumeration of those stays true: the
+			// last one written missed ctx.log.info. It starts the agents in order and rejects out of the one
+			// it was on, so an agent ahead of it is running under a committed lock with nothing watching it.
 			const message =
 				`${error instanceof Error ? error.message : String(error)}. Neither agent is reported ` +
 				`started because the call threw before it reported either; an agent it had already spawned ` +
@@ -160,7 +156,9 @@ const guardSupervisor = (log, spawn) => ({
 			processes: result.processes.map((state, index) =>
 				identify(state, agents[index])
 			),
-			reaper: reaperStatus(result.reaper),
+			// Whole: guard/src/index.js built this and its ReaperState typedef is the shape. Filtering it here
+			// dropped the reaper's own pid, which is the one field an operator needs to find the process.
+			reaper: result.reaper,
 			report: result.report,
 		};
 	},

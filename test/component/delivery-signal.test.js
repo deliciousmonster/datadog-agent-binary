@@ -199,8 +199,6 @@ test("NEGATIVE: /DatadogStatus/ carries the delivery signal on a thread that sta
 	// No agent has started on this thread, so the debug port readDeliverySignal dials (5012 by default) has
 	// nothing listening: the read comes back unavailable, deterministically.
 	assert.equal(status.delivery.verdict, "unavailable");
-	// The shell form, because reading the signal through an endpoint inside the traced pipeline perturbs it.
-	assert.match(status.verify.delivery, /^curl -sk https:\/\/127\.0\.0\.1:\d+/);
 });
 
 test("NEGATIVE: the debug endpoint is read over TLS, so a plaintext answer on that port is no answer at all", async () => {

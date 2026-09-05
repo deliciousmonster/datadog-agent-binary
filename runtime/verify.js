@@ -1,8 +1,6 @@
 // What separates "the process is up" from "the process is the agent this node needs". A live process of the
 // wrong kind, or a stray socket on the port, passes every cheaper check and is reported healthy.
 
-import { threadId } from "node:worker_threads";
-
 import { describeExit } from "./agent-exit.js";
 import { debugVarsUrl } from "./delivery.js";
 import { parseJson, pollEndpoint } from "./probe.js";
@@ -17,24 +15,10 @@ export const receiverInfoUrl = (port) => `http://127.0.0.1:${port}/info`;
 /** The core agent's expvar endpoint, built the same way for the same reason. */
 export const expvarUrl = (port) => `http://127.0.0.1:${port}/debug/vars`;
 
-// One line per thread per boot, and only where the endpoint made us wait. The failed probes are suppressed
-// by design, so without this a bind that took seconds leaves nothing behind on the node at all.
-const slowBindLogger =
-	(title, url, logInfo) =>
-	({ attempts, waitedMs }) =>
-		logInfo(
-			`Datadog supervisor: thread ${threadId} waited ${waitedMs}ms over ${attempts} probes for ${title} to answer ${url}.`
-		);
-
-// Both verifiers poll the same way and differ only in title and url; state.exited is the one giveUp
-// condition either agent has, since a dead process cannot bind the port it is being polled for.
-const pollAgent = (url, title, state, logInfo, insecureTls = false) =>
-	pollEndpoint({
-		url,
-		insecureTls,
-		giveUp: () => state.exited === true,
-		onRetried: slowBindLogger(title, url, logInfo),
-	});
+// Both verifiers poll the same way and differ only in url; state.exited is the one giveUp condition either
+// agent has, since a dead process cannot bind the port it is being polled for.
+const pollAgent = (url, state) =>
+	pollEndpoint({ url, giveUp: () => state.exited === true });
 
 /** The pid this node's supervisor started, or null. A guard attempt that never reached a spawn leaves it undefined (guard/src/supervise.js:156), and comparing against that reads a healthy agent as stale. */
 const heldPid = (state) => (typeof state?.pid === "number" ? state.pid : null);
@@ -62,7 +46,7 @@ function exitDetail(state) {
 }
 
 /** Prove the trace-agent serves the endpoint dd-trace posts to and is the process this node started; a bare TCP connect is satisfied by any stray socket, and dd-trace reports a successful flush either way. */
-async function verifyTraceAgent(state, { paths, ports, logInfo }) {
+async function verifyTraceAgent(state, { paths, ports }) {
 	if (ports.receiver === 0) {
 		return {
 			ok: false,
@@ -80,7 +64,7 @@ async function verifyTraceAgent(state, { paths, ports, logInfo }) {
 		};
 	}
 	const url = receiverInfoUrl(ports.receiver);
-	const body = await pollAgent(url, "the APM receiver", state, logInfo);
+	const body = await pollAgent(url, state);
 	const endpoints = parseJson(body)?.endpoints;
 	const serving =
 		Array.isArray(endpoints) &&
@@ -100,9 +84,7 @@ async function verifyTraceAgent(state, { paths, ports, logInfo }) {
 	// /info identifies nobody: an agent left from an earlier boot answers it exactly like this node's own,
 	// and it is the one holding the port this node's agent could not bind. The expvar names the pid.
 	const identity = debugVarsUrl(ports.debug);
-	const vars = parseJson(
-		await pollAgent(identity, "the trace-agent's expvar", state, logInfo, true)
-	);
+	const vars = parseJson(await pollAgent(identity, state));
 	const answering = expvarPid(vars);
 	if (answering === null) {
 		return {
@@ -127,7 +109,7 @@ async function verifyTraceAgent(state, { paths, ports, logInfo }) {
 }
 
 /** Prove the process behind the lock is a core agent: only it publishes aggregator and forwarder, and a live process of the wrong kind passes every cheaper check. */
-async function verifyCoreAgent(state, { paths, ports, logInfo }) {
+async function verifyCoreAgent(state, { paths, ports }) {
 	if (ports.expvar === 0) {
 		return {
 			ok: false,
@@ -137,9 +119,7 @@ async function verifyCoreAgent(state, { paths, ports, logInfo }) {
 		};
 	}
 	const url = expvarUrl(ports.expvar);
-	const vars = parseJson(
-		await pollAgent(url, "the core agent", state, logInfo)
-	);
+	const vars = parseJson(await pollAgent(url, state));
 	if (!vars || !("aggregator" in vars) || !("forwarder" in vars)) {
 		return {
 			ok: false,
@@ -180,8 +160,31 @@ const notStarted = (state) =>
 		: null;
 
 /** The verdict for one launched agent. Both supervisors call this, so neither can reach a verdict the other cannot. */
-export const verifyLaunch = (agent, state, context) =>
-	notStarted(state) ??
-	(agent.kind === "trace"
-		? verifyTraceAgent(state, context)
-		: verifyCoreAgent(state, context));
+export const verifyLaunch = (agent, state, context) => {
+	// Each supervisor verifies once, after the first spawn, and then rewrites `pid` and `restarts` on this
+	// same object without retaking the verdict. The pid it was taken against is the only record of that.
+	state.verifiedPid = state.pid ?? null;
+	return (
+		notStarted(state) ??
+		(agent.kind === "trace"
+			? verifyTraceAgent(state, context)
+			: verifyCoreAgent(state, context))
+	);
+};
+
+/** True once the process the verdict describes has been replaced. A verdict taken against no pid at all cannot go stale, because it never named one. */
+const stale = (state) =>
+	typeof state?.verifiedPid === "number" && state.verifiedPid !== state.pid;
+
+/** The verdict as it stands now. Read at the endpoint rather than stamped at boot, because the supervisor keeps writing pid and restarts to the same object for the life of the node. */
+export const currentVerdict = (state) =>
+	stale(state)
+		? {
+				...state,
+				verified: null,
+				verifyDetail:
+					`the last verdict was taken against pid ${state.verifiedPid}, which this node has since ` +
+					`restarted ${state.restarts} time(s) as pid ${state.pid}. Nothing has verified the process ` +
+					`now running; what the dead one proved was: ${state.verifyDetail}`,
+			}
+		: state;

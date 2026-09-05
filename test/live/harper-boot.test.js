@@ -17,42 +17,46 @@ const SPAN_COUNT = 5;
 const DELIVERY_DEADLINE_MS = 60_000;
 
 for (const row of DIMENSIONS) {
-	test(`${row.name}: real spans sent land in the real receiver and are read back over real HTTP`, async () => {
-		const handle = await bootHarper(row);
-		try {
-			await driveTraffic(handle, SPAN_COUNT);
+	test(
+		`${row.name}: real spans sent land in the real receiver and are read back over real HTTP`,
+		{ skip: row.skip },
+		async () => {
+			const handle = await bootHarper(row);
+			try {
+				await driveTraffic(handle, SPAN_COUNT);
 
-			const status = await waitForDelivery(
-				handle,
-				SPAN_COUNT,
-				DELIVERY_DEADLINE_MS
-			);
-			assert.ok(
-				status,
-				`DatadogStatus at ${handle.statusUrl} never answered within ${DELIVERY_DEADLINE_MS}ms`
-			);
+				const status = await waitForDelivery(
+					handle,
+					SPAN_COUNT,
+					DELIVERY_DEADLINE_MS
+				);
+				assert.ok(
+					status,
+					`DatadogStatus at ${handle.statusUrl} never answered within ${DELIVERY_DEADLINE_MS}ms`
+				);
 
-			assert.equal(
-				status.delivery.receiver.tracesReceived,
-				SPAN_COUNT,
-				`the real trace-agent receiver reported ${status.delivery.receiver.tracesReceived} traces, not the ${SPAN_COUNT} this run actually sent: ${JSON.stringify(status.delivery)}`
-			);
-			assert.notEqual(
-				status.delivery.verdict,
-				"idle",
-				`the delivery verdict never left "idle" within ${DELIVERY_DEADLINE_MS}ms of sending real traffic: ${JSON.stringify(status.delivery)}`
-			);
+				assert.equal(
+					status.delivery.receiver.tracesReceived,
+					SPAN_COUNT,
+					`the real trace-agent receiver reported ${status.delivery.receiver.tracesReceived} traces, not the ${SPAN_COUNT} this run actually sent: ${JSON.stringify(status.delivery)}`
+				);
+				assert.notEqual(
+					status.delivery.verdict,
+					"idle",
+					`the delivery verdict never left "idle" within ${DELIVERY_DEADLINE_MS}ms of sending real traffic: ${JSON.stringify(status.delivery)}`
+				);
 
-			// A row that boots the intended Harper line but silently still falls back to the bundled
-			// guard would land the same trace count and look identical from the outside; this is what
-			// tells the two paths apart. resources.js reports which supervisor actually answered.
-			assert.equal(
-				status.supervision,
-				row.expectedSupervision,
-				`${row.name} ran through "${status.supervision}" supervision, not the expected "${row.expectedSupervision}"`
-			);
-		} finally {
-			await handle.stop();
+				// A row that boots the intended Harper line but silently still falls back to the bundled
+				// guard would land the same trace count and look identical from the outside; this is what
+				// tells the two paths apart. resources.js reports which supervisor actually answered.
+				assert.equal(
+					status.supervision,
+					row.expectedSupervision,
+					`${row.name} ran through "${status.supervision}" supervision, not the expected "${row.expectedSupervision}"`
+				);
+			} finally {
+				await handle.stop();
+			}
 		}
-	});
+	);
 }

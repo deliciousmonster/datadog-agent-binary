@@ -114,12 +114,11 @@ export async function readDeliverySignal(port) {
 			"apm_config.debug.port is 0 (DD_APM_DEBUG_PORT), so the trace-agent publishes no expvar to read."
 		);
 	}
-	// insecureTls for the agent's self-signed IPC certificate, and one attempt because a status endpoint
-	// answers now or reports that nothing did; waiting for a bind is what the start-up verifies already do.
+	// One attempt, because a status endpoint answers now or reports that nothing did; waiting out a bind is
+	// what the start-up verifies already do.
 	const body = await pollEndpoint({
 		url: source,
 		timeoutMs: 1000,
-		insecureTls: true,
 		giveUp: () => true,
 	});
 	if (body === null) {

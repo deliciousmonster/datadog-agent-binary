@@ -72,7 +72,7 @@ async function checkTraceAgent(binPath, ports, paths, resources, spawned) {
 	const proc = spawnAgent(binPath, ["run", "-c", paths.configFile]);
 	spawned.push(proc.child);
 
-	const context = { paths, ports, logInfo: log };
+	const context = { paths, ports };
 	const bound = await verifyLaunch({ kind: "trace" }, proc.state, context);
 	if (!bound.ok) {
 		throw new Error(
@@ -128,7 +128,7 @@ async function checkCoreAgent(binPath, ports, paths, _resources, spawned) {
 	const proc = spawnAgent(binPath, ["run", "-c", paths.runtimeDir]);
 	spawned.push(proc.child);
 
-	const context = { paths, ports, logInfo: log };
+	const context = { paths, ports };
 	const started = await verifyLaunch({ kind: "core" }, proc.state, context);
 	if (!started.ok) {
 		throw new Error(`did not start: ${started.detail}\n${proc.output()}`);
@@ -187,27 +187,30 @@ async function main() {
 			? `hid the build tree at ${isolation.srcDir} for the duration of this run`
 			: `no build tree at ${isolation.srcDir}, so nothing here tests independence from one`
 	);
-	const rootDir = mkdtempSync(join(tmpdir(), "dd-smoke-test-"));
-	const ports = await freshPorts();
-
-	process.env.DD_API_KEY = FAKE_API_KEY;
-	process.env.DD_SITE = process.env.DD_SITE || "datadoghq.com";
-	process.env.DD_APM_RECEIVER_PORT = String(ports.receiver);
-	process.env.DD_EXPVAR_PORT = String(ports.expvar);
-	process.env.DD_APM_DEBUG_PORT = String(ports.debug);
-	process.env.DD_DOGSTATSD_PORT = String(ports.dogstatsd);
-	process.env.DD_CMD_PORT = String(ports.cmd);
-	process.env.ROOTPATH = rootDir;
-
-	// Dynamic, and after every env var above is set: resources.js reads DD_APM_*_PORT into module-scope
-	// constants the moment it is evaluated, so a static import here would bind the wrong ports.
-	const resources = await import("../resources.js");
-	const runtime = resources.prepareRuntime();
-	writeConfigFiles(runtime.configFiles, console);
-
+	// Declared out here so the finally below can remove it; everything the run creates is inside
+	// the try, or a throw during setup strands the renamed build tree and the temp root.
+	let rootDir;
 	const spawned = [];
 	const failures = [];
 	try {
+		rootDir = mkdtempSync(join(tmpdir(), "dd-smoke-test-"));
+		const ports = await freshPorts();
+
+		process.env.DD_API_KEY = FAKE_API_KEY;
+		process.env.DD_SITE = process.env.DD_SITE || "datadoghq.com";
+		process.env.DD_APM_RECEIVER_PORT = String(ports.receiver);
+		process.env.DD_EXPVAR_PORT = String(ports.expvar);
+		process.env.DD_APM_DEBUG_PORT = String(ports.debug);
+		process.env.DD_DOGSTATSD_PORT = String(ports.dogstatsd);
+		process.env.DD_CMD_PORT = String(ports.cmd);
+		process.env.ROOTPATH = rootDir;
+
+		// Dynamic, and after every env var above is set: resources.js reads DD_APM_*_PORT into module-scope
+		// constants the moment it is evaluated, so a static import here would bind the wrong ports.
+		const resources = await import("../resources.js");
+		const runtime = resources.prepareRuntime();
+		writeConfigFiles(runtime.configFiles, console);
+
 		for (const binary of BINARIES) {
 			const binPath = join(binDir, binaryFilename(binary, currentTarget()));
 			const check = CHECKS[binary.shipsAs];
@@ -229,6 +232,9 @@ async function main() {
 		}
 	} finally {
 		for (const child of spawned) {
+			// A kill on a handle whose spawn failed has pid undefined, and node reads that as 0: SIGKILL to
+			// this process group, which takes the release leg down with no output at all.
+			if (!child.pid) continue;
 			try {
 				child.kill("SIGKILL");
 			} catch {
@@ -236,7 +242,7 @@ async function main() {
 			}
 		}
 		isolation.restore();
-		rmSync(rootDir, { recursive: true, force: true });
+		if (rootDir) rmSync(rootDir, { recursive: true, force: true });
 	}
 
 	if (failures.length > 0) {

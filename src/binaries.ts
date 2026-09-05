@@ -12,8 +12,8 @@ export interface AgentBinary {
 	readonly argsOverride: string;
 	/** Symbol that must be present in the shipped binary. scripts/verify-package.js gates publish on it. */
 	readonly requiredSymbol: string;
-	/** Symbol whose presence means a shipping constraint was violated. scripts/verify-package.js gates on it. */
-	readonly forbiddenSymbol?: string;
+	/** Go build tag mandatoryArgs excludes. scripts/verify-package.js reads the shipped binary's build info and gates on its absence. */
+	readonly forbiddenBuildTag?: string;
 }
 
 export const BINARIES: readonly AgentBinary[] = [
@@ -32,7 +32,9 @@ export const BINARIES: readonly AgentBinary[] = [
 		],
 		argsOverride: "DD_AGENT_BUILD_ARGS",
 		requiredSymbol: "datadog-agent/pkg/aggregator",
-		forbiddenSymbol: "datadog-agent/pkg/collector/python",
+		// Not a symbol: pkg/collector/python compiles either way (version_nopy.go is //go:build
+		// !python), so its package path is in a correct build and only the tag set discriminates.
+		forbiddenBuildTag: "python",
 	},
 	{
 		shipsAs: "trace-agent",
@@ -46,6 +48,22 @@ export const BINARIES: readonly AgentBinary[] = [
 		requiredSymbol: "datadog-agent/pkg/trace/api.",
 	},
 ];
+
+// Go writes the tag set it linked with into the binary's own build info as one comma-separated line, so
+// the exclusion is read off the artifact instead of trusting the flag the build was asked to use.
+const TAGS_LINE = Buffer.from("build\t-tags=", "latin1");
+
+/** The Go build tags recorded in a linked binary, or null when it carries no build-info record at all. */
+export function recordedBuildTags(bytes: Buffer): string[] | null {
+	const at = bytes.indexOf(TAGS_LINE);
+	if (at === -1) return null;
+	const from = at + TAGS_LINE.length;
+	const end = bytes.indexOf(0x0a, from);
+	return bytes
+		.subarray(from, end === -1 ? bytes.length : end)
+		.toString("latin1")
+		.split(",");
+}
 
 /** The name a binary is shipped and copied under for one target, e.g. `datadog-agent.exe`. */
 export function binaryFilename(binary: AgentBinary, target: Target): string {

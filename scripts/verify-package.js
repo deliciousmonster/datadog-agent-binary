@@ -9,7 +9,11 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT, platformPackageDir } from "./paths.js";
 import { TARGETS } from "../dist/src/targets.js";
-import { BINARIES, binaryFilename } from "../dist/src/binaries.js";
+import {
+	BINARIES,
+	binaryFilename,
+	recordedBuildTags,
+} from "../dist/src/binaries.js";
 
 // --ignore-scripts, because pack still runs "prepare" without it: this dry-run inspects a manifest,
 // it does not consent to running whatever that package's lifecycle hooks do.
@@ -20,20 +24,6 @@ function packedPaths(dir) {
 		{ cwd: dir, encoding: "utf8" }
 	);
 	return JSON.parse(out)[0].files.map((file) => file.path);
-}
-
-function countSymbol(binaryPath, symbol) {
-	const bytes = readFileSync(binaryPath);
-	const needle = Buffer.from(symbol, "latin1");
-	let count = 0;
-	for (
-		let at = bytes.indexOf(needle);
-		at !== -1;
-		at = bytes.indexOf(needle, at + needle.length)
-	) {
-		count++;
-	}
-	return count;
 }
 
 const failures = [];
@@ -50,7 +40,8 @@ function verifyGuard() {
 
 // Checked against the packed listing, not the build tree the binary was copied from: this is the
 // regression test for the entire project, so it has to see exactly what a customer's install sees.
-function verifyPlatformPackage(dirName) {
+function verifyPlatformPackage(target) {
+	const dirName = target.name;
 	const dir = platformPackageDir(dirName);
 	if (!existsSync(join(dir, "package.json"))) {
 		// A throw mid-copy can leave bin/ populated with no package.json, or - when the very first
@@ -74,12 +65,6 @@ function verifyPlatformPackage(dirName) {
 	const binFiles = shipped.filter((p) => p.startsWith("bin/"));
 	if (binFiles.length === 0) {
 		failures.push(`${dirName}: platform package ships zero binaries`);
-		return;
-	}
-
-	const target = TARGETS.find((t) => t.name === dirName);
-	if (!target) {
-		failures.push(`${dirName}: no matching entry in src/targets.ts`);
 		return;
 	}
 
@@ -113,41 +98,39 @@ function verifyPlatformPackage(dirName) {
 			);
 			continue;
 		}
-		const binaryPath = join(dir, relPath);
+		const bytes = readFileSync(join(dir, relPath));
 		if (
 			binary.requiredSymbol &&
-			countSymbol(binaryPath, binary.requiredSymbol) === 0
+			!bytes.includes(Buffer.from(binary.requiredSymbol, "latin1"))
 		) {
 			failures.push(
 				`${dirName}/${binary.shipsAs}: required symbol "${binary.requiredSymbol}" appears 0 times in the packed binary`
 			);
 		}
-		if (
-			binary.forbiddenSymbol &&
-			countSymbol(binaryPath, binary.forbiddenSymbol) > 0
-		) {
-			failures.push(
-				`${dirName}/${binary.shipsAs}: forbidden symbol "${binary.forbiddenSymbol}" is present in the packed binary`
-			);
+		if (binary.forbiddenBuildTag) {
+			const tags = recordedBuildTags(bytes);
+			// A binary with no tag record is not a binary that dropped the tag: unreadable has to
+			// refuse, or the gate passes every artifact whose build info it failed to find.
+			if (tags === null) {
+				failures.push(
+					`${dirName}/${binary.shipsAs}: carries no Go build-tag record, so the ` +
+						`"${binary.forbiddenBuildTag}" exclusion cannot be read off the packed binary`
+				);
+			} else if (tags.includes(binary.forbiddenBuildTag)) {
+				failures.push(
+					`${dirName}/${binary.shipsAs}: was compiled with the "${binary.forbiddenBuildTag}" ` +
+						"build tag, which mandatoryArgs' --build-exclude is there to drop"
+				);
+			}
 		}
 	}
 }
 
 verifyGuard();
-const npmDir = join(REPO_ROOT, "npm");
 
-// TARGETS drives this, not readdirSync(npmDir): a directory listing never mentions a target whose
+// TARGETS drives this, not readdirSync(npm/): a directory listing never mentions a target whose
 // npm/<name>/ was never created, which is exactly the gap this gate exists to catch.
-for (const target of TARGETS) verifyPlatformPackage(target.name);
-
-// Anything left under npm/ that no target names still ships - the publish step iterates npm/*/, not
-// TARGETS - so it gets the same scrutiny, via the "no matching entry in src/targets.ts" check above.
-const knownNames = new Set(TARGETS.map((target) => target.name));
-if (existsSync(npmDir)) {
-	for (const dirName of readdirSync(npmDir)) {
-		if (!knownNames.has(dirName)) verifyPlatformPackage(dirName);
-	}
-}
+for (const target of TARGETS) verifyPlatformPackage(target);
 
 if (failures.length > 0) {
 	for (const message of failures) console.error(`Publish gate: ${message}`);

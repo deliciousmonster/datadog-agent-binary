@@ -17,43 +17,16 @@ env:
   GO_VERSION: "1.23"
 
 jobs:
-  # tsc's output doesn't depend on OS/arch, so it is compiled once here instead of once per matrix
-  # leg below. Also the single source of the release version, so build and publish agree on it.
+  # The single source of the release version, so build and publish agree on it. Nothing else:
+  # a cold tsc is under half a second, so compiling here and shipping dist/ around cost more
+  # than it saved and serialised the whole matrix behind a job that only reads a ref.
   prepare:
     runs-on: ubuntu-latest
-    # Installing deps and running tsc is minutes of work, not hours.
-    timeout-minutes: 15
+    # Reading a ref and writing one output. No checkout, no install.
+    timeout-minutes: 5
     outputs:
       version: ${{ steps.extract_version.outputs.version }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          submodules: true
-
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          # Reads package.json's engines.node, the one already-checked-in source of truth - no
-          # separate Actions variable to keep in sync with it.
-          node-version-file: "package.json"
-          cache: "npm"
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build TypeScript
-        run: npm run build
-
-      # Every leg compiles the same source, so only one upload is needed; build's four legs
-      # download this instead of compiling their own. Publish's copy is provisional - see its own download step.
-      - name: Upload dist artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: dist
-          path: dist/
-          retention-days: 1
-
       # The dispatch input reaches bash as an environment value, never as source. Spliced through
       # ${{ }} it is shell text, and `7.0.0 ; touch pwned ; #` executes on the runner.
       - name: Extract version from tag
@@ -177,16 +150,11 @@ jobs:
         run: |
           choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
 
-      # Native deps (if any land in devDependencies later) resolve per runner OS/arch here; the
-      # compiled dist/ itself is OS-independent and comes from prepare instead, below.
       - name: Install dependencies
         run: npm ci
 
-      - name: Download dist artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: dist
-          path: dist/
+      - name: Build TypeScript
+        run: npm run build
 
       - name: Build ${{ matrix.platform }}
         shell: bash
@@ -281,8 +249,8 @@ jobs:
         with:
           submodules: true
 
-      # Excludes the build job's `dist` artifact: this job only assembles the per-platform
-      # binary archives, and an unfiltered download would land dist/ among them.
+      # Named by pattern, not unfiltered: the loop below turns every entry under artifacts/ into a
+      # release asset, so anything a later job uploads must not silently become one.
       - name: Download all artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -392,8 +360,8 @@ jobs:
         with:
           submodules: true
 
-      # Excludes the build job's `dist` artifact: the loop below treats every entry under
-      # artifacts/ as a platform binary set, and dist/ isn't one.
+      # Named by pattern, not unfiltered: "Move binaries to build dirs" below treats every entry
+      # under artifacts/ as one platform's binary set.
       - name: Download binaries
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -434,21 +402,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # This download is provisional: "Set package version from tag" below still rebuilds dist/ via
-      # npm version's lifecycle script (see package.json), so this copy doesn't survive to Verify package.
-      - name: Download dist artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: dist
-          path: dist/
-
       # The release tag (vX.Y.Z) is the version everything is published at, so
       # the npm package version must match it. This runs the `version` lifecycle
       # script (build + update-optional-deps), keeping optionalDependencies
       # pinned to the same version. --allow-same-version makes re-runs safe.
       #
-      # update-optional-deps keeps its own build prefix (see package.json): check-upstream.yml
-      # calls npm version with no prior build step and needs it to produce dist/src/targets.js.
+      # update-optional-deps keeps its own build prefix (see package.json): this is where dist/
+      # is compiled in this job, and the two steps below both read it.
       - name: Set package version from tag
         env:
           VERSION: ${{ needs.prepare.outputs.version }}

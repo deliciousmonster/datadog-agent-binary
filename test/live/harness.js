@@ -36,6 +36,10 @@ const { BINARIES } = await import(
 const ADMIN_USER = "LIVE_ADMIN";
 const ADMIN_PASS = "live-tier-2026";
 
+// No published Harper carries `scope.processes`, so the native row can only run against a local
+// build of feat/process-guard and the path to it is the caller's, not this file's.
+const NATIVE_WORKTREE = process.env.DD_LIVE_HARPER_NATIVE;
+
 /**
  * One row per Harper line (and, later, per platform) this tier boots against. `moduleLoader` is
  * per-row because it is tied to a live defect, not a fixed choice: harper-process-guard used to
@@ -55,10 +59,13 @@ export const DIMENSIONS = [
 	{
 		// A local worktree, not the registry: this Harper build carries a real `scope.processes`
 		// (feat/process-guard), so this row proves the native path rather than mocking it.
-		name: "harper@5.2.5 (patched) / native scope.processes supervision",
-		harperLine: "file:/Users/jrepp/Developer/repositories/harperfast/.wt/guard",
+		name: "harper (local worktree) / native scope.processes supervision",
+		harperLine: NATIVE_WORKTREE && `file:${NATIVE_WORKTREE}`,
 		moduleLoader: "vm-current-context",
 		expectedSupervision: "harper",
+		skip: NATIVE_WORKTREE
+			? false
+			: "set DD_LIVE_HARPER_NATIVE to an absolute path to a Harper worktree carrying scope.processes",
 	},
 ];
 

@@ -8,7 +8,7 @@ import http from "node:http";
 
 import { parseJson, pollEndpoint } from "../../runtime/probe.js";
 import { createStallingTlsStub, createTlsStub } from "../fixtures/tls-stub.js";
-import { createStub, findFreePort, withServer } from "../support/loopback.js";
+import { findFreePort, withServer } from "../support/loopback.js";
 import { withPatchedSetTimeout } from "../support/sandbox.js";
 
 /** The sleeps pollEndpoint asks for, read off the clock rather than waited out. */
@@ -91,88 +91,29 @@ test("the deadline still bounds the poll: the last wait is truncated, not overru
 	);
 });
 
-test("a poll that had to wait reports what it cost, once", async () => {
-	const reports = [];
+test("a poll that had to wait still returns the body it waited for", async () => {
+	// The whole point of the backoff: two failures then a serve has to come back with the body, not with the
+	// null a caller would read as "nothing is there".
 	const body = await withServer(failsThenServes(2), (port) =>
 		pollEndpoint({
 			url: `http://127.0.0.1:${port}/debug/vars`,
 			intervalMs: 20,
-			onRetried: (report) => reports.push(report),
 		})
 	);
 
 	assert.equal(
 		body,
 		"expvar",
-		"the poll must still return the body it waited for"
-	);
-	assert.equal(
-		reports.length,
-		1,
-		"one report per poll, not one per attempt: the point is a single line per thread"
-	);
-	assert.equal(
-		reports[0].attempts,
-		3,
-		`two failures then a success is three attempts, got ${reports[0].attempts}`
-	);
-	assert.ok(
-		reports[0].waitedMs >= 50,
-		`reported ${reports[0].waitedMs}ms, under the 20ms + 40ms it actually slept`
+		"a poll that retried past two 503s dropped the body the third probe returned"
 	);
 });
 
-test("NEGATIVE: a throwing onRetried costs neither the body nor the never-throws guarantee", async () => {
-	// It fires after a successful probe, so an unguarded call would lose a body already in hand and fail the
-	// verify on a healthy node, which is worse than the diagnostic it was added for.
-	const body = await withServer(failsThenServes(1), (port) =>
-		pollEndpoint({
-			url: `http://127.0.0.1:${port}/debug/vars`,
-			intervalMs: 20,
-			onRetried: () => {
-				throw new Error("a logger this component does not control");
-			},
-		})
-	);
-
-	assert.equal(
-		body,
-		"expvar",
-		"the caller lost the body its probe had already fetched"
-	);
-});
-
-test("NEGATIVE: an endpoint that answers first time reports nothing", async () => {
-	// Nine threads a boot: a line on the normal path is noise, and noise is what hid the original defect.
-	const reports = [];
-	const body = await withServer(
-		createStub({ body: { endpoints: ["/v0.4/traces"] } }),
-		(port) =>
-			pollEndpoint({
-				url: `http://127.0.0.1:${port}/info`,
-				onRetried: (report) => reports.push(report),
-			})
-	);
-
-	assert.notEqual(
-		body,
-		null,
-		"the stub answered, so the poll must have a body"
-	);
-	assert.deepEqual(
-		reports,
-		[],
-		"onRetried fired without a retry, so every thread would log a wait on every boot"
-	);
-});
-
-test("NEGATIVE: the insecure branch answers null rather than rejecting, same as the fetch branch", async () => {
-	// readDeliverySignal's own never-rejects contract rests on this one, and both branches call into a
-	// dd-trace private path that can move under either of them.
+test("NEGATIVE: a request the client refuses outright answers null rather than rejecting", async () => {
+	// readDeliverySignal's own never-rejects contract rests on this one, and the probe calls into a
+	// dd-trace private path that can move under it.
 	const answered = await pollEndpoint({
 		// A port outside 1-65535 is not a URL, so node:https throws before it ever opens a socket.
 		url: "https://127.0.0.1:99999/debug/vars",
-		insecureTls: true,
 		giveUp: () => true,
 	});
 	assert.equal(
@@ -182,15 +123,14 @@ test("NEGATIVE: the insecure branch answers null rather than rejecting, same as 
 	);
 });
 
-test("the insecure branch reads a body back off a real TLS endpoint", async () => {
+test("the probe reads a body back off a real TLS endpoint", async () => {
 	// The half of probe.js the trace-agent's own expvar is behind. Nothing else in the suite dials TLS, so
-	// without this every insecure-branch test could pass against a client that can only ever answer null.
+	// without this every TLS test could pass against a client that can only ever answer null.
 	const body = await withServer(
 		createTlsStub({ body: { pid: "4321" } }),
 		(port) =>
 			pollEndpoint({
 				url: `https://127.0.0.1:${port}/debug/vars`,
-				insecureTls: true,
 				giveUp: () => true,
 			})
 	);
@@ -198,7 +138,7 @@ test("the insecure branch reads a body back off a real TLS endpoint", async () =
 	assert.equal(
 		parseJson(body)?.pid,
 		"4321",
-		`the insecure branch answered ${body} for a body a plain curl reads back whole`
+		`the probe answered ${body} for a body a plain curl reads back whole`
 	);
 });
 
@@ -214,7 +154,6 @@ test("NEGATIVE: a TLS response that starts and then stalls settles rather than h
 			const answered = await Promise.race([
 				pollEndpoint({
 					url: `https://127.0.0.1:${port}/debug/vars`,
-					insecureTls: true,
 					timeoutMs: 2000,
 					giveUp: () => true,
 				}).then(() => "settled"),

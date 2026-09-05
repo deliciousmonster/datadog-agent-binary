@@ -126,7 +126,16 @@ ports the component pins and polls; the debug port carries the trace-agent's own
 thing that ties whatever holds the receiver port to the process this node started, so setting it to 0 makes
 the trace verify refuse. `GET /DatadogStatus/` reports what startup did on the thread that answers it; verify
 the agents themselves with `curl` from a shell rather than through that endpoint, which is inside the
-traced request path it would be reporting on.
+traced request path it would be reporting on:
+
+```sh
+curl -s  http://127.0.0.1:8126/info        # the APM receiver, at DD_APM_RECEIVER_PORT
+curl -s  http://127.0.0.1:5000/debug/vars  # the core agent's expvar, at DD_EXPVAR_PORT
+curl -sk https://127.0.0.1:5012/debug/vars # the trace-agent's expvar, at DD_APM_DEBUG_PORT
+```
+
+The last one is `-k` because the trace-agent serves its debug port under the self-signed IPC certificate
+it writes into the runtime tree.
 
 A Harper build whose `Scope` carries the process sidecar API supervises both agents itself. Where it
 does not, the bundled guard supervises instead: one lock per agent under

@@ -1,6 +1,7 @@
 // Every request this module makes is invisible to APM: the plugin polls the agents before they bind, when
 // polls fail, and on the line this replaces those failures became errored client spans on the customer's own service.
 
+import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { createRequire } from "node:module";
 
@@ -25,7 +26,6 @@ const untraced = (() => {
 // configurePlugin overwrites a plugin's config rather than merging into it. Kept only as a fallback for releases where the private store above has moved; it cannot stand alone.
 export function untraceAgentProbes(tracer, blocklist) {
 	tracer.use("http", { client: { blocklist } }); // under `client`, or the server half drops inbound traces too
-	tracer.use("fetch", { blocklist }); // its own plugin extending the http client; use('http') never reaches it
 }
 
 /** A probe body as JSON, or null. Never throws: these bodies come off a socket and pollEndpoint's own contract is the same. */
@@ -37,33 +37,31 @@ export function parseJson(body) {
 	}
 }
 
-/** GET over https accepting a self-signed certificate. Loopback only: never point this off 127.0.0.1. */
-function fetchInsecure(url, timeoutMs) {
+/** GET over http or https, accepting the trace-agent's self-signed IPC certificate. Loopback only: never point this off 127.0.0.1. Global fetch cannot stand in for it, because Node exposes no public dispatcher for that certificate. */
+function get(url, timeoutMs) {
 	return new Promise((resolve) => {
 		let deadline;
 		const settle = (body) => {
 			clearTimeout(deadline);
 			resolve(body);
 		};
-		const call = httpsRequest(
-			url,
-			{ rejectUnauthorized: false },
-			(response) => {
-				const status = response.statusCode;
-				if (status === undefined || status < 200 || status >= 300) {
-					response.resume();
-					settle(null);
-					return;
-				}
-				let body = "";
-				response.setEncoding("utf-8");
-				response.on("data", (chunk) => (body += chunk));
-				response.on("end", () => settle(body));
-				// The reset a destroy() lands on an open response arrives here, not on the request, and an
-				// unheard one leaves this promise pending for the life of the process.
-				response.on("error", () => settle(null));
+		// node:http ignores rejectUnauthorized, so the scheme is the only difference between the two probes.
+		const send = url.startsWith("https:") ? httpsRequest : httpRequest;
+		const call = send(url, { rejectUnauthorized: false }, (response) => {
+			const status = response.statusCode;
+			if (status === undefined || status < 200 || status >= 300) {
+				response.resume();
+				settle(null);
+				return;
 			}
-		);
+			let body = "";
+			response.setEncoding("utf-8");
+			response.on("data", (chunk) => (body += chunk));
+			response.on("end", () => settle(body));
+			// The reset a destroy() lands on an open response arrives here, not on the request, and an
+			// unheard one leaves this promise pending for the life of the process.
+			response.on("error", () => settle(null));
+		});
 		call.on("error", () => settle(null));
 		// One deadline over the whole exchange rather than the socket's own inactivity timeout: a response
 		// that starts and then stalls, or drips a byte at a time, never trips that one.
@@ -75,31 +73,15 @@ function fetchInsecure(url, timeoutMs) {
 	});
 }
 
-// Both branches run under `untraced`: the span is created where the request is made, so that is the only
-// place suppression cannot be undone by other code in the process.
-async function probe(url, timeoutMs, insecureTls) {
+// Run under `untraced`: the span is created where the request is made, so that is the only place suppression
+// cannot be undone by other code in the process.
+async function probe(url, timeoutMs) {
 	try {
-		// Awaited inside the try on both branches: `untraced` reaches into a dd-trace private path, and
-		// pollEndpoint's never-throws contract has to hold whichever branch that path moves under.
-		if (insecureTls) return await untraced(() => fetchInsecure(url, timeoutMs));
-		return await untraced(async () => {
-			const response = await fetch(url, {
-				signal: AbortSignal.timeout(timeoutMs),
-			});
-			return response.ok ? await response.text() : null;
-		});
+		// Awaited inside the try rather than returned: `untraced` reaches into a dd-trace private path, and
+		// pollEndpoint's never-throws contract has to hold if that path moves.
+		return await untraced(() => get(url, timeoutMs));
 	} catch {
 		return null;
-	}
-}
-
-// Swallowed on purpose: the report fires after a successful probe, so a throwing callback would otherwise
-// cost the caller the body it already holds and break the never-throws guarantee.
-function reportRetries(onRetried, attempts, waitedMs) {
-	try {
-		onRetried?.({ attempts, waitedMs });
-	} catch {
-		// A caller whose own logger is broken has no second channel to be told on.
 	}
 }
 
@@ -112,25 +94,16 @@ export async function pollEndpoint({
 	timeoutMs = 30_000,
 	intervalMs = 250,
 	giveUp,
-	insecureTls = false,
-	onRetried,
 }) {
-	const started = Date.now();
-	const deadline = started + timeoutMs;
+	const deadline = Date.now() + timeoutMs;
 	let interval = intervalMs;
-	for (let attempts = 1; ; attempts++) {
+	for (;;) {
 		const budget = Math.min(
 			PROBE_TIMEOUT_MS,
 			Math.max(deadline - Date.now(), 1)
 		);
-		const body = await probe(url, budget, insecureTls);
-		if (body !== null) {
-			// Reported only when it had to wait: the failed probes go nowhere else, so a caller that wants a
-			// slow bind on the record has this and nothing else to write it from.
-			if (attempts > 1)
-				reportRetries(onRetried, attempts, Date.now() - started);
-			return body;
-		}
+		const body = await probe(url, budget);
+		if (body !== null) return body;
 		// Asked between probes, and only after one has failed, so a target that answered then died still counts.
 		if (giveUp?.() || Date.now() >= deadline) return null;
 		// Clamped to what is left: backing off must not spend the caller's budget asleep past the deadline.

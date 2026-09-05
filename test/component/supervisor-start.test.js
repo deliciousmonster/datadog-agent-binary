@@ -136,14 +136,7 @@ test("the rendered datadog.yaml keeps the credentials off disk and pins what the
 		{ info: SERVING, expvar: CORE_EXPVAR },
 		async ({ root, receiver, expvarPort }) => {
 			const scope = recordingScope();
-			const dogstatsdPort = await findFreePort();
-			const cmdPort = await findFreePort();
-			await withBuiltBinaries(() =>
-				start(scope, {
-					DD_DOGSTATSD_PORT: String(dogstatsdPort),
-					DD_CMD_PORT: String(cmdPort),
-				})
-			);
+			await withBuiltBinaries(() => start(scope));
 
 			const traceStart = startFor(scope, TRACE_AGENT);
 			const configFile = path.join(root, "datadog", APP_NAME, "datadog.yaml");
@@ -165,25 +158,12 @@ test("the rendered datadog.yaml keeps the credentials off disk and pins what the
 				new RegExp(`expvar_port: ${expvarPort}\\b`),
 				"the expvar port in the config must be the one the core-agent verify polls"
 			);
-			assert.match(
-				rendered,
-				new RegExp(`dogstatsd_port: ${dogstatsdPort}\\b`),
-				"dogstatsd_port must be pinned to the port this instance resolved"
-			);
-			assert.match(
-				rendered,
-				new RegExp(`cmd_port: ${cmdPort}\\b`),
-				"cmd_port must be pinned to the port this instance resolved"
-			);
+			// Measured on 7.82.1: the environment outranks the file, so a written line can only ever restate
+			// DD_DOGSTATSD_PORT or the agent's own default, and nothing here polls either port.
 			assert.doesNotMatch(
 				rendered,
-				/dogstatsd_port: 8125\b/,
-				"dogstatsd_port fell back to Datadog's own hardcoded default rather than the pinned one"
-			);
-			assert.doesNotMatch(
-				rendered,
-				/cmd_port: 5001\b/,
-				"cmd_port fell back to Datadog's own hardcoded default rather than the pinned one"
+				/^\s*(dogstatsd_port|cmd_port)\s*:/m,
+				"a port line this component never probes cannot change what the agent binds"
 			);
 			assert.match(
 				rendered,
@@ -299,6 +279,26 @@ test("NEGATIVE: a receiver that does not advertise /v0.4/traces does not count a
 			);
 		}
 	);
+});
+
+test("NEGATIVE: an expvar body missing either core member is not a core agent", async () => {
+	// The core side of the question the /v0.4/traces test asks on the trace side. Any live process answering
+	// 200 with JSON passes every cheaper check, so the members only a core agent publishes are the whole gate.
+	for (const missing of ["aggregator", "forwarder"]) {
+		const expvar = { ...CORE_EXPVAR };
+		delete expvar[missing];
+		await withAgentsAnswering({ info: SERVING, expvar }, async () => {
+			const { status } = await withBuiltBinaries(() => start(recordingScope()));
+			const core = status.processes.find((state) => state.kind === "core");
+
+			assert.equal(
+				core.verified,
+				false,
+				`an expvar publishing no ${missing} was taken for a core agent: ${core.verifyDetail}`
+			);
+			assert.match(core.verifyDetail, /identified itself as a core agent/);
+		});
+	}
 });
 
 test("NEGATIVE: receiver_port 0 refuses loudly instead of falling back to 8126", async () => {
@@ -469,15 +469,14 @@ async function withGuardStarted(
 			let status;
 			let statusResource;
 			try {
-				// A Scope with no `processes` is what released Harper hands a plugin, and it used to be refused.
-				({ status, DatadogStatus: statusResource } = await withBuiltBinaries(
-					(files) => {
-						if (breakCoreAgent) breakCoreBinary(files);
-						return start({});
-					},
-					STAYS_UP
-				));
-				return await run({ pidDir, status, statusResource });
+				// `run` goes inside, not after: withBuiltBinaries hands the real 139MB agents back the moment
+				// its own callback resolves, so a guard restart in a test body would spawn one for real.
+				return await withBuiltBinaries(async (files) => {
+					if (breakCoreAgent) breakCoreBinary(files);
+					// A Scope with no `processes` is what released Harper hands a plugin, and it used to be refused.
+					({ status, DatadogStatus: statusResource } = await start({}));
+					return run({ pidDir, status, statusResource });
+				}, STAYS_UP);
 			} finally {
 				for (const state of status?.processes ?? []) halt(state.pid);
 				halt(lockedPid(pidDir, REAPER));
@@ -539,6 +538,13 @@ test("where Harper has no processes.start, the bundled guard starts both agents 
 			status.reaper.started,
 			true,
 			`a reaper is running under ${pidDir} and the status cannot say so`
+		);
+		// The pid too: the status endpoint is the only thing a customer can read, and an operator told a
+		// reaper is running still has to be able to find it without reading the lock directory by hand.
+		assert.equal(
+			status.reaper.pid,
+			reaper,
+			`the status reports reaper pid ${status.reaper.pid} against ${reaper} on the lock`
 		);
 
 		// The pid the guard really spawned is the one the verify was handed; a state assembled from the
@@ -649,6 +655,71 @@ test("the status endpoint reports each agent as it is now, not as it was at boot
 			`the endpoint reports pid ${stopped.pid} as this node's trace-agent, and it is not running`
 		);
 	});
+});
+
+test("a verdict taken before a restart is not reported as the verdict on what is running now", async () => {
+	// The other half of the same object. Each supervisor verifies once, after the first spawn, and its
+	// restart path rewrites pid and restarts without retaking the verdict, so `verified: true` can end up
+	// published beside a pid this node killed and replaced.
+	// Not withGuardStarted: that hands the real binaries back before its callback runs, so the replacement
+	// the guard starts here would be a real 139MB agent against ports these stubs already hold.
+	let pidDir;
+	const lockedTrace = () => (pidDir ? lockedPid(pidDir, TRACE_AGENT) : 0);
+	await withAgentsAnswering(
+		{
+			info: SERVING,
+			expvar: () => ({
+				...CORE_EXPVAR,
+				pid: pidDir ? lockedPid(pidDir, CORE_AGENT) : 0,
+			}),
+			debug: () => ({ pid: String(lockedTrace()) }),
+		},
+		async ({ root }) => {
+			pidDir = path.join(root, "datadog", APP_NAME, "pids");
+			let status;
+			try {
+				await withBuiltBinaries(async () => {
+					let statusResource;
+					({ status, DatadogStatus: statusResource } = await start({}));
+					const traceOf = (reported) =>
+						reported.processes.find((state) => state.kind === "trace");
+					const boot = traceOf(await statusResource.get());
+					assert.equal(boot.verified, true, boot.verifyDetail);
+					// Read out, not held: the endpoint hands back the supervisor's live object, so `boot`
+					// itself is what the restart rewrites.
+					const bootPid = boot.pid;
+
+					// SIGKILL, not SIGTERM: the guard reads SIGTERM as a deliberate stop and starts nothing in
+					// its place, which is why the test above never exercises the fields that freeze.
+					process.kill(bootPid, "SIGKILL");
+					const restarted = await until(async () => {
+						const state = traceOf(await statusResource.get());
+						return state.restarts > 0 && state.pid !== bootPid ? state : null;
+					});
+
+					assert.ok(
+						restarted,
+						`the guard never restarted the trace-agent; it still reports pid ${bootPid}`
+					);
+					assert.notEqual(
+						restarted.verified,
+						true,
+						`pid ${restarted.pid} is reported verified on a proof taken against pid ${bootPid}: ${restarted.verifyDetail}`
+					);
+					assert.match(
+						restarted.verifyDetail,
+						new RegExp(`taken against pid ${bootPid}`),
+						`nothing tells the reader the verdict is stale: ${restarted.verifyDetail}`
+					);
+				}, STAYS_UP);
+			} finally {
+				for (const state of status?.processes ?? []) halt(state.pid);
+				halt(lockedTrace());
+				halt(lockedPid(pidDir, REAPER));
+				await waitForLocksCleared(pidDir, BOTH_AGENTS);
+			}
+		}
+	);
 });
 
 test("a deliberate stop releases the lock, so the next boot starts rather than adopting a corpse", async () => {

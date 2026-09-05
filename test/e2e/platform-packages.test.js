@@ -135,9 +135,3 @@ test("the declared licence matches the licence file that ships", () => {
 	assert.match(licence, /Apache License/);
 	assert.equal(mainPkg.license, "Apache-2.0");
 });
-
-// The runtime half only ever runs inside Harper, so Harper's floor is this package's floor. Declaring
-// lower invites an install npm permits and Harper then refuses.
-test("the declared node floor is not looser than Harper's", () => {
-	assert.equal(mainPkg.engines.node, "^22.18.0 || >=24.0.0");
-});

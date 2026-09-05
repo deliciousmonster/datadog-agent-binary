@@ -21,8 +21,19 @@ after(() => {
 	for (const dir of workDirs) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// The build-info record Go writes into every binary it links, in the shape verify-package.js reads it
+// back from. A tag set standing for a correct build: no `python`, and more than one entry, so a gate
+// matching the line rather than the list would still have to pick the tag out of it.
+const buildInfo = (tags = "zlib,zstd,orchestrator,kubelet") =>
+	`build\t-buildmode=exe\nbuild\t-tags=${tags}\n`;
+
+/** What a correctly-built binary looks like to a gate that only byte-searches: its symbol and its tag record. */
+const shipped = (binary, tags) =>
+	`${binary.requiredSymbol}\n${buildInfo(tags)}`;
+
 // A well-formed platform package for one target. Content is a text stand-in, never a real binary -
-// verify-package.js only ever byte-searches it, same as create-platform-packages.js's own tests.
+// verify-package.js only ever byte-searches it, same as create-platform-packages.js's own tests. What
+// the declared symbol and tag are worth against a real build is test/binaries/publish-gate-values.test.js.
 function writePlatformPackage(workDir, target, binOverrides = {}) {
 	const binDir = path.join(workDir, "npm", target.name, "bin");
 	fs.mkdirSync(binDir, { recursive: true });
@@ -43,7 +54,7 @@ function writePlatformPackage(workDir, target, binOverrides = {}) {
 		if (override === "missing") continue;
 		fs.writeFileSync(
 			path.join(binDir, `${binary.shipsAs}${target.exe}`),
-			override ?? `${binary.requiredSymbol}\n`
+			override ?? shipped(binary)
 		);
 	}
 }
@@ -138,8 +149,8 @@ test("NEGATIVE: a platform package with zero binaries refuses the release", () =
 	assert.match(result.stderr, /ships zero binaries/);
 });
 
-// What create-platform-packages.js's --all tolerateMissing branch produces: a target the build threw
-// on is skipped with a console.warn and no npm/<name>/ directory, which readdirSync(npmDir) never visits.
+// The gap TARGETS-drives-the-loop exists for: a target whose package was never created leaves no
+// npm/<name>/ directory at all, and a directory listing can only ever report what is there.
 test("NEGATIVE: a target whose platform package was never created refuses the release", () => {
 	const result = runGate(buildFixture({ missingTargets: [TARGET.name] }));
 	assert.notEqual(result.status, 0);
@@ -182,17 +193,33 @@ test("NEGATIVE: a shipped binary missing its required symbol refuses the release
 	assert.match(result.stderr, /required symbol .* appears 0 times/);
 });
 
-test("NEGATIVE: a shipped binary carrying the forbidden symbol refuses the release", () => {
+const CORE = BINARIES.find((binary) => binary.forbiddenBuildTag);
+
+test("NEGATIVE: a binary recording the forbidden build tag refuses the release", () => {
 	const result = runGate(
 		buildFixture({
 			binOverrides: {
-				"datadog-agent":
-					"datadog-agent/pkg/aggregator and datadog-agent/pkg/collector/python\n",
+				[CORE.shipsAs]: shipped(CORE, `zlib,${CORE.forbiddenBuildTag},zstd`),
 			},
 		})
 	);
 	assert.notEqual(result.status, 0);
-	assert.match(result.stderr, /forbidden symbol .* is present/);
+	assert.match(
+		result.stderr,
+		new RegExp(`was compiled with the "${CORE.forbiddenBuildTag}" build tag`)
+	);
+});
+
+// The gate reads the exclusion off the artifact, so a binary it cannot read the record from is the one
+// case where refusing and passing are both defensible. Passing makes every unreadable artifact publish.
+test("NEGATIVE: a binary carrying no build-tag record refuses the release", () => {
+	const result = runGate(
+		buildFixture({
+			binOverrides: { [CORE.shipsAs]: `${CORE.requiredSymbol}\n` },
+		})
+	);
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /carries no Go build-tag record/);
 });
 
 // npm filters optionalDependencies on process.platform, so this never surfaces as an install error:
