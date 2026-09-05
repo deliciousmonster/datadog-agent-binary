@@ -51,8 +51,8 @@ const NATIVE_WORKTREE = process.env.DD_LIVE_HARPER_NATIVE;
  */
 export const DIMENSIONS = [
 	{
-		name: "harper@5.2.8 / guard-bundled supervision",
-		harperLine: "5.2.8",
+		name: "harper@5.2.9 / guard-bundled supervision",
+		harperLine: "5.2.9",
 		moduleLoader: "vm-current-context",
 		expectedSupervision: "guard",
 	},
