@@ -41,4 +41,26 @@ jobs:
       # npm's own quoting keeps this pattern out of sh's hands on the ubuntu/macos legs, where an
       # unquoted `**` would expand as a plain `*` without globstar; --test resolves it instead, and only from Node 22.
       - name: Run tests
+        if: runner.os != 'Windows'
         run: npm test
+
+      # Windows runs the same two directories through scripts/windows-gate.mjs, which subtracts the suites
+      # observed to fail there and refuses a run that executed nothing. Its header states every exclusion.
+      - name: Run tests (Windows gate)
+        if: runner.os == 'Windows'
+        run: npm run test:windows
+
+      # node --test exits 0 when its pattern matches nothing, so a renamed directory would turn the step above
+      # into a no-op that reports success. It counts files on disk, NOT tests executed: a glob the runner's
+      # shell mangled would still pass here, which is what to read the run's own output for. The Windows gate
+      # makes the same check on what it selected; this covers the legs that call npm test directly.
+      - name: Guard against an empty test glob
+        shell: bash
+        run: |
+          count=$(find test/component test/e2e -type f -name '*.test.js' | wc -l | tr -d ' ')
+          echo "Found $count *.test.js file(s) under test/component and test/e2e:"
+          find test/component test/e2e -type f -name '*.test.js' | sort | sed 's/^/  /'
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No *.test.js files under test/component or test/e2e; the test step ran nothing."
+            exit 1
+          fi

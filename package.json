@@ -23,6 +23,8 @@
 		"version": "npm run update-optional-deps",
 		"// test": "--test-timeout, because node --test defaults to 0 and a supervision change that hangs then reads as a stuck machine rather than a failure; the slowest test in this tier is 1.4s, so 120s only ever fires on a hang",
 		"test": "npm run build && node --test --test-timeout=120000 \"test/component/**/*.test.js\" \"test/e2e/**/*.test.js\"",
+		"// test:windows": "the Windows leg's stand-in for `test`: same two directories, minus the suites scripts/windows-gate.mjs lists as unrunnable there, and it fails rather than exits 0 on a run that executed nothing",
+		"test:windows": "npm run build && node scripts/windows-gate.mjs",
 		"test:live": "npm run build && node --test \"test/live/**/*.test.js\"",
 		"// test:binaries": "requires real binaries already built at build/<platform>/bin, from a prior `npm run build-agent` or a CI step that already built them; this script itself only runs `npm run build` (tsc), same as test:live for the same real-binaries dependency; excluded from `test` for that reason",
 		"test:binaries": "npm run build && node --test \"test/binaries/**/*.test.js\""

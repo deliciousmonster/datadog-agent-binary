@@ -15,13 +15,17 @@ import {
 	recordedBuildTags,
 } from "../dist/src/binaries.js";
 
+// Windows ships npm as npm.cmd, and node refuses to spawn a .cmd without a shell (CVE-2024-27980), so
+// without this the gate dies `spawnSync npm ENOENT` there instead of reading the tarball.
+const NPM_NEEDS_SHELL = process.platform === "win32";
+
 // --ignore-scripts, because pack still runs "prepare" without it: this dry-run inspects a manifest,
 // it does not consent to running whatever that package's lifecycle hooks do.
 function packedPaths(dir) {
 	const out = execFileSync(
 		"npm",
 		["pack", "--dry-run", "--json", "--ignore-scripts"],
-		{ cwd: dir, encoding: "utf8" }
+		{ cwd: dir, encoding: "utf8", shell: NPM_NEEDS_SHELL }
 	);
 	return JSON.parse(out)[0].files.map((file) => file.path);
 }

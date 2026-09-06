@@ -32,6 +32,9 @@ const { resolveBinary } = await import("../../runtime/binary.js");
 const platform = currentTarget();
 const platformName = platform.name; // e.g. linux-x86_64
 const binaryName = `${BINARIES[0].shipsAs}${platform.exe}`; // datadog-agent[.exe]
+// runtime/binary.js names the file it looked for, suffix and all, so an assertion on that message has to
+// carry the same suffix or it only ever holds where the platform has none.
+const traceBinaryName = `${BINARIES[1].shipsAs}${platform.exe}`; // trace-agent[.exe]
 
 const TRACE_AGENT = "datadog-trace-agent";
 const CORE_AGENT = "datadog-agent";
@@ -184,9 +187,8 @@ test("a binary that resolves to the wrong agent is refused rather than started t
 			false,
 			"the trace-agent started from a path that resolves the core agent"
 		);
-		assert.match(
-			trace.error,
-			/predates trace-agent support/,
+		assert.ok(
+			trace.error.includes(`predates ${traceBinaryName} support`),
 			`the error must name the real cause (a stale platform package), not a generic "could not resolve": ${trace.error}`
 		);
 		assert.match(

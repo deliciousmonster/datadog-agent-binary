@@ -6,20 +6,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 
+import { APP_NAME, BOTH_AGENTS, REAPER } from "../support/agents.js";
 import {
 	halt,
 	lockedPid,
-	REPO_ROOT,
 	start,
 	waitForLocksCleared,
 	withBuiltBinaries,
 } from "../support/component.js";
 import { findFreePort } from "../support/loopback.js";
 import { withEnvs, withTempDir } from "../support/sandbox.js";
-
-const APP_NAME = path.basename(REPO_ROOT);
-const BOTH_AGENTS = ["datadog-trace-agent", "datadog-agent"];
-const REAPER = "datadog-agent-reaper";
 
 /** `run` with the compartment's `logger` replaced, put back however it ends. resources.js reads the global at module evaluation, so this has to be in place before the component is loaded. */
 async function withCompartmentLogger(logger, run) {
