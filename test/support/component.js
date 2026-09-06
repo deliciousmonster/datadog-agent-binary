@@ -34,11 +34,12 @@ const STUB_MARKER = "written-by-withBuiltBinaries";
 export const stub = (command) => `#!/bin/sh\n# ${STUB_MARKER}\n${command}\n`;
 
 /**
- * A planted binary replaced by something no kernel will exec, for a test that needs a spawn to fail. No
- * `#!`, so execvp answers ENOEXEC; stamped anyway, because a run killed holding an unstamped body reads as
- * a build made since, and the next hide moves it over the real one.
+ * A planted binary a spawn cannot run, for a test that needs one. The shebang names a missing interpreter,
+ * so execve answers ENOENT: a body with no `#!` gives ENOEXEC instead, which glibc retries under /bin/sh,
+ * and the spawn then succeeds on Linux while failing on darwin. Stamped, so a run killed holding it does
+ * not read as a build made since.
  */
-export const UNEXECUTABLE = `# ${STUB_MARKER}\nnot machine code, and no shebang to run it with\n`;
+export const UNEXECUTABLE = `#!/nonexistent/interpreter\n# ${STUB_MARKER}\n`;
 
 /** A binary that exits at once, which is all a suite driving a recorded Harper ever runs. */
 const EXITS_AT_ONCE = "exit 0";
