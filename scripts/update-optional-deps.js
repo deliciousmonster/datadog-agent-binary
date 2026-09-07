@@ -12,9 +12,8 @@ const platforms = targetNames();
 // Update optionalDependencies to use the same version as the main package
 packageJson.optionalDependencies = {};
 platforms.forEach((platform) => {
-	packageJson.optionalDependencies[
-		`@harperfast/datadog-agent-binary-${platform}`
-	] = packageJson.version;
+	packageJson.optionalDependencies[`${packageJson.name}-${platform}`] =
+		packageJson.version;
 });
 
 writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, "\t") + "\n");

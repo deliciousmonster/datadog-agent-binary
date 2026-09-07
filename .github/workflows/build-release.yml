@@ -324,7 +324,7 @@ jobs:
           files: |
             release-assets/*
           body: |
-            # @harperfast/datadog-agent-binary ${{ github.ref_name }}
+            # @deliciousmonster/datadog-agent-binary ${{ github.ref_name }}
 
             Pre-compiled Datadog Agent binaries for all supported platforms.
 
@@ -335,7 +335,7 @@ jobs:
             ## NPM Package
 
             ```bash
-            npm install @harperfast/datadog-agent-binary
+            npm install @deliciousmonster/datadog-agent-binary
             ```
 
             ## Verification
@@ -430,7 +430,7 @@ jobs:
             # Check if binaries exist
             if [ -d "bin" ] && [ "$(ls -A bin)" ]; then
               npm publish --access public
-              echo "Published @harperfast/datadog-agent-binary-$platform"
+              echo "Published @deliciousmonster/datadog-agent-binary-$platform"
             else
               echo "Skipping $platform - no binaries found"
             fi

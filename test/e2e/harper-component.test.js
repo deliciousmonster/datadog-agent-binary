@@ -41,7 +41,7 @@ const CORE_AGENT = "datadog-agent";
 
 // runtime/binary.js resolves the optional platform package by specifier, so it must live in this repo's
 // node_modules- exactly where it would sit as a sibling dependency inside a Harper app's tree.
-const platformPkgName = `@harperfast/datadog-agent-binary-${platformName}`;
+const platformPkgName = `@deliciousmonster/datadog-agent-binary-${platformName}`;
 const platformPkgDir = path.join(REPO_ROOT, "node_modules", platformPkgName);
 const stubBinaryPath = path.join(platformPkgDir, "bin", binaryName);
 
@@ -130,7 +130,7 @@ function createFakePlatformPackage() {
 }
 
 // Held for the whole file, not just one test: the fixture below is a shared, mutable path
-// (node_modules/@harperfast/datadog-agent-binary-<platform>) that resolveBinary() also reads from any
+// (node_modules/@deliciousmonster/datadog-agent-binary-<platform>) that resolveBinary() also reads from any
 // other concurrently-running file, for as long as this fixture is on disk - not only while a given test
 // here happens to be running.
 let releaseResolveBinaryLock;

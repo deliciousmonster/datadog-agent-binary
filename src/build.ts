@@ -197,7 +197,7 @@ export async function writeBazelShellOverride(
 	const posix = shell.replace(/\\/g, "/");
 	await writeFile(
 		join(sourceDir, "user.bazelrc"),
-		"# Written by @harperfast/datadog-agent-binary. .bazelrc points both of these at\n" +
+		"# Written by @deliciousmonster/datadog-agent-binary. .bazelrc points both of these at\n" +
 			"# C:/tools/msys64, which the GitHub Windows image does not have.\n" +
 			`common:windows --repo_env=BAZEL_SH=${posix}\n` +
 			`common:windows --shell_executable=${posix}\n`,

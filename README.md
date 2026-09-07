@@ -1,6 +1,6 @@
-# @harperfast/datadog-agent-binary
+# @deliciousmonster/datadog-agent-binary
 
-[![Datadog Agent Binaries](https://github.com/HarperFast/datadog-agent-binary/actions/workflows/build-release.yml/badge.svg)](https://github.com/HarperFast/datadog-agent-binary/actions/workflows/build-release.yml)
+[![Datadog Agent Binaries](https://github.com/deliciousmonster/datadog-agent-binary/actions/workflows/build-release.yml/badge.svg)](https://github.com/deliciousmonster/datadog-agent-binary/actions/workflows/build-release.yml)
 
 A Harper v5 plugin that runs the Datadog core agent and trace-agent alongside a node, so host metrics and the spans the host application's own `dd-trace` produces reach Datadog. `dd-trace` itself is the application's, not shipped here. Both agents arrive as pre-compiled binaries, one npm package per platform, picked by `optionalDependencies`; nothing is downloaded at install time and no install script runs.
 
@@ -9,7 +9,7 @@ The binaries are how the plugin does its job, not a product of their own. Runnin
 ## Install
 
 ```bash
-npm install @harperfast/datadog-agent-binary
+npm install @deliciousmonster/datadog-agent-binary
 ```
 
 npm fetches only the platform package whose `os`/`cpu` match the host, so one agent pair arrives with the install. Two things in the node's own config then decide whether either agent starts.
@@ -19,7 +19,7 @@ npm fetches only the platform package whose `os`/`cpu` match the host, so one ag
 Harper hands a component a `Scope`, and so calls this plugin at all, only for one the node's root `harper-config.yaml` names. A directory it found by scanning `componentsRoot` loads, serves its resources and supervises nothing. The file is the one `settings_path` names in `~/.harperdb/hdb_boot_properties.file`, and the key is the component directory's own name, because a root entry resolves to `<componentsRoot>/<key>`:
 
 ```yaml
-datadog-agent-binary: { package: "@harperfast/datadog-agent-binary" }
+datadog-agent-binary: { package: "@deliciousmonster/datadog-agent-binary" }
 ```
 
 Sixty seconds after the module loads with no plugin call, the component logs the entry it needs and the reason nothing started.
@@ -29,15 +29,15 @@ Sixty seconds after the module loads with no plugin call, the component logs the
 Harper only lets a component spawn an executable listed by its exact absolute path in `applications.allowedSpawnCommands`. The other half of that gate, a `name` option on every spawn, the plugin passes itself. Two binaries launch here, not one:
 
 ```sh
-ls -d "$PWD"/node_modules/@harperfast/datadog-agent-binary-*/bin/*
+ls -d "$PWD"/node_modules/@deliciousmonster/datadog-agent-binary-*/bin/*
 ```
 
 ```yaml
 applications:
   allowedSpawnCommands:
     - node
-    - /app/node_modules/@harperfast/datadog-agent-binary-linux-x86_64/bin/datadog-agent
-    - /app/node_modules/@harperfast/datadog-agent-binary-linux-x86_64/bin/trace-agent
+    - /app/node_modules/@deliciousmonster/datadog-agent-binary-linux-x86_64/bin/datadog-agent
+    - /app/node_modules/@deliciousmonster/datadog-agent-binary-linux-x86_64/bin/trace-agent
 ```
 
 A bare command name matches neither one. The paths carry no version, so an upgrade leaves them where they are; on Windows both end `.exe`. Keep `node` in the list too: where Harper does not supervise natively, the bundled guard spawns its reaper as `process.execPath` and then as a bare `node`, and a reaper that cannot start leaves the agents running after the node stops.

@@ -69,7 +69,7 @@ test("each platform package has npm-valid os/cpu (Node values, not human-readabl
 
 test("generated package names exactly match the main package optionalDependencies", () => {
 	const generatedNames = Object.keys(readGenerated())
-		.map((n) => `@harperfast/datadog-agent-binary-${n}`)
+		.map((n) => `@deliciousmonster/datadog-agent-binary-${n}`)
 		.sort();
 	const declared = Object.keys(mainPkg.optionalDependencies).sort();
 	assert.deepEqual(generatedNames, declared);

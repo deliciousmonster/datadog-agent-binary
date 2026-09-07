@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 
 // Constant, never derived: a deployed component's nearest package.json can carry any name, and a wrong base
 // resolves a platform package that does not exist.
-export const PACKAGE_NAME = "@harperfast/datadog-agent-binary";
+export const PACKAGE_NAME = "@deliciousmonster/datadog-agent-binary";
 
 const EXE = process.platform === "win32" ? ".exe" : "";
 

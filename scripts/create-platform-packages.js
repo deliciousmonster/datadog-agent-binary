@@ -42,7 +42,7 @@ const packageTemplate = {
 	main: "index.js",
 	repository: {
 		type: "git",
-		url: "https://github.com/HarperFast/datadog-agent-binary.git",
+		url: "https://github.com/deliciousmonster/datadog-agent-binary.git",
 	},
 	keywords: ["datadog", "agent", "binary"],
 	author: "Harper",
@@ -67,7 +67,7 @@ function writePlatformPackageJson(platform) {
 	const arch = platform.arch;
 	const packageJson = {
 		...packageTemplate,
-		name: `@harperfast/datadog-agent-binary-${platform.name}`,
+		name: `@deliciousmonster/datadog-agent-binary-${platform.name}`,
 		description: `Datadog Agent binary for ${os} ${arch}`,
 		os: [platform.npmOs],
 		cpu: [platform.npmCpu],
@@ -96,7 +96,7 @@ function writePlatformIndexJs(platform) {
 }
 
 function writePlatformReadme(platform) {
-	const name = `@harperfast/datadog-agent-binary-${platform.name}`;
+	const name = `@deliciousmonster/datadog-agent-binary-${platform.name}`;
 	const os = platform.os;
 	const arch = platform.arch;
 	const readme = `# ${name}
@@ -104,17 +104,17 @@ function writePlatformReadme(platform) {
 Pre-built Datadog Agent binary for **${os} ${arch}**.
 
 This is a platform-specific companion package for
-[\`@harperfast/datadog-agent-binary\`](https://www.npmjs.com/package/@harperfast/datadog-agent-binary).
+[\`@deliciousmonster/datadog-agent-binary\`](https://www.npmjs.com/package/@deliciousmonster/datadog-agent-binary).
 You should **not** install it directly — install the main package instead, and
 npm will automatically select the correct binary for your OS and CPU via
 \`optionalDependencies\`:
 
 \`\`\`bash
-npm install @harperfast/datadog-agent-binary
+npm install @deliciousmonster/datadog-agent-binary
 \`\`\`
 
 The main package resolves the binary shipped here at runtime. See the
-[main package README](https://github.com/HarperFast/datadog-agent-binary#readme)
+[main package README](https://github.com/deliciousmonster/datadog-agent-binary#readme)
 for usage, configuration, and Harper integration details.
 
 ## License
