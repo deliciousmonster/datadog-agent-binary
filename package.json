@@ -37,6 +37,9 @@
 	],
 	"author": "",
 	"license": "Apache-2.0",
+	"dependencies": {
+		"@deliciousmonster/harper-process-guard": "0.1.0-next.1"
+	},
 	"devDependencies": {
 		"@types/node": "^26.0.0",
 		"commander": "^15.0.0",
@@ -51,8 +54,6 @@
 		"config.yaml",
 		"resources.js",
 		"runtime/",
-		"guard/src/",
-		"guard/package.json",
 		"README.md"
 	],
 	"engines": {

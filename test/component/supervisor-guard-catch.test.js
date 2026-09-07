@@ -1,5 +1,5 @@
 // guardSupervisor's catch, exercised for real: no config in this repo makes guard() reject, so the only
-// way to reach the branch is to hand it a spawn shaped so guard/src's own attempt() throws past every try/catch
+// way to reach the branch is to hand it a spawn shaped so the guard's own attempt() throws past every try/catch
 // it already has. A mock of the catch itself would prove nothing about what real callers can trigger.
 
 import { test } from "node:test";
@@ -14,7 +14,7 @@ const NO_NATIVE_SUPERVISION = {};
 
 /**
  * A spawn that "succeeds" (throws nothing, passes preflight already happened) but returns a value that
- * is not an EventEmitter. guard/src's attempt() calls child.on('error', ...) immediately after a
+ * is not an EventEmitter. The guard's attempt() calls child.on('error', ...) immediately after a
  * successful spawn with no try/catch around it, so this is what a spawn shaped unlike node's real
  * child_process.spawn actually does to guard() - reject the whole call, not just the one agent whose
  * binary was involved. The thrown TypeError carries an ENOENT code, the same shape a real fs failure
@@ -108,7 +108,7 @@ test("NEGATIVE: a guard() rejection reports both agents with the same untranslat
 		assert.match(
 			result.processes[0].error,
 			/\.on is not a function/,
-			`expected the untranslated TypeError from guard/src's attempt(); got: ${result.processes[0].error}`
+			`expected the untranslated TypeError from the guard's attempt(); got: ${result.processes[0].error}`
 		);
 
 		// guard() starts the agents in order and rejects out of the one it was on, so an agent ahead of it in

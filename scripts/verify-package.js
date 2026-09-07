@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 
-// Gates a release on the packed tarball, not the working tree: `npm publish` from a clone missing
-// --recurse-submodules ships an empty guard/, and a broken binaries.js copy has shipped a package
-// with no trace-agent in it before. Both looked correct from inside the working tree.
+// Gates a release on the packed tarball, not the working tree: a broken binaries.js copy has shipped
+// a package with no trace-agent in it before, and it looked correct from inside the working tree.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { REPO_ROOT, platformPackageDir } from "./paths.js";
+import { platformPackageDir } from "./paths.js";
 import { TARGETS } from "../dist/src/targets.js";
 import {
 	BINARIES,
@@ -31,16 +30,6 @@ function packedPaths(dir) {
 }
 
 const failures = [];
-
-function verifyGuard() {
-	const shipped = packedPaths(REPO_ROOT).filter((p) => p.startsWith("guard/"));
-	if (shipped.length === 0) {
-		failures.push(
-			"guard/ is absent or empty in the packed tarball. Publish from a clone taken with " +
-				"--recurse-submodules, or run `git submodule update --init` first."
-		);
-	}
-}
 
 // Checked against the packed listing, not the build tree the binary was copied from: this is the
 // regression test for the entire project, so it has to see exactly what a customer's install sees.
@@ -130,8 +119,6 @@ function verifyPlatformPackage(target) {
 	}
 }
 
-verifyGuard();
-
 // TARGETS drives this, not readdirSync(npm/): a directory listing never mentions a target whose
 // npm/<name>/ was never created, which is exactly the gap this gate exists to catch.
 for (const target of TARGETS) verifyPlatformPackage(target);
@@ -141,5 +128,5 @@ if (failures.length > 0) {
 	process.exit(1);
 }
 console.log(
-	"Publish gate: guard/ and every platform binary verified in the packed tarball."
+	"Publish gate: every platform binary verified in the packed tarball."
 );

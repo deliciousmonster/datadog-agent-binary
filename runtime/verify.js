@@ -20,7 +20,7 @@ export const expvarUrl = (port) => `http://127.0.0.1:${port}/debug/vars`;
 const pollAgent = (url, state) =>
 	pollEndpoint({ url, giveUp: () => state.exited === true });
 
-/** The pid this node's supervisor started, or null. A guard attempt that never reached a spawn leaves it undefined (guard/src/supervise.js:156), and comparing against that reads a healthy agent as stale. */
+/** The pid this node's supervisor started, or null. A guard attempt that never reached a spawn leaves it undefined (the guard's src/supervise.js:156), and comparing against that reads a healthy agent as stale. */
 const heldPid = (state) => (typeof state?.pid === "number" ? state.pid : null);
 
 /** The pid an expvar body reports, or null when it publishes none. The trace-agent publishes it as a string, so a strict number test reads a real pid as no pid at all. */

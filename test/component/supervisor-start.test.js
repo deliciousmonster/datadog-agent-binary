@@ -422,8 +422,8 @@ test("NEGATIVE: where Harper has processes.start, the guard never runs, and says
 });
 
 test("NEGATIVE: a core agent whose state carries no pid is not reported stale against `undefined`", async () => {
-	// Every guard attempt that fails before a spawn leaves state.pid undefined (guard/src/supervise.js:155),
-	// and guard/src/index.js verifies those states anyway.
+	// Every guard attempt that fails before a spawn leaves state.pid undefined (the guard's src/supervise.js:155),
+	// and the guard's src/index.js verifies those states anyway.
 	await withAgentsAnswering(
 		{ info: SERVING, expvar: CORE_EXPVAR },
 		async () => {

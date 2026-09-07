@@ -19,7 +19,7 @@ const AGENT = {
 	args: [],
 };
 
-/** A spawn guard/src's own attempt() cannot survive, which is how supervisor.js's catch is reached for real. */
+/** A spawn the guard's own attempt() cannot survive, which is how supervisor.js's catch is reached for real. */
 const spawnThatBreaksGuard = () => ({
 	on() {
 		throw new TypeError(".on is not a function");

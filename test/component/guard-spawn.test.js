@@ -136,7 +136,7 @@ test("where Harper has no processes.start, the bundled guard starts both agents 
 			"no reaper is running, so both agents outlive the node that started them"
 		);
 		assert.equal(status.reaper.name, REAPER);
-		// guard/src/index.js sets `error` both when the reaper never started and when it started and only
+		// The guard's src/index.js sets `error` both when the reaper never started and when it started and only
 		// its lock write failed, so without `started` this cannot be told from an absent reaper.
 		assert.equal(
 			status.reaper.started,
@@ -189,8 +189,8 @@ test("NEGATIVE: a trace-agent answering as another pid does not verify", async (
 });
 
 test("NEGATIVE: an agent the guard could not start is not verified off whatever answers its port", async () => {
-	// Four guard paths end with started:false and no pid (guard/src/supervise.js:172-231), and
-	// guard/src/index.js:230 verifies those states anyway. Both stubs answer throughout this test, so a
+	// Four guard paths end with started:false and no pid (the guard's src/supervise.js:172-231), and
+	// the guard's src/index.js:230 verifies those states anyway. Both stubs answer throughout this test, so a
 	// poll that runs at all reports a stub as the agent this node started.
 	await withGuardStarted(
 		({ status }) => {
@@ -413,7 +413,7 @@ test("an agent still running under a configuration this node no longer has is st
 				// keeps posting under the old key and holds the ports its replacement needs, and once the lock
 				// names the replacement instead, not even the reaper can find it again.
 				// Polled, not read once: the guard sends SIGTERM and returns without waiting on it
-				// (guard/src/lock.js:247), so the death lands after start() has already resolved.
+				// (the guard's src/lock.js:247), so the death lands after start() has already resolved.
 				assert.equal(
 					await until(() => (alive(orphan.pid) ? null : "gone")),
 					"gone",

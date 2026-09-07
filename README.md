@@ -122,7 +122,7 @@ Requires Go 1.23, Python 3.12, CMake, Git, a C toolchain, and the Node in `engin
 
 Output goes to `build/<platform>/` under the directory you run from: `src/` is the clone, `go/` the GOPATH it is symlinked into, `bin/` the built binaries. No flag moves it, because `scripts/create-platform-packages.js` reads the binaries back out of that path.
 
-Publishing is gated on the packed tarball rather than the working tree: `guard/` populated, both binaries present in every platform package, each carrying its required symbol and free of the Go build tag `--build-exclude` is there to drop.
+Publishing is gated on the packed tarball rather than the working tree: both binaries present in every platform package, each carrying its required symbol and free of the Go build tag `--build-exclude` is there to drop.
 
 ```bash
 npm test                 # component and e2e tiers

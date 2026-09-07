@@ -84,7 +84,7 @@ test("every file the component reads at runtime is in the published package", ()
 	// tarball no longer carries. A list of known names catches none of the three.
 	const imported = importedFrom("resources.js");
 	assert.ok(
-		imported.length > 6 && imported.includes("guard/src/index.js"),
+		imported.length > 6 && imported.includes("runtime/supervisor.js"),
 		`the walk reached ${imported.length} files and cannot have followed the component's imports: ${JSON.stringify(imported)}`
 	);
 	for (const file of imported) {
@@ -93,12 +93,14 @@ test("every file the component reads at runtime is in the published package", ()
 			`${file} is imported at runtime and would not be in the tarball`
 		);
 	}
-	// A submodule is a gitlink, so a clone without `submodules: true` leaves guard/ present and empty and
-	// every boot fails on the import instead of here, which is the failure this gate exists to move forward.
-	const guardEntry = path.join(REPO_ROOT, "guard", "src", "index.js");
-	assert.ok(
-		fs.existsSync(guardEntry) && fs.statSync(guardEntry).size > 0,
-		"guard/src/index.js is missing or empty: run `git submodule update --init`, or the fallback supervisor cannot be imported at all"
+	// The guard arrives through Harper's own `npm install` of the component, so the pin is what decides
+	// which guard a customer's node runs. A range would resolve to whatever the registry holds that day.
+	const pinned =
+		manifest.dependencies?.["@deliciousmonster/harper-process-guard"];
+	assert.match(
+		pinned ?? "",
+		/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/,
+		`the guard is pinned as ${JSON.stringify(pinned)}; an exact version is the only thing every test here ran against`
 	);
 	// The core checks are the difference between an agent that collects host metrics and one that reports
 	// healthy and collects nothing, so an empty conf.d/ ships as silently as a missing one.

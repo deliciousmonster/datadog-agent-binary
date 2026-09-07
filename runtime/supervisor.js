@@ -3,9 +3,9 @@
 
 import { join } from "node:path";
 
-// A submodule, imported by path: a bare specifier would make the guard an install, and the install is what
-// left a dangling symlink that broke `npm ci` on every fresh checkout.
-import { fingerprint, guard } from "../guard/src/index.js";
+// Pinned to one exact version, never a range: Harper runs `npm install` when it installs a component, so a
+// caret here would let a customer's node resolve a guard no test in this repo has run against.
+import { fingerprint, guard } from "@deliciousmonster/harper-process-guard";
 import { describeSpawnFailure } from "./agent-exit.js";
 import { writeConfigFiles } from "./config.js";
 
@@ -156,7 +156,7 @@ const guardSupervisor = (log, spawn) => ({
 			processes: result.processes.map((state, index) =>
 				identify(state, agents[index])
 			),
-			// Whole: guard/src/index.js built this and its ReaperState typedef is the shape. Filtering it here
+			// Whole: the guard's index.js built this and its ReaperState typedef is the shape. Filtering it here
 			// dropped the reaper's own pid, which is the one field an operator needs to find the process.
 			reaper: result.reaper,
 			report: result.report,

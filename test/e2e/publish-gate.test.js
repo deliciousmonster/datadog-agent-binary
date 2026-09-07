@@ -61,11 +61,7 @@ function writePlatformPackage(workDir, target, binOverrides = {}) {
 
 // One tree shaped like the repo root, every target holding a well-formed package by default.
 // `binOverrides` only ever touches TARGET; `missingTargets` skips a directory entirely.
-function buildFixture({
-	guard = "populated",
-	binOverrides = {},
-	missingTargets = [],
-} = {}) {
+function buildFixture({ binOverrides = {}, missingTargets = [] } = {}) {
 	const workDir = scaffoldWorkDir("ddab-publish-gate-");
 	workDirs.push(workDir);
 
@@ -82,20 +78,8 @@ function buildFixture({
 		JSON.stringify({
 			name: "publish-gate-fixture",
 			version: "0.0.0",
-			files: ["guard/src/", "guard/package.json"],
 		})
 	);
-
-	if (guard === "populated") {
-		fs.mkdirSync(path.join(workDir, "guard", "src"), { recursive: true });
-		fs.writeFileSync(path.join(workDir, "guard", "package.json"), "{}");
-		fs.writeFileSync(
-			path.join(workDir, "guard", "src", "index.js"),
-			"module.exports = {};"
-		);
-	} else if (guard === "empty") {
-		fs.mkdirSync(path.join(workDir, "guard"));
-	}
 
 	for (const target of TARGETS) {
 		if (missingTargets.includes(target.name)) continue;
@@ -126,21 +110,9 @@ function runGate(workDir) {
 	}
 }
 
-test("a well-formed package, guard/ populated and every binary carrying its symbol, passes", () => {
+test("a well-formed package, every binary carrying its symbol, passes", () => {
 	const result = runGate(buildFixture());
 	assert.equal(result.status, 0, result.stderr);
-});
-
-test("NEGATIVE: guard/ absent from the tarball refuses the release", () => {
-	const result = runGate(buildFixture({ guard: "absent" }));
-	assert.notEqual(result.status, 0);
-	assert.match(result.stderr, /guard\/ is absent or empty/);
-});
-
-test("NEGATIVE: guard/ present but empty refuses the release", () => {
-	const result = runGate(buildFixture({ guard: "empty" }));
-	assert.notEqual(result.status, 0);
-	assert.match(result.stderr, /guard\/ is absent or empty/);
 });
 
 test("NEGATIVE: a platform package with zero binaries refuses the release", () => {
