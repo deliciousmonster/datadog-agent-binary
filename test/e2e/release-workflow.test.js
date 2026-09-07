@@ -64,7 +64,7 @@ test("no attacker-controlled value is spliced into a workflow script body", () =
 
 	assert.match(
 		WORKFLOW,
-		/INPUT_VERSION: \$\{\{ github\.event\.inputs\.datadog_version \}\}/
+		/DATADOG_VERSION: \$\{\{ github\.event\.inputs\.datadog_version \}\}/
 	);
 	assert.match(
 		WORKFLOW,
@@ -82,14 +82,21 @@ test("version extraction and the build are each written once, not once per runne
 	assert.equal(matches(/shell: pwsh$/gm), 0);
 });
 
-// The version is computed once, by prepare's extract_version step (checked above); this checks the
-// other half, that build and publish both consume that one output rather than re-deriving their own.
-test("build and publish both consume prepare's version output, not their own derivation", () => {
+// The tag's version is the package version and reaches only `npm version` in publish. The build reads
+// .datadog-agent-version unless a dispatch names a Datadog version outright: the two numbers share a
+// core and nothing else, and a tag of 7.82.1-next.0 once asked Datadog's repository for that branch.
+test("publish consumes prepare's version; the build never sees it", () => {
 	assert.equal(
 		matches(/VERSION: \$\{\{ needs\.prepare\.outputs\.version \}\}/g),
-		2
+		1
 	);
-	assert.equal(matches(/GITHUB_REF_NAME#v/g), 0);
+	const build = WORKFLOW.slice(
+		WORKFLOW.indexOf("- name: Build ${{ matrix.platform }}"),
+		WORKFLOW.indexOf("- name: Smoke test")
+	);
+	assert.ok(build.length > 0, "the build step was not found");
+	assert.doesNotMatch(build, /needs\.prepare|github\.ref/);
+	assert.match(build, /--datadog-version "\$DATADOG_VERSION"/);
 });
 
 // The org refuses a workflow that names an action by tag, and the refusal lands at job setup, so
