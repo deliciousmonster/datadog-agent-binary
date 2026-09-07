@@ -419,6 +419,23 @@ jobs:
       - name: Verify package
         run: npm run verify-package
 
+      # npm 11 refuses to publish a prerelease with no --tag, and `latest` is only ever the stable line, so
+      # the dist-tag is the version's prerelease identifier or latest, never a guess.
+      - name: Derive the dist-tag from the version
+        id: dist
+        run: |
+          node -e '
+            const { version } = JSON.parse(require("node:fs").readFileSync("package.json", "utf8"));
+            const identifier = version.split("-")[1]?.split(".")[0];
+            if (identifier !== undefined && !/^[a-zA-Z][a-zA-Z0-9-]*$/.test(identifier)) {
+              console.log(`::error::Version ${version} has the prerelease identifier "${identifier}". A dist-tag cannot start with a digit, because npm would read it as a version. Name the prerelease (7.82.1-next.0), then re-tag.`);
+              process.exit(1);
+            }
+            const tag = identifier ?? "latest";
+            require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\n`);
+            console.log(`Publishing ${version} under the ${tag} dist-tag.`);
+          '
+
       - name: Publish platform packages
         run: |
           for platform_dir in npm/*/; do
@@ -429,7 +446,7 @@ jobs:
 
             # Check if binaries exist
             if [ -d "bin" ] && [ "$(ls -A bin)" ]; then
-              npm publish --access public
+              npm publish --access public --tag "$DIST_TAG"
               echo "Published @deliciousmonster/datadog-agent-binary-$platform"
             else
               echo "Skipping $platform - no binaries found"
@@ -439,8 +456,9 @@ jobs:
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DIST_TAG: ${{ steps.dist.outputs.tag }}
 
       - name: Publish main package
-        run: npm publish --access public
+        run: npm publish --access public --tag '${{ steps.dist.outputs.tag }}'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
