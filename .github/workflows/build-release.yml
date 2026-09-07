@@ -27,17 +27,13 @@ jobs:
     outputs:
       version: ${{ steps.extract_version.outputs.version }}
     steps:
-      # The dispatch input reaches bash as an environment value, never as source. Spliced through
-      # ${{ }} it is shell text, and `7.0.0 ; touch pwned ; #` executes on the runner.
+      # The package version, from the tag alone. The Datadog version is a different number that the
+      # build reads from .datadog-agent-version; the two share a numeric core and nothing else.
       - name: Extract version from tag
         id: extract_version
         shell: bash
-        env:
-          INPUT_VERSION: ${{ github.event.inputs.datadog_version }}
         run: |
-          if [ -n "$INPUT_VERSION" ]; then
-            echo "version=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
-          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
           else
             echo "version=" >> "$GITHUB_OUTPUT"
@@ -159,11 +155,13 @@ jobs:
         env:
           DEBUG: true
           DD_AGENT_BUILD_ARGS: ${{ github.event.inputs.agent_build_args }}
-          # Carries the dispatch input (or tag) back out of prepare, so it stays a value here too.
-          VERSION: ${{ needs.prepare.outputs.version }}
+          # The dispatch input reaches bash as an environment value, never as source. Spliced through
+          # ${{ }} it is shell text, and `7.0.0 ; touch pwned ; #` executes on the runner. Absent, the
+          # build reads .datadog-agent-version; the tag's version is never a Datadog ref.
+          DATADOG_VERSION: ${{ github.event.inputs.datadog_version }}
         run: |
           args=()
-          if [ -n "$VERSION" ]; then args=(--datadog-version "$VERSION"); fi
+          if [ -n "$DATADOG_VERSION" ]; then args=(--datadog-version "$DATADOG_VERSION"); fi
           node dist/src/cli.js build "${args[@]}"
           ls -l "build/${{ matrix.platform }}/bin/"
 

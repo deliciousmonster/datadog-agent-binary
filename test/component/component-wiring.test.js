@@ -151,6 +151,19 @@ test("NEGATIVE: package-lock.json agrees with package.json on what npm ci will c
 	}
 });
 
+// The package is versioned as the Datadog release it pins, with a prerelease identifier of its own,
+// so the numeric core and the pin have to be one number. The build clones Datadog's repo at the pin,
+// never at the package version: a tag of 7.82.1-next.0 once asked Datadog's repo for that branch.
+test("NEGATIVE: the package version's core is the pinned Datadog version", () => {
+	const pinned = read(".datadog-agent-version").trim();
+	const core = manifest.version.split("-")[0];
+	assert.equal(
+		core,
+		pinned,
+		`package.json is ${manifest.version} but .datadog-agent-version pins ${pinned}; bump both, or neither`
+	);
+});
+
 test("the runtime tree comes from Harper, not from a variable this package invents", async () => {
 	const { prepareRuntime } = await loadComponent();
 	// Named by the component's own directory, so two installs of this plugin under different
