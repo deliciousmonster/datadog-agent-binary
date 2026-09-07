@@ -7,13 +7,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { REPO_ROOT, withRealBinaries } from "../support/component.js";
 
 // The gate's own reader, not a copy of it: a parser that drifted from the one verify-package.js runs
 // would let this pass while the release still refuses.
+// A URL, not a path: import() refuses a bare `D:\...` on Windows (ERR_UNSUPPORTED_ESM_URL_SCHEME).
 const { BINARIES, recordedBuildTags } = await import(
-	path.join(REPO_ROOT, "dist", "src", "binaries.js")
+	pathToFileURL(path.join(REPO_ROOT, "dist", "src", "binaries.js")).href
 );
 
 const binaryFor = (files, shipsAs) =>

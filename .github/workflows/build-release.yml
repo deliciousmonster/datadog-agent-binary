@@ -177,9 +177,18 @@ jobs:
       #
       # Calls node --test directly, not `npm run test:binaries`: that script's own `npm run
       # build` prefix would recompile dist/ from scratch, already current from the step above.
+      # Windows runs the same directory through the gate, which subtracts what windows-gate-checks.mjs
+      # names and refuses a run that executed nothing. The step limit is for a runner a leaked agent
+      # keeps alive: a hang here once cost the leg its whole 60-minute job.
       - name: Supervision equivalence test (native vs guard, real binaries)
         shell: bash
-        run: node --test "test/binaries/**/*.test.js"
+        timeout-minutes: 15
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            node scripts/windows-gate.mjs --binaries
+          else
+            node --test --test-timeout=120000 "test/binaries/**/*.test.js"
+          fi
 
       # Guard against the symbol floor creeping back up. The Harper Pro runtime
       # image (Debian 12) provides glibc 2.36 (libc.so.6) AND libstdc++

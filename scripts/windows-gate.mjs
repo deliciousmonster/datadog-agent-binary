@@ -21,6 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+	BINARIES_GROUP,
 	EXCLUDED,
 	GROUPS,
 	groupVerdict,
@@ -58,8 +59,19 @@ function runGroup(files) {
 	return groupVerdict({ output, status: child.status, error: child.error });
 }
 
+// `--binaries` gates test/binaries alone, for the release leg that has just built what it reads;
+// with no argument the gate is `npm test`'s two directories. Anything else is a typo, not a group.
+const groups = process.argv.slice(2);
+if (groups.length && !(groups.length === 1 && groups[0] === "--binaries")) {
+	console.error(
+		`Windows gate: unknown argument ${groups.join(" ")}; the only option is --binaries`
+	);
+	process.exit(1);
+}
+const selected = groups.length ? [BINARIES_GROUP] : GROUPS;
+
 const results = [];
-for (const group of GROUPS) {
+for (const group of selected) {
 	const files = selectSuites(REPO_ROOT, group);
 	console.log(`\n=== ${group} (${files.length} suite(s)) ===`);
 	for (const file of files) console.log(`  ${file}`);
