@@ -355,6 +355,12 @@ jobs:
     needs: [build, prepare]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      # npm authenticates with this OIDC token: a trusted publisher on each of the five packages names
+      # this repository and this workflow file, and provenance is attached from the same token. No npm
+      # token exists on this repository.
+      id-token: write
     # npm publish is the only external call here; it doesn't hang for hours.
     timeout-minutes: 20
     steps:
@@ -462,10 +468,7 @@ jobs:
             cd - > /dev/null
           done
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           DIST_TAG: ${{ steps.dist.outputs.tag }}
 
       - name: Publish main package
         run: npm publish --access public --tag '${{ steps.dist.outputs.tag }}'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
