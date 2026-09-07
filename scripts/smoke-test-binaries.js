@@ -145,24 +145,43 @@ const CHECKS = {
 	"datadog-agent": checkCoreAgent,
 };
 
+// Windows answers a rename with EBUSY while anything still holds a handle inside the tree, and the
+// build that just wrote it leaves handles open for a few seconds after it exits (an indexer, a
+// scanner, the Go cache); the rename itself is right, only its moment is early.
+const RENAME_ATTEMPTS = 10;
+const RENAME_RETRY_MS = 1000;
+async function rename(from, to) {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			return renameSync(from, to);
+		} catch (error) {
+			if (error.code !== "EBUSY" || attempt === RENAME_ATTEMPTS) throw error;
+			log(
+				`rename of ${from} is EBUSY (attempt ${attempt}); retrying in ${RENAME_RETRY_MS}ms`
+			);
+			await sleep(RENAME_RETRY_MS);
+		}
+	}
+}
+
 /** Moves the build tree's src/ aside so a binary that still links it by path can't find it. Reports
  * whether there was one: with no tree beside the bin dir, that independence is never put to the test. */
-function hideBuildTree(binDir) {
+async function hideBuildTree(binDir) {
 	const srcDir = treeAt(dirname(binDir)).source;
 	const hiddenDir = `${srcDir}.smoke-test-hidden`;
 
 	// A run killed between the rename below and its `finally` restore (a CI timeout, not a caught
 	// throw) leaves hiddenDir behind with srcDir missing; recover it before this run hides anything.
 	if (existsSync(hiddenDir) && !existsSync(srcDir))
-		renameSync(hiddenDir, srcDir);
+		await rename(hiddenDir, srcDir);
 
 	const hidden = existsSync(srcDir);
-	if (hidden) renameSync(srcDir, hiddenDir);
+	if (hidden) await rename(srcDir, hiddenDir);
 	return {
 		hidden,
 		srcDir,
-		restore: () => {
-			if (hidden) renameSync(hiddenDir, srcDir);
+		restore: async () => {
+			if (hidden) await rename(hiddenDir, srcDir);
 		},
 	};
 }
@@ -181,7 +200,7 @@ async function main() {
 		process.exit(1);
 	}
 
-	const isolation = hideBuildTree(binDir);
+	const isolation = await hideBuildTree(binDir);
 	log(
 		isolation.hidden
 			? `hid the build tree at ${isolation.srcDir} for the duration of this run`
@@ -241,7 +260,7 @@ async function main() {
 				// Already gone.
 			}
 		}
-		isolation.restore();
+		await isolation.restore();
 		if (rootDir) rmSync(rootDir, { recursive: true, force: true });
 	}
 
