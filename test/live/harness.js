@@ -9,6 +9,8 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	openSync,
+	readdirSync,
+	readFileSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -33,6 +35,25 @@ const { BINARIES } = await import(
 	join(REPO_ROOT, "dist", "src", "binaries.js")
 );
 
+// The version this tree says it is, which is the one a tag of this tree publishes. The registry row
+// boots that artifact, so it applies only once it exists; before the tag it is skipped, not failed.
+const MANIFEST_VERSION = JSON.parse(
+	readFileSync(join(REPO_ROOT, "package.json"), "utf8")
+).version;
+const REGISTRY_SPEC = `${PACKAGE_NAME}@${MANIFEST_VERSION}`;
+function registryHas(spec) {
+	try {
+		return (
+			execFileSync("npm", ["view", spec, "version"], {
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "ignore"],
+			}).trim() !== ""
+		);
+	} catch {
+		return false;
+	}
+}
+
 const ADMIN_USER = "LIVE_ADMIN";
 const ADMIN_PASS = "live-tier-2026";
 
@@ -55,6 +76,19 @@ export const DIMENSIONS = [
 		harperLine: "5.2.9",
 		moduleLoader: "vm-current-context",
 		expectedSupervision: "guard",
+	},
+	{
+		// The customer's path: not this checkout but the published tarball, installed by npm the way
+		// Harper installs a component, with the guard and the platform binaries arriving from the
+		// registry as dependencies. Nothing this repo builds is on the node.
+		name: `harper@5.2.9 / ${REGISTRY_SPEC} installed from the registry`,
+		harperLine: "5.2.9",
+		moduleLoader: "vm-current-context",
+		expectedSupervision: "guard",
+		fromRegistry: true,
+		skip: registryHas(REGISTRY_SPEC)
+			? false
+			: `${REGISTRY_SPEC} is not on the registry yet; tag and publish this version first`,
 	},
 	{
 		// A local worktree, not the registry: this Harper build carries a real `scope.processes`
@@ -182,6 +216,22 @@ ${COMPONENT_NAME}: { package: "${PACKAGE_NAME}" }
 `;
 }
 
+/** Every binary in the one platform package npm installed for this host, as absolute paths. */
+function installedPlatformBinaries(appDir) {
+	const [scope, base] = PACKAGE_NAME.split("/");
+	const scopeDir = join(appDir, "node_modules", scope);
+	const platformPackages = readdirSync(scopeDir).filter((name) =>
+		name.startsWith(`${base}-`)
+	);
+	if (platformPackages.length !== 1) {
+		throw new Error(
+			`expected one platform package under ${scopeDir}, found ${JSON.stringify(platformPackages)}`
+		);
+	}
+	const binDir = join(scopeDir, platformPackages[0], "bin");
+	return readdirSync(binDir).map((file) => join(binDir, file));
+}
+
 /** Throws rather than lets a bug boot Harper against the operator's real install. */
 function assertSafeHome(home, realHome) {
 	if (home === realHome || !home.startsWith(tmpdir())) {
@@ -266,7 +316,11 @@ async function bootHarperInto(workDir, row, realHome, onSpawn) {
 				private: true,
 				version: "0.0.0",
 				devDependencies: { harper: row.harperLine },
-				dependencies: { [PACKAGE_NAME]: `file:${REPO_ROOT}` },
+				dependencies: {
+					[PACKAGE_NAME]: row.fromRegistry
+						? MANIFEST_VERSION
+						: `file:${REPO_ROOT}`,
+				},
 			},
 			null,
 			"\t"
@@ -291,11 +345,19 @@ async function bootHarperInto(workDir, row, realHome, onSpawn) {
 		expvar: await findFreePort(),
 		debug: await findFreePort(),
 	};
-	const [corePath, tracePath] = await Promise.all(
-		BINARIES.map((binary) =>
-			resolveBinary({ shipsAs: binary.shipsAs, title: binary.shipsAs })
-		)
-	);
+	// What Harper is allowed to spawn: the registry row's binaries live in the platform package npm
+	// installed beside the component (only the host's own installs; npm skips the others by os/cpu),
+	// the repo row's in this checkout's build output.
+	const componentDir = row.fromRegistry
+		? join(appDir, "node_modules", ...PACKAGE_NAME.split("/"))
+		: REPO_ROOT;
+	const allowedBinaries = row.fromRegistry
+		? installedPlatformBinaries(appDir)
+		: await Promise.all(
+				BINARIES.map((binary) =>
+					resolveBinary({ shipsAs: binary.shipsAs, title: binary.shipsAs })
+				)
+			);
 
 	// Confirmed against this repo's own runtime/config.js: HOME is what os.homedir() (and so
 	// getPropsFilePath) resolves from, so this is what keeps `install` off the operator's real
@@ -320,11 +382,11 @@ async function bootHarperInto(workDir, row, realHome, onSpawn) {
 			hdbRoot,
 			ports,
 			moduleLoader: row.moduleLoader,
-			allowedBinaries: [corePath, tracePath],
+			allowedBinaries,
 		})
 	);
 	mkdirSync(join(hdbRoot, "components"), { recursive: true });
-	symlinkSync(REPO_ROOT, join(hdbRoot, "components", COMPONENT_NAME));
+	symlinkSync(componentDir, join(hdbRoot, "components", COMPONENT_NAME));
 	// installApplications() re-installs any `package:`-named entry whose lock record does not match
 	// the live config; this pre-populated record is what tells it the symlinked directory above is
 	// already the install, so it never tries to npm-install PACKAGE_NAME from the real registry.
