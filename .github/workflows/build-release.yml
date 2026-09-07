@@ -97,7 +97,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -245,7 +244,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
 
       # Named by pattern, not unfiltered: the loop below turns every entry under artifacts/ into a
       # release asset, so anything a later job uploads must not silently become one.
@@ -355,7 +353,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
 
       # Named by pattern, not unfiltered: "Move binaries to build dirs" below treats every entry
       # under artifacts/ as one platform's binary set.
