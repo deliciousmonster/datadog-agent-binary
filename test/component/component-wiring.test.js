@@ -131,6 +131,26 @@ test("NEGATIVE: the platform package the component resolves is derived from this
 	);
 });
 
+// `npm ci` refuses a lockfile that disagrees with the manifest, and every CI leg starts with `npm ci`.
+// `npm version` rewrites the lock's version but not a renamed package or re-pinned optional
+// dependencies, so a rename that ran the tests and never an install passed locally and killed
+// every leg of the first release run.
+test("NEGATIVE: package-lock.json agrees with package.json on what npm ci will check", () => {
+	const locked = JSON.parse(read("package-lock.json")).packages[""];
+	for (const field of [
+		"name",
+		"version",
+		"dependencies",
+		"optionalDependencies",
+	]) {
+		assert.deepEqual(
+			locked[field],
+			manifest[field],
+			`package-lock.json records ${field} as ${JSON.stringify(locked[field])} but package.json says ${JSON.stringify(manifest[field])}: run npm install and commit the lock`
+		);
+	}
+});
+
 test("the runtime tree comes from Harper, not from a variable this package invents", async () => {
 	const { prepareRuntime } = await loadComponent();
 	// Named by the component's own directory, so two installs of this plugin under different
