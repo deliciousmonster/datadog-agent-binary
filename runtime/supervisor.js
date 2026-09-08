@@ -1,11 +1,17 @@
 // Who holds the agents up. Released Harper has no sidecar API, so the bundled guard is the other half; one
 // agent per node comes from a PID lock either way and only the holder changes.
 
+import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 // Pinned to one exact version, never a range: Harper runs `npm install` when it installs a component, so a
 // caret here would let a customer's node resolve a guard no test in this repo has run against.
-import { fingerprint, guard } from "@deliciousmonster/harper-process-guard";
+import {
+	argvOf,
+	fingerprint,
+	guard,
+	identify as identifyPid,
+} from "@deliciousmonster/harper-process-guard";
 import { describeSpawnFailure } from "./agent-exit.js";
 import { writeConfigFiles } from "./config.js";
 
@@ -99,12 +105,66 @@ const harperSupervisor = (scope, log) => ({
 // directory would collide on; this one names the package rather than taking the guard's generic default.
 const REAPER_NAME = "datadog-agent-reaper";
 
+/**
+ * Harper's own spawn keeps a pid file per process name under <root>/pids and, when the file names a pid
+ * that answers kill(pid, 0), returns that pid instead of spawning. After a restart the kernel reissues
+ * pids, and a thread of Harper itself answers for one, so the file has to go before the guard asks.
+ * Removing it signals nothing. A file naming the real process, or a dead one, is Harper's to keep.
+ *
+ * @param {string | null} root @param {Array<{ name: string; argv?: readonly string[]; script?: string }>} named
+ * @param {import("./log.js").Log} log
+ */
+export function clearStaleHarperPidFiles(root, named, log) {
+	if (!root) return;
+	for (const { name, argv, script } of named) {
+		const file = join(root, "pids", `${name}.pid`);
+		let pid;
+		try {
+			pid = Number.parseInt(readFileSync(file, "utf-8"), 10);
+		} catch {
+			continue;
+		}
+		if (!Number.isInteger(pid) || pid <= 0) continue;
+		const running = argvOf(pid);
+		if (running === null) continue;
+		const ours = argv
+			? identifyPid(pid, argv) === "match"
+			: running.some((argument) => argument.endsWith(script ?? "\u0000"));
+		if (ours) continue;
+		try {
+			unlinkSync(file);
+			log.warn(
+				`Datadog supervisor: removed ${file}, Harper's own pid file for ${name}: it named pid ${pid}, which ` +
+					`is running \`${running.join(" ")}\`, and Harper would have handed that pid back as the ${name} ` +
+					`instead of starting one.`
+			);
+		} catch (error) {
+			log.error(
+				`Datadog supervisor: could not remove ${file}, which names pid ${pid} running something else: ` +
+					`${error.message}. Harper will hand that pid back as the ${name} rather than start one.`
+			);
+		}
+	}
+}
+
 /** The bundled guard, one call for both agents. `spawn` is the entry module's own, which is the one Harper constrains. */
 const guardSupervisor = (log, spawn) => ({
 	kind: "guard",
 	async start(agents, { runtime, configFiles, fingerprintParts }) {
 		// Harper's start() writes these itself; on this path nothing else will, and both agents read them.
 		writeConfigFiles(configFiles, log);
+		clearStaleHarperPidFiles(
+			runtime.root,
+			[
+				...agents.map((agent) => ({
+					name: agent.name,
+					argv: [agent.command, ...agent.args],
+				})),
+				// The guard builds the reaper's own argv; its script name is the one stable thing to match on.
+				{ name: REAPER_NAME, script: "/reaper.js" },
+			],
+			log
+		);
 		let result;
 		try {
 			result = await guard({

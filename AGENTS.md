@@ -24,6 +24,16 @@ The guard is pinned to one exact version, never a range: Harper runs `npm instal
 
 The receiver counter the live and binaries tiers read is a snapshot the trace-agent resets, and the delivery verdict trails it by the first stats bucket, about twenty seconds; `waitForDeliveredCount` latches the two apart for that reason.
 
+## Harper's own pid files
+
+Harper's sandboxed `spawn` keeps `<root>/pids/<name>.pid` per process name and, when that file names a
+pid that answers `kill(pid, 0)`, hands the pid back instead of spawning. After a restart the kernel
+reissues pids and a thread of Harper itself answers for one: on 2026-09-08 a stock container reported
+three started agents that were three threads of pid 1. `clearStaleHarperPidFiles` removes such a file
+before the guard asks Harper to spawn, when the pid it names is running something other than the
+process; the guard refuses a handed-back pid it cannot identify, so the two together fail loud rather
+than supervise a stranger.
+
 ## Release
 
 A hand-pushed `v*` tag runs `build-release.yml`: four platform builds, a smoke test on each (on Windows the build tree cannot be moved aside, and the test says so and runs on), a GitHub release, then five publishes. Publishing authenticates with the job's OIDC token through a trusted publisher on each package; there is no npm token on the repository. The dist-tag is derived from the version: the prerelease identifier, or `latest`. npm 11 refuses a prerelease without one.
