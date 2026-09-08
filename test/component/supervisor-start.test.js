@@ -119,6 +119,13 @@ test("the rendered datadog.yaml keeps the credentials off disk and pins what the
 				new RegExp(`expvar_port: ${expvarPort}\\b`),
 				"the expvar port in the config must be the one the core-agent verify polls"
 			);
+			// The agent binds a UDS at the stock install path unless this is set, and fails at ERROR on every
+			// start because that path is not there beside a component.
+			assert.match(
+				rendered,
+				/^dogstatsd_socket: ""$/m,
+				"the dogstatsd Unix socket is not disabled, so every agent start logs a failed bind"
+			);
 			// Live Processes is what reports Harper's and the agents' own CPU and memory; the Python process
 			// check cannot run in this build, so this is the one way a node's processes reach Datadog.
 			assert.match(
