@@ -119,6 +119,13 @@ test("the rendered datadog.yaml keeps the credentials off disk and pins what the
 				new RegExp(`expvar_port: ${expvarPort}\\b`),
 				"the expvar port in the config must be the one the core-agent verify polls"
 			);
+			// Live Processes is what reports Harper's and the agents' own CPU and memory; the Python process
+			// check cannot run in this build, so this is the one way a node's processes reach Datadog.
+			assert.match(
+				rendered,
+				/^process_config:\n  process_collection:\n    enabled: true$/m,
+				"process collection is not enabled in the rendered config"
+			);
 			// Measured on 7.82.1: the environment outranks the file, so a written line can only ever restate
 			// DD_DOGSTATSD_PORT or the agent's own default, and nothing here polls either port.
 			assert.doesNotMatch(
