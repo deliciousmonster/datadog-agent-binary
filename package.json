@@ -27,7 +27,7 @@
 		"test:windows": "npm run build && node scripts/windows-gate.mjs",
 		"test:live": "npm run build && node --test \"test/live/**/*.test.js\"",
 		"// test:binaries": "requires real binaries already built at build/<platform>/bin, from a prior `npm run build-agent` or a CI step that already built them; this script itself only runs `npm run build` (tsc), same as test:live for the same real-binaries dependency; excluded from `test` for that reason",
-		"test:binaries": "npm run build && node --test \"test/binaries/**/*.test.js\""
+		"test:binaries": "npm run build && node --test --test-concurrency=1 --test-timeout=120000 \"test/binaries/**/*.test.js\""
 	},
 	"keywords": [
 		"datadog",

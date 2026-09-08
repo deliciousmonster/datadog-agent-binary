@@ -179,7 +179,9 @@ jobs:
       # build` prefix would recompile dist/ from scratch, already current from the step above.
       # Windows runs the same directory through the gate, which subtracts what windows-gate-checks.mjs
       # names and refuses a run that executed nothing. The step limit is for a runner a leaked agent
-      # keeps alive: a hang here once cost the leg its whole 60-minute job.
+      # keeps alive: a hang here once cost the leg its whole 60-minute job. One file at a time: both
+      # suites take the same lock on build/, and the equivalence suite holds it longer than the other
+      # waits, so in parallel the second one times out on the lock whenever it starts second.
       - name: Supervision equivalence test (native vs guard, real binaries)
         shell: bash
         timeout-minutes: 15
@@ -187,7 +189,7 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             node scripts/windows-gate.mjs --binaries
           else
-            node --test --test-timeout=120000 "test/binaries/**/*.test.js"
+            node --test --test-concurrency=1 --test-timeout=120000 "test/binaries/**/*.test.js"
           fi
 
       # Guard against the symbol floor creeping back up. The Harper Pro runtime
