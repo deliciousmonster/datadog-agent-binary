@@ -173,6 +173,17 @@ test("the runtime tree comes from Harper, not from a variable this package inven
 	await withTempDir("dd-root-", async (root) => {
 		const fromEnv = await withEnvs({ ROOTPATH: root }, () => prepareRuntime());
 		assert.equal(fromEnv.paths.runtimeDir, path.join(root, "datadog", appName));
+		// Harper's own log is a log source whenever the root is known: the agent tails it only with
+		// DD_LOGS_ENABLED=true, so writing the source unconditionally costs nothing and needs no switch.
+		const source =
+			fromEnv.configFiles[
+				path.join(fromEnv.paths.confd, "harper.d", "conf.yaml.default")
+			];
+		assert.ok(source, "no log source was rendered for Harper's own log");
+		assert.ok(
+			source.includes(JSON.stringify(path.join(root, "log", "hdb.log"))),
+			`the log source does not name <root>/log/hdb.log: ${source}`
+		);
 	});
 
 	// Harper's own chain: hdb_boot_properties.file names the settings file, which carries rootPath.
@@ -227,6 +238,13 @@ test("the runtime tree comes from Harper, not from a variable this package inven
 			built,
 			false,
 			"a relative ROOTPATH built the runtime tree under whatever cwd this worker happened to have"
+		);
+		// No root, no log path to name: a source pointing at a guessed file would tail nothing and say so never.
+		assert.ok(
+			!Object.keys(runtime.configFiles).some((file) =>
+				file.includes("harper.d")
+			),
+			"a log source was rendered with no root to place Harper's log under"
 		);
 	});
 });

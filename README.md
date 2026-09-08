@@ -43,6 +43,7 @@ Configuration is the environment; `datadog.yaml` is rewritten on every start, so
 | `DD_ENV` | The `env` tag on everything sent. |
 | `DD_APM_RECEIVER_PORT` | Where `dd-trace` posts spans. Default 8126. |
 | `DD_EXPVAR_PORT`, `DD_APM_DEBUG_PORT` | The agents' expvar ports, 5000 and 5012. Verification reads them; `0` turns one off and verification refuses. |
+| `DD_LOGS_ENABLED` | `true` ships Harper's own log, `<rootPath>/log/hdb.log`, as service `harper`. Off by default. |
 
 `GET /DatadogStatus/`, under Harper's own auth, reports which supervision is in charge, whether the API key is set, whether each agent verified and why not, and how far a span got: `delivery.verdict` is `delivering`, `rejected`, `traces-unconfirmed` or `idle`. Its counters are the trace-agent's own one-minute window, so read it twice.
 
