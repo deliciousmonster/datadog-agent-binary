@@ -22,6 +22,8 @@ The guard is pinned to one exact version, never a range: Harper runs `npm instal
 - `npm run test:binaries`: real binaries from `build/<platform>/bin`, so `npm run build-agent` first. The equivalence suite is excluded on Windows: its guard row's teardown kills agents the guard then restarts, and the runner never exits.
 - `npm run test:live`: a real `harper@5.2.9`, real spans. One row boots this checkout; one boots the published package at the manifest's version from the registry, or `DD_LIVE_REGISTRY_VERSION`, and skips until that version exists; one needs `DD_LIVE_HARPER_NATIVE` set to a Harper worktree carrying `scope.processes`. `DD_LIVE_KEEP` leaves the fixture on disk. A failed boot carries the tail of `harper-run.log` and the last `DatadogStatus` in its error.
 
+- `test/soak/soak.mjs`: a long run against a real container. Steady load on the shop, chaos on a randomly staggered schedule (agent and reaper kills, restarts with Harper's pid files seeded to pid 1, a SIGSTOP, a `docker pause`, a 10× burst, a wrong API key across a recreate), and one status row a minute from the agents' intake counters and container resource use. `SOAK_HOURS`, `SOAK_RPS`, `SOAK_GAP_MIN`, `SOAK_SKIP`, `SOAK_KEY_MIN`, `SOAK_OUT` shape it; the header comment shows a six-minute smoke.
+
 The receiver counter the live and binaries tiers read is a snapshot the trace-agent resets, and the delivery verdict trails it by the first stats bucket, about twenty seconds; `waitForDeliveredCount` latches the two apart for that reason.
 
 ## Harper's own pid files
