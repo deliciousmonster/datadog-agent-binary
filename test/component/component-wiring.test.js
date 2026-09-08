@@ -184,6 +184,21 @@ test("the runtime tree comes from Harper, not from a variable this package inven
 			source.includes(JSON.stringify(path.join(root, "log", "hdb.log"))),
 			`the log source does not name <root>/log/hdb.log: ${source}`
 		);
+		// The agents' own logs ride along under their own service names: the first thing to read when
+		// the node stops reporting is what the agent said, and that file is on the node, not in Datadog.
+		for (const file of ["agent.log", "trace-agent.log", "reaper.log"]) {
+			assert.ok(
+				source.includes(
+					JSON.stringify(path.join(fromEnv.paths.runtimeDir, "logs", file))
+				),
+				`the log sources do not name the runtime tree's logs/${file}: ${source}`
+			);
+		}
+		assert.equal(
+			(source.match(/^  - type: file$/gm) ?? []).length,
+			4,
+			"four sources, one per log file"
+		);
 	});
 
 	// Harper's own chain: hdb_boot_properties.file names the settings file, which carries rootPath.
