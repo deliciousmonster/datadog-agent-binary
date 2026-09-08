@@ -276,8 +276,6 @@ jobs:
 
           cd artifacts
 
-          echo "Recursively listing files in artifacts:"
-          ls -lR
 
           for artifact in agent-*; do
             [ -d "$artifact" ] || continue
@@ -303,8 +301,6 @@ jobs:
             cd ..
           done
 
-          echo "Listing files in release-assets:"
-          ls -l ../release-assets
 
           {
             echo "platforms<<PLATFORMS_EOF"
@@ -314,10 +310,6 @@ jobs:
 
       - name: Generate checksums
         run: |
-          echo "Listing current dir"
-          ls -l
-          echo "Listing release-assets dir"
-          ls -l release-assets/
           cd release-assets
           sha256sum ./* > checksums.txt
 
@@ -375,23 +367,13 @@ jobs:
           pattern: agent-*
           path: artifacts/
 
-      - name: List binaries
-        run: |
-          echo "Listing artifacts dir"
-          ls -l artifacts/
-          echo "Listing artifacts subdirs"
-          ls -l artifacts/*
-
       - name: Move binaries to build dirs
         run: |
-          echo "Listing artifacts dir again"
-          ls -l artifacts/
           pushd artifacts
           for artifact in *
           do
             platform=${artifact#agent-}
             echo "Moving contents of $artifact into ../build/$platform/bin/"
-            ls -l "$artifact"
             mkdir -p "../build/$platform/bin"
             mv "$artifact"/* "../build/$platform/bin/"
           done

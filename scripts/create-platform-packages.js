@@ -101,26 +101,17 @@ function writePlatformReadme(platform) {
 	const arch = platform.arch;
 	const readme = `# ${name}
 
-Pre-built Datadog Agent binary for **${os} ${arch}**.
+The Datadog core agent and trace-agent, prebuilt for ${os} ${arch}, for
+[@deliciousmonster/datadog-agent-binary](https://www.npmjs.com/package/@deliciousmonster/datadog-agent-binary).
+Install that package rather than this one: it lists this one as an optional dependency and npm
+picks the one matching the host.
 
-This is a platform-specific companion package for
-[\`@deliciousmonster/datadog-agent-binary\`](https://www.npmjs.com/package/@deliciousmonster/datadog-agent-binary).
-You should **not** install it directly — install the main package instead, and
-npm will automatically select the correct binary for your OS and CPU via
-\`optionalDependencies\`:
-
-\`\`\`bash
+\`\`\`sh
 npm install @deliciousmonster/datadog-agent-binary
 \`\`\`
 
-The main package resolves the binary shipped here at runtime. See the
-[main package README](https://github.com/deliciousmonster/datadog-agent-binary#readme)
-for usage, configuration, and Harper integration details.
-
-## License
-
-Apache-2.0. The Datadog Agent binary is distributed under the Apache-2.0
-license per the [Datadog Agent repository](https://github.com/DataDog/datadog-agent).
+Apache-2.0. The binaries are Datadog's, Apache-2.0, built from the pinned release of
+[datadog-agent](https://github.com/DataDog/datadog-agent).
 `;
 	writeFileSync(join(platformPackageDir(platform.name), "README.md"), readme);
 }

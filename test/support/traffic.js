@@ -52,23 +52,26 @@ export function driveTraffic(
 const DELIVERY_POLL_MS = 500;
 
 /**
- * Polls `readSignal` until the real receiver reports exactly `count` traces and the verdict has left
- * "idle" (a periodic stats bucket, not an on-write counter, so a fresh burst can sit at the right count
- * with a stale "idle" verdict for several seconds), or the deadline passes. Returns the last signal read,
- * which is `undefined` only if `readSignal` never produced one.
+ * Polls `readSignal` until the real receiver has reported exactly `count` traces and the verdict has
+ * left "idle", or the deadline passes. The two are latched apart: the receiver snapshot shows the burst
+ * within seconds and is reset by the agent, while the verdict waits on the first stats bucket, some
+ * twenty seconds behind (measured 24s on a real node), and the snapshot can be gone by then. Demanding
+ * both in one read passed or failed on that ordering. Returns the read that carried the count, with the
+ * verdict from the read that moved; `undefined` only if `readSignal` never produced one.
  */
 export async function waitForDeliveredCount(readSignal, count, deadlineMs) {
 	const deadline = Date.now() + deadlineMs;
 	let signal;
+	let counted;
+	let moved;
 	while (Date.now() < deadline) {
 		signal = await readSignal();
-		if (
-			signal?.receiver?.tracesReceived === count &&
-			signal.verdict !== "idle"
-		) {
-			return signal;
+		if (signal?.receiver?.tracesReceived === count) counted = signal;
+		if (signal?.verdict && signal.verdict !== "idle") moved = signal;
+		if (counted && moved) {
+			return { ...counted, verdict: moved.verdict, detail: moved.detail };
 		}
 		await delay(DELIVERY_POLL_MS);
 	}
-	return signal;
+	return counted ?? signal;
 }
