@@ -11,6 +11,7 @@ import {
 	openSync,
 	readdirSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -37,10 +38,13 @@ const { BINARIES } = await import(
 
 // The version this tree says it is, which is the one a tag of this tree publishes. The registry row
 // boots that artifact, so it applies only once it exists; before the tag it is skipped, not failed.
+// DD_LIVE_REGISTRY_VERSION names a published version outright, for the window between bump and tag.
 const MANIFEST_VERSION = JSON.parse(
 	readFileSync(join(REPO_ROOT, "package.json"), "utf8")
 ).version;
-const REGISTRY_SPEC = `${PACKAGE_NAME}@${MANIFEST_VERSION}`;
+const REGISTRY_VERSION =
+	process.env.DD_LIVE_REGISTRY_VERSION || MANIFEST_VERSION;
+const REGISTRY_SPEC = `${PACKAGE_NAME}@${REGISTRY_VERSION}`;
 function registryHas(spec) {
 	try {
 		return (
@@ -234,7 +238,8 @@ function installedPlatformBinaries(appDir) {
 
 /** Throws rather than lets a bug boot Harper against the operator's real install. */
 function assertSafeHome(home, realHome) {
-	if (home === realHome || !home.startsWith(tmpdir())) {
+	// realpath on both sides: the fixture is canonical, and tmpdir() on macOS is not.
+	if (home === realHome || !home.startsWith(realpathSync(tmpdir()))) {
 		throw new Error(
 			`refusing to boot Harper with HOME=${home}: it is not a throwaway temp dir`
 		);
@@ -262,20 +267,24 @@ async function waitForTraceAgentVerified(
 	deadlineMs
 ) {
 	const deadline = Date.now() + deadlineMs;
+	let status;
 	while (Date.now() < deadline) {
 		if (child.exitCode !== null) {
 			throw new Error(
 				`harper run exited (code ${child.exitCode}) before the trace-agent verified; see its log`
 			);
 		}
-		const status = await fetchJson(statusUrl, authHeader).catch(() => null);
+		status =
+			(await fetchJson(statusUrl, authHeader).catch(() => null)) ?? status;
 		const trace = status?.processes?.find(
 			(process) => process.kind === "trace"
 		);
 		if (trace?.verified) return status;
 		await new Promise((resolve) => setTimeout(resolve, 500));
 	}
-	throw new Error(`the trace-agent did not verify within ${deadlineMs}ms`);
+	throw new Error(
+		`the trace-agent did not verify within ${deadlineMs}ms; last DatadogStatus: ${JSON.stringify(status) ?? "(never answered)"}`
+	);
 }
 
 /**
@@ -285,7 +294,10 @@ async function waitForTraceAgentVerified(
  */
 export async function bootHarper(row) {
 	const realHome = process.env.HOME;
-	const workDir = mkdtempSync(join(tmpdir(), "dd-live-"));
+	// Canonical from the start: on macOS tmpdir() is /var/..., a symlink to /private/var/..., and the
+	// component resolves its binaries through the platform package at the real path. Harper's spawn
+	// allowlist compares strings, so an allowed /var/... path never matches a spawn of /private/var/....
+	const workDir = realpathSync(mkdtempSync(join(tmpdir(), "dd-live-")));
 	// Reassigned once spawned, so a failure between spawn and readiness still kills the real child
 	// this function started rather than leaking it.
 	let child;
@@ -295,7 +307,13 @@ export async function bootHarper(row) {
 		});
 	} catch (error) {
 		if (child) killTree(child.pid);
+		// The fixture goes, so what Harper wrote has to travel with the error or it is gone with it.
+		const log = join(workDir, "harper-run.log");
+		const tail = existsSync(log)
+			? readFileSync(log, "utf8").split("\n").slice(-40).join("\n")
+			: "(harper-run.log was never written)";
 		rmSync(workDir, { recursive: true, force: true });
+		error.message += `\n--- last 40 lines of harper-run.log ---\n${tail}`;
 		throw error;
 	}
 }
@@ -318,7 +336,7 @@ async function bootHarperInto(workDir, row, realHome, onSpawn) {
 				devDependencies: { harper: row.harperLine },
 				dependencies: {
 					[PACKAGE_NAME]: row.fromRegistry
-						? MANIFEST_VERSION
+						? REGISTRY_VERSION
 						: `file:${REPO_ROOT}`,
 				},
 			},
@@ -433,7 +451,10 @@ async function bootHarperInto(workDir, row, realHome, onSpawn) {
 		workDir,
 		async stop() {
 			killTree(child.pid);
-			rmSync(workDir, { recursive: true, force: true });
+			// DD_LIVE_KEEP leaves the fixture (harper-run.log, hdb/log, the agents' own logs) for a look.
+			if (process.env.DD_LIVE_KEEP)
+				console.log(`[live] fixture kept at ${workDir}`);
+			else rmSync(workDir, { recursive: true, force: true });
 		},
 	};
 }
