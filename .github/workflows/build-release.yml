@@ -165,6 +165,17 @@ jobs:
           node dist/src/cli.js build "${args[@]}"
           ls -l "build/${{ matrix.platform }}/bin/"
 
+      # The agent build starts a Bazel server (the config-schema step does, whatever the rtloader flags
+      # say) and that server outlives the build holding the source tree open. On Windows a held handle
+      # makes renaming the tree EBUSY, which is what the smoke test was working around for ten seconds
+      # and then giving up on. Shutting the daemon down is the build's job, not the next step's problem.
+      - name: Stop the Bazel daemon the build started
+        if: always()
+        shell: bash
+        run: |
+          cd "build/${{ matrix.platform }}/src" || exit 0
+          ./tools/bazel shutdown || bazel shutdown || echo "no bazel to shut down"
+
       # Proves the binaries are real before we ship them, on every OS Windows included (bash is
       # already relied on there elsewhere in this file). The script hides build/<platform>/src itself.
       - name: Smoke test ${{ matrix.platform }} binaries
