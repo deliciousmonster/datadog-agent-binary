@@ -603,8 +603,14 @@ for (const host of document.querySelectorAll("[data-chart]")) {
 })();
 
 render();
+// The first paint can land before the frame has its final width, which drew every chart into a
+// third of the panel until something resized it. The observer redraws once layout settles, and
+// again whenever the frame changes; the timer covers the web font arriving after that.
 let resizeTimer;
-addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 120); });
+const redraw = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 90); };
+new ResizeObserver(redraw).observe(document.querySelector("[data-chart]").parentElement);
+addEventListener("resize", redraw);
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(render);
 </script>
 `;
 
