@@ -158,15 +158,18 @@ async function containerStats() {
 }
 async function rss(pids) {
 	try {
+		// One token per pid, whatever happens to it. The first version fell back with `printf "- "`, which
+		// dash reads as an option ("printf: Illegal option -"), so a pid that had gone emitted an error
+		// instead of a placeholder and every column after it shifted left by one. `${v:--}` fills the gap
+		// and `printf %s` never sees the dash as a flag.
 		const out = await sh(
-			pids
-				.map(
-					(pid) =>
-						`awk '/VmRSS/{printf "%d ", $2/1024}' /proc/${pid}/status 2>/dev/null || printf "- "`
-				)
-				.join("; ")
+			`for pid in ${pids.map((pid) => Number(pid) || 0).join(" ")}; do ` +
+				`v=$(awk '/VmRSS/{printf "%d", $2/1024}' /proc/$pid/status 2>/dev/null); ` +
+				`printf '%s ' "\${v:--}"; done`
 		);
-		return out.trim().split(/\s+/);
+		const columns = out.trim().split(/\s+/);
+		// Never fewer than asked for: a short row is what silently mislabels the two agents' memory.
+		return pids.map((_, index) => columns[index] ?? "-");
 	} catch {
 		return pids.map(() => "-");
 	}
