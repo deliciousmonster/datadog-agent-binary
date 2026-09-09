@@ -101,6 +101,67 @@ const harperSupervisor = (scope, log) => ({
 	},
 });
 
+/**
+ * A guard lock file: pid on line one, version on line two, and a JSON record carrying the argv on line three.
+ * Returns undefined for anything it cannot read as one, so a caller treats an unreadable lock as no lock.
+ *
+ * @param {string} file
+ * @returns {{ pid: number, version: number, argv: string[] } | undefined}
+ */
+export function readGuardLock(file) {
+	let lines;
+	try {
+		lines = readFileSync(file, "utf-8").split("\n");
+	} catch {
+		return undefined;
+	}
+	const pid = Number.parseInt(lines[0], 10);
+	if (!Number.isInteger(pid) || pid <= 0) return undefined;
+	const version = Number.parseInt(lines[1], 10) || 0;
+	let argv = [];
+	try {
+		const record = JSON.parse(lines.slice(2).join("\n"));
+		if (
+			Array.isArray(record?.argv) &&
+			record.argv.every((a) => typeof a === "string")
+		)
+			argv = record.argv;
+	} catch {
+		// A lock written before the argv line, or a half-written one: identity is simply not established.
+	}
+	return { pid, version, argv };
+}
+
+/**
+ * The reaper as it is now, rather than as bootstrap left it. The guard builds its ReaperState once and the
+ * status copied it, so a reaper killed at 01:43 on 2026-09-09 was still reported `started` with its dead pid
+ * ten minutes later, and the chaos run that killed it recorded a recovery that never happened. Processes
+ * already get this treatment through currentVerdict; the reaper was the one thing left reporting boot state.
+ *
+ * @param {Record<string, unknown> | undefined} reaper @param {string | undefined} pidDir
+ */
+export function currentReaper(reaper, pidDir) {
+	if (!reaper || !pidDir) return reaper;
+	const name = typeof reaper.name === "string" ? reaper.name : REAPER_NAME;
+	const held = readGuardLock(join(pidDir, `${name}.pid`));
+	if (held && identifyPid(held.pid, held.argv) === "match") {
+		// The pid too: a reaper that died and was replaced by another thread runs under a number this
+		// thread's boot state never saw.
+		return { ...reaper, started: true, pid: held.pid };
+	}
+	const why = !held
+		? `no lock for ${name} under ${pidDir}`
+		: argvOf(held.pid) === null
+			? `${name}'s lock names pid ${held.pid}, which nothing holds`
+			: `${name}'s lock names pid ${held.pid}, which is running something else`;
+	return {
+		...reaper,
+		started: false,
+		pid: undefined,
+		error: `${why}. Nothing is reaping this node's agents: if it dies without running its exit handlers, they outlive it.`,
+	};
+}
+
 // The reaper takes its own lock beside the agents', so its name is what a second component sharing the
 // directory would collide on; this one names the package rather than taking the guard's generic default.
 const REAPER_NAME = "datadog-agent-reaper";

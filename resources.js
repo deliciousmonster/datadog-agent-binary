@@ -13,7 +13,11 @@ import {
 	readDeliverySignal as readSignal,
 } from "./runtime/delivery.js";
 import { untraceAgentProbes } from "./runtime/probe.js";
-import { supervisorFor, unstarted } from "./runtime/supervisor.js";
+import {
+	currentReaper,
+	supervisorFor,
+	unstarted,
+} from "./runtime/supervisor.js";
 import {
 	currentVerdict,
 	expvarUrl,
@@ -129,6 +133,9 @@ const apiKeyStatus = () => (process.env.DD_API_KEY ? "set" : "MISSING");
 /** Per worker thread, set by handleApplication; a request that beats it, or a thread that never ran it, reads NOT_STARTED. */
 let supervisor;
 
+/** Where the guard's locks live, kept for the read path: the reaper's is re-read on every status. */
+let pidDir;
+
 /** The fields every status shape starts from, so NOT_STARTED and startAgents's own status object cannot drift apart. */
 const baseStatus = () => ({
 	receiverPort: ports.receiver,
@@ -165,6 +172,8 @@ async function startAgents(scope) {
 		}
 
 		const runtime = prepareRuntime();
+		// The getter re-reads the reaper's lock, and this is the only place the path is known.
+		pidDir = runtime.paths.pidDir;
 		Object.assign(status, {
 			runtimeDir: runtime.paths.runtimeDir,
 			configFile: runtime.paths.configFile,
@@ -280,6 +289,11 @@ export class DatadogStatus extends ResourceBase {
 			// Read here rather than copied at boot: a verdict the supervisor took before a restart describes
 			// a process this node no longer runs.
 			processes: status.processes.map(currentVerdict),
+			// Same reason as the verdicts above: a reaper the supervisor started can be gone, and until this
+			// was read here the status reported the boot state and the dead pid with it.
+			...(status.reaper
+				? { reaper: currentReaper(status.reaper, pidDir) }
+				: {}),
 			// Which thread answered; every field above it is per-thread state.
 			threadId,
 			delivery,
