@@ -209,6 +209,83 @@ export function clearStaleHarperPidFiles(root, named, log) {
 }
 
 /** The bundled guard, one call for both agents. `spawn` is the entry module's own, which is the one Harper constrains. */
+/** How often a thread checks the reaper is still there, and the longest it waits after a failed relaunch. */
+export const REAPER_WATCH_MS = 60_000;
+const REAPER_BACKOFF_MAX_MS = 15 * 60_000;
+
+/**
+ * Keep a reaper on the node. Nothing relaunched one before: chaos killed the reaper on the 2026-09-09
+ * soak at 01:43 and the node ran without orphan cleanup until the next restart forty minutes later,
+ * while the status reported it started. The check is a lock read and one identification, so a thread
+ * that finds a healthy reaper has done almost nothing; only an absent one reaches `relaunch`, which is
+ * `guard({ processes: [], reaper })` and takes the same lock every thread already contends for, so one
+ * thread spawns and the rest adopt.
+ *
+ * @param {object} options
+ * @param {string} options.pidDir @param {Record<string, unknown>} options.reaper
+ * @param {() => Promise<unknown>} options.relaunch @param {import("./log.js").Log} options.log
+ * @param {number} [options.everyMs] @param {(fn: () => void, ms: number) => any} [options.setTimer]
+ * @returns {{ stop: () => void, tick: () => Promise<'present'|'relaunched'|'failed'|'backoff'> }}
+ */
+export function keepReaperAlive({
+	pidDir,
+	reaper,
+	relaunch,
+	log,
+	everyMs = REAPER_WATCH_MS,
+	setTimer = setInterval,
+}) {
+	let backoffUntil = 0;
+	let wait = everyMs;
+	let running = false;
+
+	const tick = async () => {
+		// One relaunch at a time per thread: a spawn plus its lock claim can outlast the interval.
+		if (running) return "present";
+		if (currentReaper(reaper, pidDir)?.started) {
+			wait = everyMs;
+			return "present";
+		}
+		if (Date.now() < backoffUntil) return "backoff";
+		running = true;
+		try {
+			await relaunch();
+			const now = currentReaper(reaper, pidDir);
+			if (now?.started) {
+				wait = everyMs;
+				log.warn(
+					`Datadog supervisor: the reaper was gone and has been relaunched as pid ${now.pid}.`
+				);
+				return "relaunched";
+			}
+			// It did not come back. Widen the gap rather than spawn every minute against whatever is
+			// refusing, and say so once per attempt so the reason reaches a log an operator reads.
+			wait = Math.min(wait * 2, REAPER_BACKOFF_MAX_MS);
+			backoffUntil = Date.now() + wait;
+			log.error(
+				`Datadog supervisor: relaunching the reaper left none running; next attempt in ${Math.round(wait / 1000)}s. ${now?.error ?? ""}`
+			);
+			return "failed";
+		} catch (error) {
+			wait = Math.min(wait * 2, REAPER_BACKOFF_MAX_MS);
+			backoffUntil = Date.now() + wait;
+			log.error(
+				`Datadog supervisor: relaunching the reaper threw: ${error instanceof Error ? error.message : String(error)}. Next attempt in ${Math.round(wait / 1000)}s`
+			);
+			return "failed";
+		} finally {
+			running = false;
+		}
+	};
+
+	const timer = setTimer(() => {
+		tick().catch(() => {});
+	}, everyMs);
+	// Never the reason a worker thread stays alive.
+	timer?.unref?.();
+	return { stop: () => clearInterval(timer), tick };
+}
+
 const guardSupervisor = (log, spawn) => ({
 	kind: "guard",
 	async start(agents, { runtime, configFiles, fingerprintParts }) {
@@ -226,6 +303,15 @@ const guardSupervisor = (log, spawn) => ({
 			],
 			log
 		);
+		const reaperConfig = {
+			name: REAPER_NAME,
+			logFile: runtime.paths.reaperLog,
+			// Harper records its own pid here, so a restart inside the grace window keeps the agents
+			// running for the replacement node to adopt.
+			...(runtime.root
+				? { replacementPidFile: join(runtime.root, "hdb.pid") }
+				: {}),
+		};
 		let result;
 		try {
 			result = await guard({
@@ -244,15 +330,7 @@ const guardSupervisor = (log, spawn) => ({
 					exitHint: agent.exitHint,
 					verify: agent.verify,
 				})),
-				reaper: {
-					name: REAPER_NAME,
-					logFile: runtime.paths.reaperLog,
-					// Harper records its own pid here, so a restart inside the grace window keeps the agents
-					// running for the replacement node to adopt.
-					...(runtime.root
-						? { replacementPidFile: join(runtime.root, "hdb.pid") }
-						: {}),
-				},
+				reaper: reaperConfig,
 			});
 		} catch (error) {
 			// Anything guard() does not catch itself reaches here, and no enumeration of those stays true: the
@@ -272,6 +350,24 @@ const guardSupervisor = (log, spawn) => ({
 				processes: agents.map((agent) => unstarted(agent, message)),
 				report: [message],
 			};
+		}
+		if (result.reaper) {
+			// processes: [] is the reaper half on its own. Same lock, same arbitration, no agent touched.
+			keepReaperAlive({
+				pidDir: runtime.paths.pidDir,
+				reaper: result.reaper,
+				log,
+				relaunch: () =>
+					guard({
+						pidDir: runtime.paths.pidDir,
+						spawn,
+						log,
+						version: fingerprint(...fingerprintParts),
+						stopOrphans: false,
+						processes: [],
+						reaper: reaperConfig,
+					}),
+			});
 		}
 		return {
 			processes: result.processes.map((state, index) =>
