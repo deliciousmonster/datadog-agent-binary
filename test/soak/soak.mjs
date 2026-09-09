@@ -438,6 +438,10 @@ const COLUMNS = [
 	["logsErr", 7],
 	["chaos", 24],
 ];
+/** What a writer reports turned away, as errors/retries: a zero in either alone hides a wrong key. */
+const refusals = (writer) =>
+	writer ? `${writer.errors ?? "-"}/${writer.retries ?? "-"}` : "-";
+
 const header = () =>
 	COLUMNS.map(([name, width]) => name.padEnd(width)).join(" ");
 const row = (values) =>
@@ -506,9 +510,12 @@ async function statusRow() {
 		traces: d.receiver?.tracesReceived ?? "-",
 		spans: d.receiver?.spansReceived ?? "-",
 		statsOK: d.statsWriter?.payloads ?? "-",
-		statsErr: d.statsWriter?.errors ?? "-",
+		// errors/retries, because the verdict reads both and a retry is what a wrong key produces first. Every
+		// `rejected` row on the 2026-09-08 run showed statsErr=0 beside it: the intake 403s, the writer retries,
+		// and Errors stays zero until it gives up, so the table carried no reason for its own verdict.
+		statsErr: refusals(d.statsWriter),
 		traceOK: d.traceWriter?.payloads ?? "-",
-		traceErr: d.traceWriter?.errors ?? "-",
+		traceErr: refusals(d.traceWriter),
 		fwdOK: typeof fwdOK === "number" ? fwdOK : "-",
 		logsSent: logs.LogsSent ?? "-",
 		logsErr: logs.DestinationErrors ?? "-",
