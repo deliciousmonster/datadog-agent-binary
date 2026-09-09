@@ -1,7 +1,18 @@
 // Whether anything this node collected reached Datadog. Every counter here is a one-minute window the agent
 // resets, so nothing is cumulative and nothing diffs.
 
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import {
+	closeSync,
+	openSync,
+	readFileSync,
+	readSync,
+	renameSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
+import { threadId } from "node:worker_threads";
 
 import { parseJson, pollEndpoint } from "./probe.js";
 
@@ -238,15 +249,68 @@ const REFUSAL =
  */
 const statsAccepted = new Map();
 
+/** The default store: this thread's own memory, which is all a single-threaded caller needs. */
+const threadStore = {
+	get: (key) => statsAccepted.get(key),
+	set: (key, at) => statsAccepted.set(key, at),
+};
+
+/**
+ * A store every thread on the node shares, one small file per source beside the guard's locks.
+ *
+ * Harper answers a status read on whichever worker thread is free, so a mark kept in module memory is private
+ * to one thread and stale by however long since that thread last answered. Measured on 2026-09-09 against a
+ * live node under steady load: 6 of 20 reads four seconds apart came back with no mark at all and the rest
+ * scattered from 4 to 61 seconds, because each read landed on a different thread. The window being tracked is
+ * 60 seconds wide, so a per-thread mark cannot track it, and the verdict went back to reading `idle` on a cold
+ * thread. The guard already shares the reaper's identity across threads through a file in this directory, and
+ * this is the same answer to the same problem.
+ */
+export function sharedStatsStore(dir) {
+	if (!dir) return threadStore;
+	const path = (key) =>
+		join(dir, `stats-accepted-${key.replace(/[^\w.-]+/g, "_")}.mark`);
+	return {
+		get(key) {
+			try {
+				const at = Number(readFileSync(path(key), "utf-8").trim());
+				return Number.isFinite(at) && at > 0 ? at : undefined;
+			} catch {
+				// No mark yet, or an unreadable one. Either way this read has nothing behind it.
+				return undefined;
+			}
+		},
+		set(key, at) {
+			const target = path(key);
+			// Written under a per-thread name and renamed, so a reader never sees half a number.
+			const scratch = `${target}.${process.pid}.${threadId}`;
+			try {
+				writeFileSync(scratch, String(at));
+				renameSync(scratch, target);
+			} catch {
+				// A read-only or missing runtime tree costs the recall, not the status read.
+				try {
+					unlinkSync(scratch);
+				} catch {}
+			}
+		},
+	};
+}
+
 /**
  * How long ago this source last accepted a stats payload, recording this read as it answers.
  *
  * Read and write are one call because the order is the whole correctness of it: answer from what the previous
  * read left, then record, so a window that accepts is never its own corroboration.
  */
-export function recallStatsWindow(source, payloads, at = Date.now()) {
-	const seen = statsAccepted.get(source);
-	if (payloads > 0) statsAccepted.set(source, at);
+export function recallStatsWindow(
+	source,
+	payloads,
+	at = Date.now(),
+	store = threadStore
+) {
+	const seen = store.get(source);
+	if (payloads > 0) store.set(source, at);
 	return seen === undefined ? undefined : at - seen;
 }
 
@@ -256,7 +320,7 @@ export const forgetStatsHistory = () => statsAccepted.clear();
 /** The trace-agent's own delivery counters. Never rejects: an endpoint that does not answer is itself a verdict. */
 export async function readDeliverySignal(
 	port,
-	{ traceLog, now = Date.now } = {}
+	{ traceLog, markDir, now = Date.now } = {}
 ) {
 	const source = debugVarsUrl(port);
 	if (port === 0) {
@@ -287,7 +351,8 @@ export async function readDeliverySignal(
 	const statsAcceptedMsAgo = recallStatsWindow(
 		source,
 		Number(vars?.stats_writer?.Payloads) || 0,
-		now()
+		now(),
+		sharedStatsStore(markDir)
 	);
 	return deliveryVerdict(vars, source, readTraceHop(traceLog), {
 		statsAcceptedMsAgo,

@@ -128,7 +128,7 @@ export const prepareRuntime = () =>
 
 /** The trace-agent's delivery counters, off the debug port this instance rendered into datadog.yaml. */
 export const readDeliverySignal = (port = ports.debug) =>
-	readSignal(port, { traceLog: traceLogPath });
+	readSignal(port, { traceLog: traceLogPath, markDir: pidDir });
 
 /** Never the value itself, so the status endpoint cannot become a second place the key leaks. */
 const apiKeyStatus = () => (process.env.DD_API_KEY ? "set" : "MISSING");

@@ -6,13 +6,17 @@
 // phase is the time since a window did accept something, so the reader keeps it.
 
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, before, describe, it } from "node:test";
 
 import {
 	STATS_RECALL_MS,
 	deliveryVerdict,
 	forgetStatsHistory,
 	recallStatsWindow,
+	sharedStatsStore,
 } from "../../runtime/delivery.js";
 
 const snapshot = ({ stats = {}, spans = 2483 } = {}) => ({
@@ -184,5 +188,85 @@ describe("what the reader remembers", () => {
 		recallStatsWindow(src, 4, 1_000);
 		forgetStatsHistory();
 		assert.equal(recallStatsWindow(src, 0, 2_000), undefined);
+	});
+});
+
+describe("a mark every thread on the node shares", () => {
+	// The first version of this kept the mark in module memory, which is per worker thread. Harper answers a
+	// status read on whichever thread is free, so measured against a live node under steady load on 2026-09-09,
+	// 6 of 20 reads four seconds apart came back with no mark and the rest scattered from 4 to 61 seconds. The
+	// window is 60 seconds wide, so a thread that answers once a minute cannot track it and the verdict went
+	// back to reading `idle` on a cold thread.
+	let dir;
+	const SRC = "https://127.0.0.1:5012/debug/vars";
+
+	before(() => {
+		dir = mkdtempSync(join(tmpdir(), "dd-stats-mark-"));
+	});
+	after(() => rmSync(dir, { recursive: true, force: true }));
+
+	it("hands one thread's acceptance to another thread's read", () => {
+		const threadA = sharedStatsStore(dir);
+		const threadB = sharedStatsStore(dir);
+		assert.equal(recallStatsWindow(SRC, 4, 1_000, threadA), undefined);
+		assert.equal(
+			recallStatsWindow(SRC, 0, 31_000, threadB),
+			30_000,
+			"the thread that never saw an acceptance still reads when the node last had one"
+		);
+	});
+
+	it("survives the whole node restarting, because the mark is on disk", () => {
+		const before = sharedStatsStore(dir);
+		recallStatsWindow(SRC, 6, 100_000, before);
+		// Nothing in memory carries over; a fresh store over the same directory is a fresh process.
+		assert.equal(
+			recallStatsWindow(SRC, 0, 130_000, sharedStatsStore(dir)),
+			30_000
+		);
+	});
+
+	it("NEGATIVE: keeps two sources apart on disk, not just in a map", () => {
+		const store = sharedStatsStore(dir);
+		recallStatsWindow("https://127.0.0.1:5012/debug/vars", 4, 200_000, store);
+		assert.equal(
+			recallStatsWindow("https://127.0.0.1:5013/debug/vars", 0, 201_000, store),
+			undefined
+		);
+	});
+
+	it("NEGATIVE: falls back to this thread's memory with no directory to share through", () => {
+		forgetStatsHistory();
+		const store = sharedStatsStore(undefined);
+		assert.equal(recallStatsWindow(SRC, 4, 1_000, store), undefined);
+		assert.equal(recallStatsWindow(SRC, 0, 2_000, store), 1_000);
+	});
+
+	it("NEGATIVE: an unwritable directory costs the recall and nothing else", () => {
+		const store = sharedStatsStore(join(dir, "does", "not", "exist"));
+		assert.doesNotThrow(() => recallStatsWindow(SRC, 4, 1_000, store));
+		assert.equal(recallStatsWindow(SRC, 0, 2_000, store), undefined);
+	});
+
+	it("NEGATIVE: reads nothing out of a mark that is not a timestamp", () => {
+		const store = sharedStatsStore(dir);
+		const file = readdirSync(dir).find((n) =>
+			n.endsWith("5012_debug_vars.mark")
+		);
+		assert.ok(file, "the mark this asserts on has to exist first");
+		writeFileSync(join(dir, file), "not-a-number");
+		assert.equal(recallStatsWindow(SRC, 0, 300_000, store), undefined);
+		writeFileSync(join(dir, file), "0");
+		assert.equal(recallStatsWindow(SRC, 0, 300_000, store), undefined);
+	});
+
+	it("leaves no scratch file behind, so the pid directory does not fill up", () => {
+		const store = sharedStatsStore(dir);
+		for (let i = 0; i < 20; i++) recallStatsWindow(SRC, 3, 400_000 + i, store);
+		assert.deepEqual(
+			readdirSync(dir).filter((n) => !n.endsWith(".mark")),
+			[],
+			"every write renames onto the mark"
+		);
 	});
 });
