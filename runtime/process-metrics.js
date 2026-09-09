@@ -11,6 +11,72 @@
 
 import { readFileSync } from "node:fs";
 
+/**
+ * What this node sends, and how often.
+ *
+ * A boolean, not the presence of a config file. Datadog gates an *integration* on a `conf.d/<check>.d/`
+ * file because the agent cannot know what you want monitored; `process.py` refuses an instance without a
+ * `search_string`, `pid` or `pid_file` for exactly that reason. This is not an integration. It measures the
+ * processes this component spawned, so it knows its own subject, which puts it in the same class as
+ * `apm_config.enabled` and `process_config.process_collection.enabled` -- both of which this package already
+ * renders as booleans. Installing the plugin is the operator asking for the data.
+ *
+ * On by default, because the series is small: six gauges per group, tagged by env, host and group. The cost
+ * knobs are the ones an operator already knows from the check this replaces, with Datadog's own semantics:
+ * `min_collection_interval` for cadence and `metric_patterns` where exclude beats include on overlap.
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function settings(env = process.env) {
+	const flag = env.DD_HARPER_PROCESS_METRICS_ENABLED;
+	const seconds = Number(env.DD_HARPER_PROCESS_METRICS_INTERVAL);
+	const patterns = (raw) =>
+		(raw ?? "")
+			.split(",")
+			.map((p) => p.trim())
+			.filter(Boolean);
+	return {
+		// Anything but an explicit falsehood is on, so a typo cannot silently stop the data.
+		enabled: !["false", "0", "no", "off"].includes(
+			String(flag ?? "").toLowerCase()
+		),
+		intervalSeconds:
+			Number.isFinite(seconds) && seconds > 0
+				? seconds
+				: DEFAULT_INTERVAL_SECONDS,
+		include: patterns(env.DD_HARPER_PROCESS_METRICS_INCLUDE),
+		exclude: patterns(env.DD_HARPER_PROCESS_METRICS_EXCLUDE),
+	};
+}
+
+/**
+ * Datadog's `metric_patterns` semantics: include narrows, exclude removes, exclude wins on overlap.
+ *
+ * @param {Record<string, number>} metrics
+ * @param {{ include?: readonly string[], exclude?: readonly string[] }} patterns
+ */
+export function applyPatterns(metrics, { include = [], exclude = [] } = {}) {
+	const matches = (list, name) =>
+		list.some((p) => {
+			try {
+				return new RegExp(p).test(name);
+			} catch {
+				// A malformed pattern matches nothing rather than throwing a status read.
+				return false;
+			}
+		});
+	return Object.fromEntries(
+		Object.entries(metrics).filter(
+			([name]) =>
+				(include.length === 0 || matches(include, name)) &&
+				!matches(exclude, name)
+		)
+	);
+}
+
+/** Datadog's own default cadence for a check, so the number an operator knows carries over. */
+const DEFAULT_INTERVAL_SECONDS = 15;
+
 /** Bytes per /proc kB field. */
 const KB = 1024;
 
@@ -122,7 +188,7 @@ export function processSeries(members, options) {
 	const samples = members.map((m) =>
 		m.self ? selfProcess() : readProcess(m.pid, platform)
 	);
-	const metrics = aggregate(samples);
+	const metrics = applyPatterns(aggregate(samples), options);
 	return {
 		metrics,
 		measured: samples.filter((s) => s !== null).length,

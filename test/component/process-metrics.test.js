@@ -8,10 +8,12 @@ import { describe, it } from "node:test";
 
 import {
 	aggregate,
+	applyPatterns,
 	dogstatsdLines,
 	processSeries,
 	readProcess,
 	selfProcess,
+	settings,
 } from "../../runtime/process-metrics.js";
 
 const status = (rssKb, threads) =>
@@ -161,5 +163,87 @@ describe("a series for one supervised group", () => {
 			["harper.processes.number:0|g|#process_group:agents"],
 			"the count still ships, so a dashboard shows zero measured rather than nothing at all"
 		);
+	});
+});
+
+describe("whether it sends at all", () => {
+	// A boolean, not the presence of a config file. Datadog gates an integration on conf.d/<check>.d/ because
+	// the agent cannot know what to monitor; this measures processes the component spawned, so it knows its
+	// own subject. That puts it with apm_config.enabled and process_config.process_collection.enabled, both
+	// of which this package already renders as booleans.
+	it("is on when nothing says otherwise, because installing the plugin is the ask", () => {
+		assert.equal(settings({}).enabled, true);
+	});
+
+	it("is off only for an explicit falsehood", () => {
+		for (const off of ["false", "FALSE", "0", "no", "off", "Off"])
+			assert.equal(
+				settings({ DD_HARPER_PROCESS_METRICS_ENABLED: off }).enabled,
+				false,
+				off
+			);
+	});
+
+	it("NEGATIVE: a typo leaves it on rather than silently stopping the data", () => {
+		for (const typo of ["flase", "", "true", "yes", "1"])
+			assert.equal(
+				settings({ DD_HARPER_PROCESS_METRICS_ENABLED: typo }).enabled,
+				true,
+				typo
+			);
+	});
+
+	it("carries Datadog's own default cadence, so the number an operator knows still applies", () => {
+		assert.equal(settings({}).intervalSeconds, 15);
+		assert.equal(
+			settings({ DD_HARPER_PROCESS_METRICS_INTERVAL: "60" }).intervalSeconds,
+			60
+		);
+	});
+
+	it("NEGATIVE: refuses a cadence that is not a positive number", () => {
+		for (const bad of ["0", "-5", "soon", ""])
+			assert.equal(
+				settings({ DD_HARPER_PROCESS_METRICS_INTERVAL: bad }).intervalSeconds,
+				15,
+				bad
+			);
+	});
+});
+
+describe("metric_patterns, with Datadog's semantics", () => {
+	const all = { number: 1, "mem.rss": 2, "mem.rss.avg": 3, threads: 4 };
+
+	it("include narrows to what matches", () => {
+		assert.deepEqual(applyPatterns(all, { include: ["^mem\\."] }), {
+			"mem.rss": 2,
+			"mem.rss.avg": 3,
+		});
+	});
+
+	it("exclude removes, and beats include on overlap", () => {
+		// Datadog's rule: "Metrics defined in `exclude` will take precedence in case of overlap."
+		assert.deepEqual(
+			applyPatterns(all, { include: ["^mem\\."], exclude: ["avg$"] }),
+			{ "mem.rss": 2 }
+		);
+	});
+
+	it("NEGATIVE: no patterns means everything, not nothing", () => {
+		assert.deepEqual(applyPatterns(all, {}), all);
+		assert.deepEqual(applyPatterns(all), all);
+	});
+
+	it("NEGATIVE: a malformed pattern matches nothing rather than throwing a status read", () => {
+		assert.deepEqual(applyPatterns(all, { exclude: ["([unclosed"] }), all);
+		assert.deepEqual(applyPatterns(all, { include: ["([unclosed"] }), {});
+	});
+
+	it("the series honours patterns end to end, which is where the cost is controlled", () => {
+		const got = processSeries([{ name: "self", self: true }], {
+			group: "harper",
+			exclude: ["\\.(avg|max|min)$", "^threads$"],
+		});
+		assert.deepEqual(Object.keys(got.metrics).sort(), ["mem.rss", "number"]);
 	});
 });
