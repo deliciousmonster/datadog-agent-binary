@@ -155,7 +155,16 @@ const baseStatus = () => ({
 	// exist; writing them there would look like an agent setting that silently does nothing. The ports
 	// above are in both because the agent genuinely reads those. This is the plugin's own surface, so
 	// this is where the plugin says what it resolved.
-	processMetrics: processMetricSettings(),
+	//
+	// `emitting` is separate from `enabled` on purpose. Nothing schedules the series yet, so a status that
+	// reported only `enabled: true` would claim a feature that sends nothing. It says what is true.
+	processMetrics: {
+		...processMetricSettings(),
+		emitting: false,
+		detail:
+			"configured but not scheduled: no cadence is wired yet, so this component emits no " +
+			"harper.processes.* series. The settings above are what it would use.",
+	},
 	processes: [],
 });
 

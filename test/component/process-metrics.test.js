@@ -260,6 +260,10 @@ describe("where the settings are visible", () => {
 		const status = await DatadogStatus.get();
 		assert.equal(typeof status.processMetrics, "object");
 		assert.equal(status.processMetrics.enabled, true);
+		// enabled is what was configured; emitting is what is true. Nothing schedules the series yet, and a
+		// status that reported only the first would advertise a feature that sends nothing.
+		assert.equal(status.processMetrics.emitting, false);
+		assert.match(status.processMetrics.detail, /not scheduled/);
 		assert.equal(status.processMetrics.intervalSeconds, 15);
 		assert.deepEqual(status.processMetrics.exclude, []);
 	});
