@@ -36,6 +36,25 @@ before the guard asks Harper to spawn, when the pid it names is running somethin
 process; the guard refuses a handed-back pid it cannot identify, so the two together fail loud rather
 than supervise a stranger.
 
+## Known log noise, and its cause
+
+The core agent logs `failed to get services: Get "http://sysprobe/debug/stats"` about once a minute
+whenever `process_config.process_collection.enabled` is on. It is ours, not Datadog's: the workloadmeta
+process collector asks system-probe for service discovery
+(`comp/core/workloadmeta/collectors/internal/process/process_collector.go:556` at 7.82.1), and this
+build excludes system-probe. Live Processes itself works; only the discovery half of the collector has
+nothing to talk to.
+
+The gate is `discovery.enabled` in the *system-probe* config, which defaults on. Turning it off needs
+either `DD_DISCOVERY_ENABLED=false` in the node's environment, which the agents inherit from Harper, or
+a per-agent `env` threaded through the guard's process descriptors, which the guard does not carry
+today. Writing `/etc/datadog-agent/system-probe.yaml` is not a route inside the stock Harper image: the
+`harperdb` user cannot create that directory.
+
+Nothing else logs at ERROR in steady state. Measured after a restart on 2026-09-09: the trace-agent and
+the reaper logged nothing at ERROR or WARN, and the core agent logged only this and a Kubelet fallback
+probe on a host that is not Kubernetes.
+
 ## Release
 
 A hand-pushed `v*` tag runs `build-release.yml`: four platform builds, a smoke test on each (on Windows the build tree cannot be moved aside, and the test says so and runs on), a GitHub release, then five publishes. Publishing authenticates with the job's OIDC token through a trusted publisher on each package; there is no npm token on the repository. The dist-tag is derived from the version: the prerelease identifier, or `latest`. npm 11 refuses a prerelease without one.
