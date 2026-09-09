@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import { AgentBinary, BINARIES, binaryFilename } from "./binaries.js";
+import { AgentBinary, binariesFor, binaryFilename } from "./binaries.js";
 import { buildTree } from "./layout.js";
 import { logger } from "./log.js";
 import { Target } from "./targets.js";
@@ -259,7 +259,9 @@ export async function build({
 	);
 
 	const shipped: string[] = [];
-	for (const binary of BINARIES) {
+	// Not every binary exists on every system: system-probe is eBPF and Linux-only, security-agent has no
+	// macOS build. Asking for one that does not exist fails the whole build rather than shipping less.
+	for (const binary of binariesFor(target)) {
 		logger.info(`Building ${binary.shipsAs} for ${target.name}`);
 		await run(
 			"dda",

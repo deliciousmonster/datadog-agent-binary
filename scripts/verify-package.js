@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { platformPackageDir } from "./paths.js";
 import { TARGETS } from "../dist/src/targets.js";
 import {
-	BINARIES,
+	binariesFor,
 	binaryFilename,
 	recordedBuildTags,
 } from "../dist/src/binaries.js";
@@ -83,7 +83,9 @@ function verifyPlatformPackage(target) {
 		}
 	}
 
-	for (const binary of BINARIES) {
+	// Only what this system has. A platform package that never carried system-probe must not fail
+	// for missing it; one that should carry it and does not, still must.
+	for (const binary of binariesFor(target)) {
 		const relPath = `bin/${binaryFilename(binary, target)}`;
 		if (!binFiles.includes(relPath)) {
 			failures.push(

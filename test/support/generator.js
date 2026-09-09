@@ -21,7 +21,7 @@ const REPO_ROOT = findRepoRoot(import.meta.dirname);
 const { TARGETS, currentTarget } = require(
 	path.join(REPO_ROOT, "dist", "src", "targets.js")
 );
-const { BINARIES } = require(
+const { BINARIES, binariesFor } = require(
 	path.join(REPO_ROOT, "dist", "src", "binaries.js")
 );
 
@@ -61,7 +61,9 @@ function generatePackages({ prefix, args = [] }) {
 	for (const target of built) {
 		const binDir = path.join(workDir, "build", target.name, "bin");
 		fs.mkdirSync(binDir, { recursive: true });
-		for (const binary of BINARIES) {
+		// binariesFor, not BINARIES: the generator copies only what this system has, so a fixture that laid
+		// down a Linux-only binary on macOS would leave an orphan the packaging step never claims.
+		for (const binary of binariesFor(target)) {
 			fs.writeFileSync(
 				path.join(binDir, `${binary.shipsAs}${target.exe}`),
 				`#!/bin/sh\necho ${binary.shipsAs}\n`
@@ -83,5 +85,6 @@ export {
 	generatePackages,
 	TARGETS,
 	BINARIES,
+	binariesFor,
 	currentTarget,
 };

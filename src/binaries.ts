@@ -1,4 +1,4 @@
-import { Target } from "./targets.js";
+import { OS, Target } from "./targets.js";
 
 export interface AgentBinary {
 	/** Name the binary ships under, before the platform's executable suffix. */
@@ -14,6 +14,23 @@ export interface AgentBinary {
 	readonly requiredSymbol: string;
 	/** Go build tag mandatoryArgs excludes. scripts/verify-package.js reads the shipped binary's build info and gates on its absence. */
 	readonly forbiddenBuildTag?: string;
+	/**
+	 * Systems this binary exists on. Absent means all of them.
+	 *
+	 * Not every agent binary is cross-platform. system-probe is eBPF and Linux is where it does anything:
+	 * `tasks/system_probe.py::build()` opens with `if not is_macos: build_object_files(ctx)`, so a macOS
+	 * build produces a binary with no probes in it. security-agent's runtime security is likewise Linux and
+	 * Windows. Shipping an inert binary would be worse than shipping none, because a platform package that
+	 * carries it implies the capability is there.
+	 */
+	readonly onlyOn?: readonly OS[];
+}
+
+/** The binaries that exist for one system, which is not always all of them. */
+export function binariesFor(
+	target: Pick<Target, "os">
+): readonly AgentBinary[] {
+	return BINARIES.filter((b) => !b.onlyOn || b.onlyOn.includes(target.os));
 }
 
 export const BINARIES: readonly AgentBinary[] = [
@@ -74,7 +91,10 @@ export const BINARIES: readonly AgentBinary[] = [
 		// Independent of all of it: system-probe needs neither. tasks/system_probe.py builds it static Go
 		// with eBPF and no rtloader, so shipping it does not wait on this question.
 		mandatoryArgs: [
-			"--build-exclude=systemd,python",
+			// Only python. systemd rode in on this flag with no measurement or test recorded for it, and
+			// excluding it costs the journald log source and the systemd integration. Python is settled on
+			// its own terms; systemd never had terms.
+			"--build-exclude=python",
 			"--exclude-rtloader",
 			"--no-enable-bazel",
 		],
@@ -94,6 +114,35 @@ export const BINARIES: readonly AgentBinary[] = [
 		mandatoryArgs: [],
 		argsOverride: "DD_TRACE_AGENT_BUILD_ARGS",
 		requiredSymbol: "datadog-agent/pkg/trace/api.",
+	},
+	{
+		shipsAs: "system-probe",
+		task: "system-probe.build",
+		builtAt: "bin/system-probe/system-probe",
+		// Needs neither python nor rtloader: tasks/system_probe.py calls get_build_flags without them and
+		// adds osusergo/netgo/static. It was dropped from this package in `0c52271`, a commit that replaced a
+		// hand-written build with upstream's and deleted the `go build -o build/system-probe` line in the
+		// same diff, with no evaluation recorded. Without it the core agent's workloadmeta collector asks a
+		// socket nothing serves and logs it once a minute, which is what this node has been reporting all
+		// day.
+		mandatoryArgs: [],
+		argsOverride: "DD_SYSTEM_PROBE_BUILD_ARGS",
+		requiredSymbol: "datadog-agent/cmd/system-probe",
+		// Linux only, and deliberately. `build()` skips `build_object_files` off Linux, so a macOS artifact
+		// is a binary with no eBPF in it: present, startable, and unable to do the thing it exists for.
+		onlyOn: ["linux"],
+	},
+	{
+		shipsAs: "security-agent",
+		task: "security-agent.build",
+		builtAt: "bin/security-agent/security-agent",
+		// `tasks/security_agent.py::build()` takes `build_tags` as a required positional, not as flags the
+		// way the other three do, so this is the one descriptor whose args are a value rather than options.
+		mandatoryArgs: ["--build-tags=", "sysprobe_bundle"],
+		argsOverride: "DD_SECURITY_AGENT_BUILD_ARGS",
+		requiredSymbol: "datadog-agent/cmd/security-agent",
+		// Runtime security is a Linux and Windows product; there is no macOS build of it to ship.
+		onlyOn: ["linux", "windows"],
 	},
 ];
 

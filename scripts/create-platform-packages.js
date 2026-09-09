@@ -10,7 +10,7 @@ import {
 import { join } from "node:path";
 import { REPO_ROOT, readRepoVersion, platformPackageDir } from "./paths.js";
 import { TARGETS, currentTarget } from "../dist/src/targets.js";
-import { BINARIES, binaryFilename } from "../dist/src/binaries.js";
+import { binariesFor, binaryFilename } from "../dist/src/binaries.js";
 import { buildTree } from "../dist/src/layout.js";
 
 function copyPlatformBinary(platform) {
@@ -18,7 +18,7 @@ function copyPlatformBinary(platform) {
 	mkdirSync(join(packageDir, "bin"), { recursive: true });
 	const builtAt = buildTree(REPO_ROOT, platform).bin;
 
-	for (const binary of BINARIES) {
+	for (const binary of binariesFor(platform)) {
 		const fileName = binaryFilename(binary, platform);
 		const from = join(builtAt, fileName);
 		if (!existsSync(from)) {
@@ -84,11 +84,11 @@ function writePlatformPackageJson(platform) {
 
 function writePlatformIndexJs(platform) {
 	const files = Object.fromEntries(
-		BINARIES.map((b) => [b.shipsAs, binaryFilename(b, platform)])
+		binariesFor(platform).map((b) => [b.shipsAs, binaryFilename(b, platform)])
 	);
 	const indexContent = indexTemplate
 		.replace("__BINARIES__", JSON.stringify(files, null, 2))
-		.replace("__DEFAULT__", BINARIES[0].shipsAs);
+		.replace("__DEFAULT__", binariesFor(platform)[0].shipsAs);
 	writeFileSync(
 		join(platformPackageDir(platform.name), "index.js"),
 		indexContent

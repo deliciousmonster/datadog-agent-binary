@@ -58,12 +58,16 @@ test("NEGATIVE: importing the module starts nothing; only handleApplication does
 				"handleApplication must start both agents, under the two names Harper locks on"
 			);
 			// The fixture writes what src/binaries.ts says the build produces, so a name this module invents
-			// for itself resolves nothing and the receiver never comes up.
-			assert.deepEqual(
-				scope.starts.map((options) => path.basename(options.command)).sort(),
-				built.map((file) => path.basename(file)).sort(),
-				"the binaries this module asks for are not the ones the build ships"
-			);
+			// for itself resolves nothing and the receiver never comes up. A subset, not an equality: the
+			// package ships more than it spawns. system-probe and security-agent are shipped so the
+			// capability is present, and neither is a supervised process -- system-probe needs container
+			// capabilities this component cannot grant itself, and nothing here runs the security agent.
+			const shipped = new Set(built.map((file) => path.basename(file)));
+			for (const started of scope.starts.map((o) => path.basename(o.command)))
+				assert.ok(
+					shipped.has(started),
+					`the module asked for ${started}, which the build does not ship`
+				);
 			// A second call joins the first rather than starting again; every worker thread makes one.
 			handleApplication(scope);
 			await DatadogStatus.get();

@@ -14,7 +14,12 @@ import { writeConfigFiles } from "../../runtime/config.js";
 import { withEnvs } from "./sandbox.js";
 
 const require = createRequire(import.meta.url);
-const { REPO_ROOT, BINARIES, currentTarget } = require("./generator.js");
+const {
+	REPO_ROOT,
+	BINARIES,
+	binariesFor,
+	currentTarget,
+} = require("./generator.js");
 
 export { REPO_ROOT };
 
@@ -120,7 +125,9 @@ export function builtBinaryPaths() {
 	const binDir = path.join(REPO_ROOT, "build", target.name, "bin");
 	return {
 		binDir,
-		files: BINARIES.map((binary) =>
+		// binariesFor, not BINARIES: system-probe is Linux-only and security-agent has no macOS build, so
+		// planting them on a Mac would stage paths no build ever writes there.
+		files: binariesFor(target).map((binary) =>
 			path.join(binDir, `${binary.shipsAs}${target.exe}`)
 		),
 	};
