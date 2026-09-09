@@ -20,6 +20,7 @@ import {
 } from "./runtime/supervisor.js";
 import {
 	currentVerdict,
+	retakeVerdict,
 	expvarUrl,
 	receiverInfoUrl,
 	verifyLaunch,
@@ -136,6 +137,9 @@ let supervisor;
 /** Where the guard's locks live, kept for the read path: the reaper's is re-read on every status. */
 let pidDir;
 
+/** Each agent's own verifier, by name, so the read path can retake a verdict a restart made stale. */
+let verifiers = new Map();
+
 /** The fields every status shape starts from, so NOT_STARTED and startAgents's own status object cannot drift apart. */
 const baseStatus = () => ({
 	receiverPort: ports.receiver,
@@ -214,6 +218,7 @@ async function startAgents(scope) {
 
 		// Reported here rather than inside a supervisor, so the two of them cannot describe the same
 		// unresolvable binary in different words.
+		verifiers = new Map(declared.map((agent) => [agent.name, agent.verify]));
 		const startable = declared.filter((agent) => agent.command);
 		const started = startable.length
 			? await supervisor.start(startable, {
@@ -288,7 +293,11 @@ export class DatadogStatus extends ResourceBase {
 			...status,
 			// Read here rather than copied at boot: a verdict the supervisor took before a restart describes
 			// a process this node no longer runs.
-			processes: status.processes.map(currentVerdict),
+			processes: await Promise.all(
+				status.processes.map((state) =>
+					retakeVerdict(state, verifiers.get(state.name))
+				)
+			),
 			// Same reason as the verdicts above: a reaper the supervisor started can be gone, and until this
 			// was read here the status reported the boot state and the dead pid with it.
 			...(status.reaper

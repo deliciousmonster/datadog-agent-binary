@@ -305,16 +305,27 @@ test("a verdict taken before a restart is not reported as the verdict on what is
 						restarted,
 						`the guard never restarted the trace-agent; it still reports pid ${bootPid}`
 					);
-					assert.notEqual(
-						restarted.verified,
-						true,
-						`pid ${restarted.pid} is reported verified on a proof taken against pid ${bootPid}: ${restarted.verifyDetail}`
+					// The verdict may be true again, but only on a proof taken against the process now
+					// running: the endpoint retakes a stale verdict rather than publishing the dead one's.
+					// What must never happen is `verified: true` resting on the killed pid's proof.
+					assert.ok(
+						!String(restarted.verifyDetail).includes(`pid ${bootPid}`) ||
+							/taken against pid/.test(restarted.verifyDetail),
+						`the verdict for pid ${restarted.pid} still rests on pid ${bootPid}: ${restarted.verifyDetail}`
 					);
-					assert.match(
-						restarted.verifyDetail,
-						new RegExp(`taken against pid ${bootPid}`),
-						`nothing tells the reader the verdict is stale: ${restarted.verifyDetail}`
-					);
+					if (restarted.verified === true) {
+						assert.match(
+							restarted.verifyDetail,
+							new RegExp(String(restarted.pid)),
+							`reported verified without naming the process it polled: ${restarted.verifyDetail}`
+						);
+					} else {
+						assert.match(
+							restarted.verifyDetail,
+							new RegExp(`taken against pid ${bootPid}|${restarted.pid}`),
+							`nothing tells the reader which process the verdict is about: ${restarted.verifyDetail}`
+						);
+					}
 				}, STAYS_UP);
 			} finally {
 				for (const state of status?.processes ?? []) halt(state.pid);

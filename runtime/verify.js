@@ -176,6 +176,32 @@ export const verifyLaunch = (agent, state, context) => {
 const stale = (state) =>
 	typeof state?.verifiedPid === "number" && state.verifiedPid !== state.pid;
 
+/**
+ * Retake a stale verdict instead of reporting none. currentVerdict alone answers `verified: null` for the
+ * life of the node once a process has been replaced, so a single chaos restart left the status saying
+ * nothing had verified the running agent thirty minutes later, which is worse than the truth: this thread
+ * can still poll the process it now supervises. The verdict stays per-thread, as the endpoint's contract
+ * says; only its staleness is repaired. A verdict already taken against the running pid is returned
+ * untouched, so a healthy read costs nothing.
+ *
+ * @param {Record<string, any>} state @param {(state: any) => Promise<{ok: boolean, detail: string}>} [verify]
+ */
+export async function retakeVerdict(state, verify) {
+	if (!verify || !stale(state) || state?.started === false)
+		return currentVerdict(state);
+	try {
+		const { ok, detail } = await verify(state);
+		// verifyLaunch stamps verifiedPid from state.pid, so the retaken verdict names the live process.
+		return { ...state, verified: ok, verifyDetail: detail };
+	} catch (error) {
+		return {
+			...state,
+			verified: false,
+			verifyDetail: `retaking the verdict against pid ${state.pid} threw: ${error instanceof Error ? error.message : String(error)}`,
+		};
+	}
+}
+
 /** The verdict as it stands now. Read at the endpoint rather than stamped at boot, because the supervisor keeps writing pid and restarts to the same object for the life of the node. */
 export const currentVerdict = (state) =>
 	stale(state)
