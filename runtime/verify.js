@@ -187,7 +187,10 @@ const stale = (state) =>
  * @param {Record<string, any>} state @param {(state: any) => Promise<{ok: boolean, detail: string}>} [verify]
  */
 export async function retakeVerdict(state, verify) {
-	if (!verify || !stale(state) || state?.started === false)
+	// Stale, or never taken at all: a thread whose own spawn was refused carries the node's process and no
+	// verdict of its own, and publishing "unverified" for that is the refusal masquerading as health.
+	const untaken = state?.started === true && state?.verified === undefined;
+	if (!verify || state?.started === false || (!stale(state) && !untaken))
 		return currentVerdict(state);
 	// Written back onto the supervisor's own object, the way the guard writes the first verdict. A copy
 	// looked right and was not: verifyLaunch stamps verifiedPid on the shared state before it polls, so

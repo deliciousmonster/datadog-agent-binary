@@ -209,6 +209,37 @@ export function clearStaleHarperPidFiles(root, named, log) {
 }
 
 /** The bundled guard, one call for both agents. `spawn` is the entry module's own, which is the one Harper constrains. */
+/**
+ * What the node has, for a thread that has nothing. Harper's constrained spawn hands back a pid it never
+ * identified, and the guard refuses one running something else, so a thread can end with `started: false`
+ * while the node's agent is up and healthy under another thread. Observed three times on 2026-09-08 and
+ * 09: the core agent's spawn was handed the trace-agent's pid. The refusal is a diagnostic, not the
+ * node's health, and the endpoint answers "is this agent running" for the node.
+ *
+ * The lock is the node's own record, so an agent is reported only when a live process still identifies
+ * against the argv the lock names. `refused` keeps the thread's own story rather than losing it.
+ *
+ * @param {Record<string, any>} state @param {string | undefined} pidDir
+ */
+export function nodeProcess(state, pidDir) {
+	if (!state || state.started !== false || !pidDir || !state.name) return state;
+	const held = readGuardLock(join(pidDir, `${state.name}.pid`));
+	if (!held || identifyPid(held.pid, held.argv) !== "match") return state;
+	return {
+		...state,
+		started: true,
+		adopted: true,
+		pid: held.pid,
+		// No verdict has been taken against this pid by this thread, which is what makes the reader retake
+		// one rather than publish the refusal as a health state.
+		verified: undefined,
+		verifyDetail: undefined,
+		verifiedPid: null,
+		error: undefined,
+		refused: state.error,
+	};
+}
+
 /** How often a thread checks the reaper is still there, and the longest it waits after a failed relaunch. */
 export const REAPER_WATCH_MS = 60_000;
 const REAPER_BACKOFF_MAX_MS = 15 * 60_000;

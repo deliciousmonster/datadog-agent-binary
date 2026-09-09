@@ -15,6 +15,7 @@ import {
 import { untraceAgentProbes } from "./runtime/probe.js";
 import {
 	currentReaper,
+	nodeProcess,
 	supervisorFor,
 	unstarted,
 } from "./runtime/supervisor.js";
@@ -300,7 +301,9 @@ export class DatadogStatus extends ResourceBase {
 			// a process this node no longer runs.
 			processes: await Promise.all(
 				status.processes.map((state) =>
-					retakeVerdict(state, verifiers.get(state.name))
+					// nodeProcess first: a thread that refused a handed-back pid has no process of its own,
+					// and the verdict has to be retaken against the one the node actually runs.
+					retakeVerdict(nodeProcess(state, pidDir), verifiers.get(state.name))
 				)
 			),
 			// Same reason as the verdicts above: a reaper the supervisor started can be gone, and until this
