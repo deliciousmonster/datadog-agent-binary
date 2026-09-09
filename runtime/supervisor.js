@@ -258,6 +258,29 @@ const REAPER_BACKOFF_MAX_MS = 15 * 60_000;
  * @param {number} [options.everyMs] @param {(fn: () => void, ms: number) => any} [options.setTimer]
  * @returns {{ stop: () => void, tick: () => Promise<'present'|'relaunched'|'failed'|'backoff'> }}
  */
+/**
+ * The guard's process descriptors for this node's agents.
+ *
+ * An agent that declares `env` gets it spread over this process's own, because naming `env` at all replaces
+ * the whole environment rather than adding to it, and DD_API_KEY and DD_SITE reach the agents no other way.
+ * An agent that declares none is left without `spawnOptions`, so it inherits exactly as it did before.
+ *
+ * @param {readonly Record<string, any>[]} agents @param {NodeJS.ProcessEnv} [inherited]
+ */
+export function guardDescriptors(agents, inherited = process.env) {
+	return agents.map((agent) => ({
+		name: agent.name,
+		title: agent.title,
+		binaryPath: agent.command,
+		args: agent.args,
+		exitHint: agent.exitHint,
+		verify: agent.verify,
+		...(agent.env
+			? { spawnOptions: { env: { ...inherited, ...agent.env } } }
+			: {}),
+	}));
+}
+
 export function keepReaperAlive({
 	pidDir,
 	reaper,
@@ -353,14 +376,7 @@ const guardSupervisor = (log, spawn) => ({
 				// What makes the fingerprint a replacement rather than a second lock holder: without it a rotated
 				// key leaves the old agent running under no lock, so not even the reaper below can stop it again.
 				stopOrphans: true,
-				processes: agents.map((agent) => ({
-					name: agent.name,
-					title: agent.title,
-					binaryPath: agent.command,
-					args: agent.args,
-					exitHint: agent.exitHint,
-					verify: agent.verify,
-				})),
+				processes: guardDescriptors(agents),
 				reaper: reaperConfig,
 			});
 		} catch (error) {

@@ -99,7 +99,7 @@ if (tracer) {
 
 // `name` is Harper's spawn name and the PID-lock filename, stated once: a second spelling is a second lock
 // and a second agent per node. The trace-agent comes first because it owns the socket dd-trace is dialing.
-const AGENTS = [
+export const AGENTS = [
 	{
 		kind: "trace",
 		name: "datadog-trace-agent",
