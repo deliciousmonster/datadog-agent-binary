@@ -11,7 +11,18 @@ export const debugVarsUrl = (port) => `https://127.0.0.1:${port}/debug/vars`;
 
 // Carried in the payload and bumped when the shape or the verdict set changes, so a consumer written against
 // an older one can tell rather than guess.
-const DELIVERY_SIGNAL_VERSION = 2;
+const DELIVERY_SIGNAL_VERSION = 3;
+
+/**
+ * How long an accepted stats payload keeps vouching for the hop after its window has reset.
+ *
+ * Measured against 7.82.1 on 2026-09-09: `stats_writer` resets every 60 seconds and the writer flushes one
+ * payload per 10, so `Payloads` reads zero for the first ten seconds of every window. A caller polling on a
+ * 60-second period phase-locks into that band and reads zero minute after minute until its clock drifts out,
+ * which is how a node with 2,483 spans arriving published `not-delivering`. Three windows is wide enough that
+ * only a hop that has genuinely stopped falls out of it.
+ */
+export const STATS_RECALL_MS = 180_000;
 
 const unavailable = (source, detail) => ({
 	source,
@@ -24,7 +35,7 @@ const unavailable = (source, detail) => ({
  * Three hops read apart, because proving one proves nothing about the next: spans into the local receiver,
  * APM stats into Datadog, trace payloads into Datadog.
  */
-export function deliveryVerdict(vars, source, traceHop = null) {
+export function deliveryVerdict(vars, source, traceHop = null, history = null) {
 	const clients = Array.isArray(vars?.receiver) ? vars.receiver : [];
 	const sum = (field) =>
 		clients.reduce((total, entry) => total + (Number(entry?.[field]) || 0), 0);
@@ -52,6 +63,18 @@ export function deliveryVerdict(vars, source, traceHop = null) {
 	};
 
 	const arriving = receiver.tracesReceived > 0 || receiver.spansReceived > 0;
+	// An empty stats window is not a failed hop. The counter resets on the minute and the read can land in the
+	// ten seconds before the first flush, so what separates a stopped hop from that phase is how long it has
+	// been since a window did accept something, which only a caller that remembers its last read can say.
+	// A number and nothing else: `Number(null)` is zero, which would let a caller with no memory at all vouch
+	// for every window it reads.
+	const recalled = history?.statsAcceptedMsAgo;
+	const acceptedMsAgo =
+		typeof recalled === "number" && Number.isFinite(recalled) && recalled >= 0
+			? recalled
+			: undefined;
+	const vouched =
+		acceptedMsAgo !== undefined && acceptedMsAgo <= STATS_RECALL_MS;
 	// The receiver snapshot is refreshed only when a payload arrives, so on a quiet node it is the last busy
 	// minute. The concentrator builds buckets from received spans before anything is sent, so these date it.
 	const thisMinute = statsWriter.buckets > 0 || statsWriter.clientPayloads > 0;
@@ -80,6 +103,7 @@ export function deliveryVerdict(vars, source, traceHop = null) {
 	// The trace hop, read from the writer's own failure lines when a log was given. Positive proof is not
 	// available on this agent build; absence of a refusal inside the window is, and it is worth more than
 	// the nothing this reported before.
+	if (acceptedMsAgo !== undefined) signal.statsAcceptedMsAgo = acceptedMsAgo;
 	if (traceHop)
 		signal.traceHop = { refused: traceHop.refused, lines: traceHop.lines };
 	if (traceHop?.refused) signal.proven.tracesAtDatadog = false;
@@ -115,9 +139,30 @@ export function deliveryVerdict(vars, source, traceHop = null) {
 	} else if (statsRefused) {
 		signal.verdict = "rejected";
 		signal.detail = `the intake refused every APM stats payload in the last minute (${statsWriter.retries} retries, ${statsWriter.errors} errors) and accepted none. Check DD_API_KEY and DD_SITE.`;
+	} else if (arriving && vouched && traceHop && !traceHop.refused) {
+		signal.verdict = "traces-unrefuted";
+		signal.detail =
+			`${receiver.spansReceived} spans reached the receiver and the intake accepted an APM stats payload ` +
+			`${Math.round(acceptedMsAgo / 1000)}s ago, so the key, the site and the route out are good. This ` +
+			`read landed in an empty stats window, which is the ten seconds before the writer's next flush and ` +
+			`not a hop that stopped. The trace-agent logged no refusal of a trace payload inside the window, ` +
+			`and trace_writer is not evidence either way: it publishes zeros on this agent build even while the ` +
+			`writer delivers. The trace explorer is where a payload is seen to land.`;
+	} else if (arriving && vouched) {
+		signal.verdict = "traces-unconfirmed";
+		signal.detail =
+			`the intake accepted an APM stats payload ${Math.round(acceptedMsAgo / 1000)}s ago, so the key, the ` +
+			`site and the route out are good. This read landed in an empty stats window rather than finding a ` +
+			`hop that stopped. Nothing here proves a trace payload landed: trace_writer is zero, and on this ` +
+			`agent build a zero is not a measurement. Confirm in the Datadog trace explorer.`;
 	} else if (arriving && thisMinute) {
 		signal.verdict = "not-delivering";
-		signal.detail = `${receiver.spansReceived} spans reached the receiver this minute and neither the stats hop nor the traces hop has had anything accepted. Both windows reset every minute; read this again before believing it.`;
+		signal.detail =
+			`${receiver.spansReceived} spans reached the receiver this minute and neither the stats hop nor the ` +
+			`traces hop has had anything accepted` +
+			(acceptedMsAgo !== undefined
+				? `, the last one ${Math.round(acceptedMsAgo / 1000)}s ago, longer than the ${STATS_RECALL_MS / 1000}s an empty window is allowed to be phase.`
+				: `. Both windows reset every minute; read this again before believing it.`);
 	} else if (arriving) {
 		signal.verdict = "idle";
 		signal.detail = `the receiver still reports ${receiver.spansReceived} spans while the stats writer saw no work at all, so that snapshot is left over from an earlier minute and nothing arrived in this one.`;
@@ -184,8 +229,35 @@ export function readTraceHop(
 const REFUSAL =
 	/Trace Payload dropped|Dropping Payload after|Retried payload|Received unexpected status code/;
 
+/**
+ * When the intake was last seen to accept an APM stats payload, per source.
+ *
+ * The verdict is a pure read of one window, and one window cannot tell a stopped hop from a read that landed
+ * before the flush. Keeping the last acceptance here is the whole of the state this module holds, and it is
+ * keyed by source so two ports on one node do not vouch for each other.
+ */
+const statsAccepted = new Map();
+
+/**
+ * How long ago this source last accepted a stats payload, recording this read as it answers.
+ *
+ * Read and write are one call because the order is the whole correctness of it: answer from what the previous
+ * read left, then record, so a window that accepts is never its own corroboration.
+ */
+export function recallStatsWindow(source, payloads, at = Date.now()) {
+	const seen = statsAccepted.get(source);
+	if (payloads > 0) statsAccepted.set(source, at);
+	return seen === undefined ? undefined : at - seen;
+}
+
+/** Forget what was seen, for a test that needs a cold module. */
+export const forgetStatsHistory = () => statsAccepted.clear();
+
 /** The trace-agent's own delivery counters. Never rejects: an endpoint that does not answer is itself a verdict. */
-export async function readDeliverySignal(port, { traceLog } = {}) {
+export async function readDeliverySignal(
+	port,
+	{ traceLog, now = Date.now } = {}
+) {
 	const source = debugVarsUrl(port);
 	if (port === 0) {
 		return unavailable(
@@ -207,10 +279,17 @@ export async function readDeliverySignal(port, { traceLog } = {}) {
 		);
 	}
 	const vars = parseJson(body);
-	return vars === null
-		? unavailable(
-				source,
-				`${source} answered with something that is not expvar JSON.`
-			)
-		: deliveryVerdict(vars, source, readTraceHop(traceLog));
+	if (vars === null)
+		return unavailable(
+			source,
+			`${source} answered with something that is not expvar JSON.`
+		);
+	const statsAcceptedMsAgo = recallStatsWindow(
+		source,
+		Number(vars?.stats_writer?.Payloads) || 0,
+		now()
+	);
+	return deliveryVerdict(vars, source, readTraceHop(traceLog), {
+		statsAcceptedMsAgo,
+	});
 }
