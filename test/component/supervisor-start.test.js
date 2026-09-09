@@ -126,6 +126,23 @@ test("the rendered datadog.yaml keeps the credentials off disk and pins what the
 				/^dogstatsd_socket: ""$/m,
 				"the dogstatsd Unix socket is not disabled, so every agent start logs a failed bind"
 			);
+			// Same bind, the trace-agent's own: 57 `Could not start UDS listener` at ERROR over a day of
+			// restarts on the 2026-09-09 run, because /var/run/datadog/ is the stock install's path.
+			assert.match(
+				rendered,
+				/^\s+receiver_socket: ""$/m,
+				"the APM Unix socket is not disabled, so every trace-agent start logs a failed bind"
+			);
+			// Unset, the logs agent tries `mkdir /opt/datadog-agent` and fails at ERROR on every start, and
+			// its tail-offset registry has nowhere to live, so a restarted node re-tails every log from the top.
+			assert.match(
+				rendered,
+				new RegExp(
+					`^logs_config:\\n\\s+run_path: "${path.join(root, "datadog", APP_NAME, "run").replace(/[\\]/g, "\\\\\\\\")}"$`,
+					"m"
+				),
+				"the logs agent must keep its registry under the runtime tree, not the stock install path"
+			);
 			// Live Processes is what reports Harper's and the agents' own CPU and memory; the Python process
 			// check cannot run in this build, so this is the one way a node's processes reach Datadog.
 			assert.match(
