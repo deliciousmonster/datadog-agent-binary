@@ -21,10 +21,39 @@ export const BINARIES: readonly AgentBinary[] = [
 		shipsAs: "datadog-agent",
 		task: "agent.build",
 		builtAt: "bin/agent/agent",
-		// A relocatable npm artifact and Python integrations are mutually exclusive. The python tag
-		// links an embedded CPython and rpaths librtloader into the build tree, and --exclude-rtloader
-		// keeps get_build_flags from baking that RPATH in; --no-enable-bazel stops the rtloader
-		// install's bazel default extracting an LLVM toolchain that fills a 14 GB runner.
+		// These three cost every Python integration and the `system.processes.*` family, and only the last
+		// of them rests on a measurement.
+		//
+		// --no-enable-bazel is the measured one: the rtloader install's bazel default extracts an LLVM
+		// toolchain that filled a 14 GB runner.
+		//
+		// The other two came from upstream `@harperfast/datadog-agent-binary`, `src/builders/base.ts`: "by
+		// default the agent is built with the embedded Python runtime, which makes the binary dynamically
+		// link `libdatadog-agent-rtloader` (and an embedded interpreter) by an rpath pointing into the build
+		// tree. That binary does NOT run on any machine other than the build server - it can't find those
+		// libraries." The diagnosis is right and the conclusion does not follow: it cannot find them because
+		// they were not shipped with it.
+		//
+		// Read at 7.82.1: `pkg/collector/python/init.go`'s resolvePythonHome() computes
+		// the Python home relative to the binary's own location (`../embedded3`, or `../../embedded`) and
+		// uses it whenever that directory exists, falling back to the ldflags value only when it does not.
+		// The agent is written to be moved, and Datadog's own .deb/.rpm/.dmg ship exactly that way: the
+		// binary with an `embedded/` directory beside it. A platform package carrying `bin/` plus
+		// `embedded/` is the same shape, and npm's os/cpu matching already delivers it.
+		//
+		// What is real is the RPATH: `tasks/libs/common/utils.py:349` bakes -Wl,-rpath,<builder path> for
+		// librtloader. That is what $ORIGIN and @loader_path exist for, and get_build_flags takes an
+		// explicit python_home_3 so the link-time default need not be inferred from the build tree either.
+		// The cost of undoing this is size, roughly another 100 MB per platform package, not portability.
+		//
+		// Upstream scoped it honestly, "sufficient for the log/metric forwarding use case", and left an
+		// escape hatch: its getAgentBuildArgs() returns DD_AGENT_BUILD_ARGS wholesale, with a note that the
+		// right flag "varies by dda/invoke version". This package ships APM too, and it removed the hatch:
+		// buildArgs() appends the override to these rather than replacing them, and verify-package.js
+		// refuses to publish a binary carrying the python tag. A scoped workaround became enforced policy.
+		//
+		// Independent of all of it: system-probe needs neither. tasks/system_probe.py builds it static Go
+		// with eBPF and no rtloader, so shipping it does not wait on this question.
 		mandatoryArgs: [
 			"--build-exclude=systemd,python",
 			"--exclude-rtloader",

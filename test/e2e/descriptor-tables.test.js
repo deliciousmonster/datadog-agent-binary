@@ -69,8 +69,9 @@ test("an unknown binary name throws rather than returning a path that does not e
 	assert.throws(() => pkg.getBinaryPath("datadog-nonesuch"), /Unknown binary/);
 });
 
-// A relocatable npm artifact and Python integrations are mutually exclusive: the python tag links
-// an embedded CPython and rpaths librtloader into the build tree. The flag is policy, not tuning.
+// The flag is policy, and the policy is currently wrong: `src/binaries.ts` records why. The agent resolves
+// its Python home relative to its own binary, so an embedded CPython shipped beside it in the platform
+// package relocates. This test asserts the flag set that ships today, not that the set is right.
 test("the override adds flags and cannot drop the python exclusion", () => {
 	const { buildArgs } = require(
 		path.join(REPO_ROOT, "dist", "src", "build.js")
