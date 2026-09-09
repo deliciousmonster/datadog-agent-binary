@@ -172,10 +172,12 @@ test("the sampler keeps more traces a second than the default, which was discard
 	await withTempDir("dd-tps-", async (root) => {
 		const runtime = await withEnvs({ ROOTPATH: root }, () => prepareRuntime());
 		const rendered = runtime.configFiles[runtime.paths.configFile];
-		const tps = Number(/^ {2}target_tps: (\d+)$/m.exec(rendered)?.[1]);
+		const tps = Number(
+			/^ {2}target_traces_per_second: (\d+)$/m.exec(rendered)?.[1]
+		);
 		assert.ok(
 			Number.isInteger(tps),
-			`the rendered datadog.yaml sets no apm_config.target_tps, so the agent keeps its default of 10:\n${rendered}`
+			`the rendered datadog.yaml sets no apm_config.target_traces_per_second, so the agent keeps its default of 10:\n${rendered}`
 		);
 		assert.ok(
 			tps > 10,
