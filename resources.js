@@ -12,6 +12,7 @@ import {
 	debugVarsUrl,
 	readDeliverySignal as readSignal,
 } from "./runtime/delivery.js";
+import { settings as processMetricSettings } from "./runtime/process-metrics.js";
 import { untraceAgentProbes } from "./runtime/probe.js";
 import {
 	currentReaper,
@@ -149,6 +150,12 @@ let verifiers = new Map();
 const baseStatus = () => ({
 	receiverPort: ports.receiver,
 	apiKey: apiKeyStatus(),
+	// Settings this component resolved for itself, reported here rather than rendered into datadog.yaml.
+	// That file's header says it is the agent's generated config, and the agent has no idea these keys
+	// exist; writing them there would look like an agent setting that silently does nothing. The ports
+	// above are in both because the agent genuinely reads those. This is the plugin's own surface, so
+	// this is where the plugin says what it resolved.
+	processMetrics: processMetricSettings(),
 	processes: [],
 });
 

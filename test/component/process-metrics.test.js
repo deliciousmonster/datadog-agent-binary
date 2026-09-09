@@ -15,6 +15,7 @@ import {
 	selfProcess,
 	settings,
 } from "../../runtime/process-metrics.js";
+import { loadComponent } from "../support/component.js";
 
 const status = (rssKb, threads) =>
 	`Name:\tnode\nState:\tS (sleeping)\nThreads:\t${threads}\nVmRSS:\t${rssKb} kB\nVmSize:\t9999 kB\n`;
@@ -245,5 +246,35 @@ describe("metric_patterns, with Datadog's semantics", () => {
 			exclude: ["\\.(avg|max|min)$", "^threads$"],
 		});
 		assert.deepEqual(Object.keys(got.metrics).sort(), ["mem.rss", "number"]);
+	});
+});
+
+describe("where the settings are visible", () => {
+	// Four patterns exist in this package: env rendered into datadog.yaml (the ports), env deliberately not
+	// rendered (DD_API_KEY, DD_SITE), yaml-only values the plugin decides (target_traces_per_second), and
+	// these, which only the plugin reads. The agent never sees them, so datadog.yaml would be the wrong
+	// place: its header says it is the agent's generated config, and a key the agent ignores reads as a
+	// setting that silently does nothing. The plugin's own endpoint is where the plugin reports itself.
+	it("the status endpoint carries what this component resolved", async () => {
+		const { DatadogStatus } = await loadComponent();
+		const status = await DatadogStatus.get();
+		assert.equal(typeof status.processMetrics, "object");
+		assert.equal(status.processMetrics.enabled, true);
+		assert.equal(status.processMetrics.intervalSeconds, 15);
+		assert.deepEqual(status.processMetrics.exclude, []);
+	});
+
+	it("NEGATIVE: datadog.yaml carries none of these keys, because the agent would ignore them", async () => {
+		const { prepareRuntime } = await loadComponent();
+		const rendered = Object.values(prepareRuntime().configFiles).join("\n");
+		for (const key of [
+			"DD_HARPER_PROCESS_METRICS_ENABLED",
+			"processMetrics",
+			"harper_process_metrics",
+		])
+			assert.ok(
+				!new RegExp(`^\\s*${key}\\s*:`, "m").test(rendered),
+				`${key} must not be rendered as an agent setting`
+			);
 	});
 });
