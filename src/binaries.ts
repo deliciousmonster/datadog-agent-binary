@@ -52,11 +52,18 @@ export const BINARIES: readonly AgentBinary[] = [
 		// `Agent 7.82.1`, logs `Using '/app/node_modules/@x/dd/embedded' as Python home`, and the Python
 		// `process` check emits `system.processes.mem.rss`, `.number`, `.open_file_descriptors` and the rest.
 		//
-		// So the fix is one variable at spawn, which guardDescriptors can now carry, plus the `embedded/`
-		// tree in the platform package. The cost is size and it is larger than a guess would suggest: today
-		// this package ships 173 MB per platform (142 core, 31 trace); `embedded/` is 634 MB more, most of it
-		// 325 MB of `embedded/bin` and 247 MB of `embedded/lib`. Trimming is a separate question from whether
-		// it can be done.
+		// So the exclusion cannot be justified by portability. It is justified by not needing it. The one
+		// thing Python bought that a Harper node wants is the `system.processes.*` family, and
+		// `runtime/process-metrics.js` produces the same named, aggregated, alertable series from `/proc` and
+		// `process.memoryUsage()` in the runtime Harper already ships. What is left behind is the
+		// integrations-core long tail -- Postgres, Redis, nginx -- which a node running Harper does not run,
+		// and OpenMetrics scraping, which nothing here asks for. Paying 634 MB per platform for that would be
+		// buying the ecosystem to get one metric family we already have.
+		//
+		// This is settled, and the reason is worth keeping straight: the premise was wrong, and the decision
+		// is right anyway. If the integrations ecosystem is ever actually wanted, the mechanics are proven
+		// and the cost is 634 MB per platform, most of it 325 MB of `embedded/bin` and 247 MB of
+		// `embedded/lib`, on top of the 173 MB this ships today.
 		//
 		// Upstream scoped it honestly, "sufficient for the log/metric forwarding use case", and left an
 		// escape hatch: its getAgentBuildArgs() returns DD_AGENT_BUILD_ARGS wholesale, with a note that the
