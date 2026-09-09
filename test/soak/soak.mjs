@@ -415,7 +415,7 @@ const nextGap = () => (GAP_MIN + Math.random() * (GAP_MAX - GAP_MIN)) * 60_000;
 const COLUMNS = [
 	["time", 19],
 	["up", 7],
-	["cpu%", 6],
+	["cpu%", 8],
 	["mem", 9],
 	["harperMB", 8],
 	["traceMB", 7],
@@ -436,7 +436,7 @@ const COLUMNS = [
 	["fwdOK", 6],
 	["logsSent", 8],
 	["logsErr", 7],
-	["chaos", 24],
+	["chaos", 32],
 ];
 /** What a writer reports turned away, as errors/retries: a zero in either alone hides a wrong key. */
 const refusals = (writer) =>
@@ -444,12 +444,23 @@ const refusals = (writer) =>
 
 const header = () =>
 	COLUMNS.map(([name, width]) => name.padEnd(width)).join(" ");
+/** Columns already reported as too narrow, so one rotted width is one line and not one per minute. */
+const truncated = new Set();
+
 const row = (values) =>
-	COLUMNS.map(([name, width]) =>
-		String(values[name] ?? "-")
-			.slice(0, width)
-			.padEnd(width)
-	).join(" ");
+	COLUMNS.map(([name, width]) => {
+		const value = String(values[name] ?? "-");
+		// Silent truncation is how 33 rows of this run lost the `%` off a CPU reading over 100, which reads as
+		// a plain number. The TSV carries the value whole, so the fix is to say the width rotted, once.
+		if (value.length > width && !truncated.has(name)) {
+			truncated.add(name);
+			console.log(
+				`soak: the ${name} column is ${width} wide and ${JSON.stringify(value)} needs ${value.length}. ` +
+					`status.tsv has it whole; widen COLUMNS.`
+			);
+		}
+		return value.slice(0, width).padEnd(width);
+	}).join(" ");
 let rows = 0;
 const startedAt = Date.now();
 let lastLoad = { sent: 0, ok: 0, failed: 0 };
