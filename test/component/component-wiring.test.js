@@ -164,6 +164,26 @@ test("NEGATIVE: the package version's core is the pinned Datadog version", () =>
 	);
 });
 
+test("the sampler keeps more traces a second than the default, which was discarding most of a demo", async () => {
+	// apm_config.target_tps defaults to 10 in the agent. Measured on the 2026-09-08 soak: 24 traces a
+	// second against that default put ratebyservice at 0.4167, so 58% of the spans a demo exists to show
+	// never left the node, and nothing in the status said so.
+	const { prepareRuntime } = await loadComponent();
+	await withTempDir("dd-tps-", async (root) => {
+		const runtime = await withEnvs({ ROOTPATH: root }, () => prepareRuntime());
+		const rendered = runtime.configFiles[runtime.paths.configFile];
+		const tps = Number(/^ {2}target_tps: (\d+)$/m.exec(rendered)?.[1]);
+		assert.ok(
+			Number.isInteger(tps),
+			`the rendered datadog.yaml sets no apm_config.target_tps, so the agent keeps its default of 10:\n${rendered}`
+		);
+		assert.ok(
+			tps > 10,
+			`target_tps is ${tps}, which is the agent default or below it and drops traces on any busy node`
+		);
+	});
+});
+
 test("the runtime tree comes from Harper, not from a variable this package invents", async () => {
 	const { prepareRuntime } = await loadComponent();
 	// Named by the component's own directory, so two installs of this plugin under different

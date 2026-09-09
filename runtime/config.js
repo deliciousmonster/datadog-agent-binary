@@ -95,6 +95,11 @@ function renderDatadogYaml(paths, ports) {
 		"  # On, this binds 0.0.0.0 and accepts spans from anything that reaches the container.",
 		"  apm_non_local_traffic: false",
 		`  log_file: ${yamlString(paths.traceLog)}`,
+		"  # The sampler keeps this many traces a second per service and drops the rest. The default of 10",
+		"  # was discarding 58% of a 24-trace-per-second demo whose whole purpose is showing traces, so a",
+		"  # node that wants every span sets it above its own rate rather than discovering the loss in a",
+		"  # sample-rate column. Raise DD_APM_TARGET_TPS to override; the environment outranks this file.",
+		`  target_tps: ${TARGET_TPS}`,
 		"  # The trace-agent's own expvar, separate from the core agent's. Without it nothing on this node",
 		"  # can say whether a span that reached the receiver ever left for Datadog.",
 		"  debug:",
@@ -102,6 +107,9 @@ function renderDatadogYaml(paths, ports) {
 		"",
 	].join("\n");
 }
+
+/** Traces a second the sampler keeps per service. 10 is the agent's default and is below a busy demo. */
+const TARGET_TPS = 200;
 
 const HARPER_LOG_CHECK = "harper.d";
 
