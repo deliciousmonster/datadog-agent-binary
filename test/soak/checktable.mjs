@@ -83,9 +83,14 @@ function readTsv(path) {
 		.split("\n")
 		.filter((l) => l.trim());
 	const head = lines.shift().split("\t");
-	return lines.map((line) =>
-		Object.fromEntries(line.split("\t").map((cell, i) => [head[i], cell]))
-	);
+	// A run restarted into the same directory appends its own header. Read as data it becomes a row whose
+	// every field is a column name, and the parse of "p95ms" put a 95,000,000 ms high in the table on
+	// 2026-09-09. A row that repeats the first column's name is a header, not a sample.
+	return lines
+		.filter((line) => !line.startsWith(`${head[0]}\t`))
+		.map((line) =>
+			Object.fromEntries(line.split("\t").map((cell, i) => [head[i], cell]))
+		);
 }
 const checks = readTsv(CHECKS);
 const status = readTsv(join(DIR, "status.tsv"));
