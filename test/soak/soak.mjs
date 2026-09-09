@@ -185,9 +185,31 @@ const chaos = {
 };
 const pidOf = (s, kind) => s?.processes?.find((p) => p.kind === kind)?.pid;
 
+/**
+ * The pid of a running agent, waited for rather than read once. A status read that lands while the node is
+ * restarting answers null, and `kill -9 undefined` is what that used to become: chaos #37 on 2026-09-09 was
+ * recorded as "could not be applied" and that round killed nothing. Undefined here means the agent is not
+ * running to be killed, which is a skip rather than a failure.
+ *
+ * @param {"trace"|"core"} kind
+ * @returns {Promise<number|undefined>}
+ */
+async function livePid(kind, attempts = 6) {
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		const pid = pidOf(await status(), kind);
+		if (Number.isInteger(pid) && pid > 0) return pid;
+		await new Promise((resolve) => setTimeout(resolve, 5_000));
+	}
+	return undefined;
+}
+
+/** What an action returns when the thing it perturbs is not there to perturb. */
+const notApplicable = (why) => ({ skip: why });
+
 const ACTIONS = {
 	async "kill-trace-agent"() {
-		const pid = pidOf(await status(), "trace");
+		const pid = await livePid("trace");
+		if (!pid) return notApplicable("no trace-agent pid in the status to kill");
 		await sh(`kill -9 ${pid}`);
 		return {
 			expect: "the guard restarts it under a new pid and it verifies",
@@ -197,7 +219,8 @@ const ACTIONS = {
 		};
 	},
 	async "kill-core-agent"() {
-		const pid = pidOf(await status(), "core");
+		const pid = await livePid("core");
+		if (!pid) return notApplicable("no core agent pid in the status to kill");
 		await sh(`kill -9 ${pid}`);
 		return {
 			expect: "the guard restarts it under a new pid and it verifies",
@@ -235,7 +258,8 @@ const ACTIONS = {
 		};
 	},
 	async "stop-trace-agent-60s"() {
-		const pid = pidOf(await status(), "trace");
+		const pid = await livePid("trace");
+		if (!pid) return notApplicable("no trace-agent pid in the status to stop");
 		await sh(`kill -STOP ${pid}`);
 		chaos.busyUntil = Date.now() + 90_000;
 		chaos.pending.push(() => sh(`kill -CONT ${pid}`).catch(() => {}));
@@ -342,7 +366,14 @@ async function fireChaos() {
 	chaos.last = name;
 	chaos.at = Date.now();
 	try {
-		const { expect, check, before } = await ACTIONS[name]();
+		const { expect, check, before, skip } = await ACTIONS[name]();
+		// Nothing was perturbed, so there is nothing to read back in two minutes. Counted and logged rather
+		// than silent: a run whose chaos keeps skipping is a run that is not testing what it claims to.
+		if (skip) {
+			chaos.results.push({ name, summary: `skipped: ${skip}` });
+			chaosLog(`#${chaos.count} ${name} skipped: ${skip}`);
+			return;
+		}
 		chaosLog(
 			`#${chaos.count} ${name}${before ? ` (pid ${before})` : ""}: ${expect}`
 		);
