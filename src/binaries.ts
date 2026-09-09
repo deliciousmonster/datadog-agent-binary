@@ -44,7 +44,19 @@ export const BINARIES: readonly AgentBinary[] = [
 		// What is real is the RPATH: `tasks/libs/common/utils.py:349` bakes -Wl,-rpath,<builder path> for
 		// librtloader. That is what $ORIGIN and @loader_path exist for, and get_build_flags takes an
 		// explicit python_home_3 so the link-time default need not be inferred from the build tree either.
-		// The cost of undoing this is size, roughly another 100 MB per platform package, not portability.
+		// Tested 2026-09-09 against Datadog's own `datadog-agent_7.82.1-1_arm64.deb`, which ships this exact
+		// shape. Its RPATH is `/opt/datadog-agent/embedded/lib`, an absolute install path rather than a build
+		// tree. Copied to `/app/node_modules/@x/dd` in a container that never built it: bare, it fails with
+		// `libdatadog-agent-rtloader.so: cannot open shared object file`, which is the symptom upstream
+		// described. With `LD_LIBRARY_PATH` pointed at the shipped `embedded/lib`, the same binary reports
+		// `Agent 7.82.1`, logs `Using '/app/node_modules/@x/dd/embedded' as Python home`, and the Python
+		// `process` check emits `system.processes.mem.rss`, `.number`, `.open_file_descriptors` and the rest.
+		//
+		// So the fix is one variable at spawn, which guardDescriptors can now carry, plus the `embedded/`
+		// tree in the platform package. The cost is size and it is larger than a guess would suggest: today
+		// this package ships 173 MB per platform (142 core, 31 trace); `embedded/` is 634 MB more, most of it
+		// 325 MB of `embedded/bin` and 247 MB of `embedded/lib`. Trimming is a separate question from whether
+		// it can be done.
 		//
 		// Upstream scoped it honestly, "sufficient for the log/metric forwarding use case", and left an
 		// escape hatch: its getAgentBuildArgs() returns DD_AGENT_BUILD_ARGS wholesale, with a note that the
