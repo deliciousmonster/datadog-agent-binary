@@ -27,6 +27,30 @@ describe("retaking a stale verdict", () => {
 		assert.deepEqual(now, currentVerdict(state));
 	});
 
+	it("writes the retaken verdict back, so the next read does not republish the old detail", async () => {
+		// The flaw the first version of this shipped with: the verdict went into a copy while
+		// verifyLaunch stamped verifiedPid on the shared object, so read two was not stale and served
+		// the previous detail beside the new pid.
+		const state = started();
+		const verify = async (s) => {
+			s.verifiedPid = s.pid; // what verifyLaunch does before it polls
+			return { ok: true, detail: `the receiver serves as pid ${s.pid}` };
+		};
+		await retakeVerdict(state, verify);
+		assert.match(
+			state.verifyDetail,
+			/2534/,
+			"the shared state keeps the retaken detail"
+		);
+		const second = await retakeVerdict(state, verify);
+		assert.match(
+			second.verifyDetail,
+			/2534/,
+			"a later read must not republish the dead pid's detail"
+		);
+		assert.equal(second.verified, true);
+	});
+
 	it("retakes it against the running pid when a verifier is given", async () => {
 		let asked;
 		const verify = async (state) => {

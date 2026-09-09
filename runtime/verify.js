@@ -189,17 +189,19 @@ const stale = (state) =>
 export async function retakeVerdict(state, verify) {
 	if (!verify || !stale(state) || state?.started === false)
 		return currentVerdict(state);
+	// Written back onto the supervisor's own object, the way the guard writes the first verdict. A copy
+	// looked right and was not: verifyLaunch stamps verifiedPid on the shared state before it polls, so
+	// the next read saw a verdict that was no longer stale and served the previous detail beside the new
+	// pid. Observed on 2026-09-09, one read in three naming the killed pid.
 	try {
 		const { ok, detail } = await verify(state);
-		// verifyLaunch stamps verifiedPid from state.pid, so the retaken verdict names the live process.
-		return { ...state, verified: ok, verifyDetail: detail };
+		state.verified = ok;
+		state.verifyDetail = detail;
 	} catch (error) {
-		return {
-			...state,
-			verified: false,
-			verifyDetail: `retaking the verdict against pid ${state.pid} threw: ${error instanceof Error ? error.message : String(error)}`,
-		};
+		state.verified = false;
+		state.verifyDetail = `retaking the verdict against pid ${state.pid} threw: ${error instanceof Error ? error.message : String(error)}`;
 	}
+	return state;
 }
 
 /** The verdict as it stands now. Read at the endpoint rather than stamped at boot, because the supervisor keeps writing pid and restarts to the same object for the life of the node. */
