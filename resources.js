@@ -126,7 +126,8 @@ export const prepareRuntime = () =>
 	prepare(import.meta.dirname, { ports, log });
 
 /** The trace-agent's delivery counters, off the debug port this instance rendered into datadog.yaml. */
-export const readDeliverySignal = (port = ports.debug) => readSignal(port);
+export const readDeliverySignal = (port = ports.debug) =>
+	readSignal(port, { traceLog: traceLogPath });
 
 /** Never the value itself, so the status endpoint cannot become a second place the key leaks. */
 const apiKeyStatus = () => (process.env.DD_API_KEY ? "set" : "MISSING");
@@ -136,6 +137,9 @@ let supervisor;
 
 /** Where the guard's locks live, kept for the read path: the reaper's is re-read on every status. */
 let pidDir;
+
+/** The trace-agent's log, kept for the read path: its refusal lines are the only trace-hop evidence this agent build gives. */
+let traceLogPath;
 
 /** Each agent's own verifier, by name, so the read path can retake a verdict a restart made stale. */
 let verifiers = new Map();
@@ -178,6 +182,7 @@ async function startAgents(scope) {
 		const runtime = prepareRuntime();
 		// The getter re-reads the reaper's lock, and this is the only place the path is known.
 		pidDir = runtime.paths.pidDir;
+		traceLogPath = runtime.paths.traceLog;
 		Object.assign(status, {
 			runtimeDir: runtime.paths.runtimeDir,
 			configFile: runtime.paths.configFile,

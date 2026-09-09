@@ -160,7 +160,7 @@ test("the three hops are reported apart, each with the counters its verdict was 
 		}),
 		"test"
 	);
-	assert.equal(signal.signalVersion, 1);
+	assert.equal(signal.signalVersion, 2);
 	assert.equal(signal.agentVersion, "7.75.5");
 	assert.deepEqual(signal.receiver, {
 		tracesReceived: 1600,
@@ -195,7 +195,7 @@ test("NEGATIVE: /DatadogStatus/ carries the delivery signal on a thread that sta
 	// The counters belong to the node's trace-agent, so a thread that never ran startup still has a reading to
 	// report; a verdict computed and then not wired into the response is the whole ticket going missing.
 	const status = await DatadogStatus.get();
-	assert.equal(status.delivery.signalVersion, 1);
+	assert.equal(status.delivery.signalVersion, 2);
 	// No agent has started on this thread, so the debug port readDeliverySignal dials (5012 by default) has
 	// nothing listening: the read comes back unavailable, deterministically.
 	assert.equal(status.delivery.verdict, "unavailable");
@@ -216,7 +216,7 @@ test("NEGATIVE: the debug endpoint is read over TLS, so a plaintext answer on th
 test("NEGATIVE: nothing answering the debug port is unavailable, never a delivery failure", async () => {
 	const signal = await readDeliverySignal(await findFreePort());
 	assert.equal(signal.verdict, "unavailable");
-	assert.equal(signal.signalVersion, 1);
+	assert.equal(signal.signalVersion, 2);
 	assert.match(signal.detail, /nothing answered/);
 });
 
