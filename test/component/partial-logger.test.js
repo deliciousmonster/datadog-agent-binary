@@ -62,12 +62,19 @@ test("a Harper logger with no .info still gets both agents started and a reaper 
 					)
 			);
 
+			// The subject is the logger, so the assertion is that the guard got through its spawn loop, not
+			// that the process is still up. Nothing listens on any of these ports, so an agent can verify
+			// false and exit before this runs; asserting `started` read that exit as a failure to spawn.
 			for (const name of BOTH_AGENTS) {
 				const state = status.processes.find((entry) => entry.name === name);
 				assert.equal(
-					state.started,
-					true,
+					state.error,
+					undefined,
 					`the guard did not start ${name} under a logger with no .info: ${state.error}`
+				);
+				assert.ok(
+					Number.isInteger(state.pid) && state.pid > 0,
+					`no pid for ${name}, so the guard never reached its spawn: ${JSON.stringify(state)}`
 				);
 			}
 			// The reaper is what the TypeError costs: guard() launches it after the last spawn, so a throw

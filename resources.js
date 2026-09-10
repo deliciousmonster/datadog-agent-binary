@@ -375,7 +375,10 @@ export class DatadogStatus extends ResourceBase {
 				status.processes.map((state) =>
 					// nodeProcess first: a thread that refused a handed-back pid has no process of its own,
 					// and the verdict has to be retaken against the one the node actually runs.
-					retakeVerdict(nodeProcess(state, pidDir), verifiers.get(state.name))
+					retakeVerdict(
+						nodeProcess(state, pidDir, status.supervision),
+						verifiers.get(state.name)
+					)
 				)
 			),
 			// Same reason as the verdicts above: a reaper the supervisor started can be gone, and until this

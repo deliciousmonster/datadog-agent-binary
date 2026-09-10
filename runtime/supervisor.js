@@ -219,16 +219,36 @@ export function clearStaleHarperPidFiles(root, named, log) {
  * The lock is the node's own record, so an agent is reported only when a live process still identifies
  * against the argv the lock names. `refused` keeps the thread's own story rather than losing it.
  *
+ * A thread that watched its own agent die re-reads for the opposite reason. The guard's `exited` is
+ * documented as "true once this thread has seen it die, so a status surface stops reading healthy", and it
+ * leaves `started` alone, because a deliberate stop is not a failed start. Reading only `started` therefore
+ * published a dead agent as running: on 2026-09-10 a SIGTERM to the core agent took the guard's deliberate
+ * branch, which releases the lock and does not restart, and `/DatadogStatus/` reported that agent started
+ * and verified for the five minutes it was gone, with the soak logging `guard TT` throughout.
+ *
+ * That second reading is gated on the guard, because the lock is the guard's record and no other
+ * supervisor keeps one. Where Harper supervises natively there is nothing to re-read and Harper's own
+ * answer is the node's answer.
+ *
  * @param {Record<string, any>} state @param {string | undefined} pidDir
+ * @param {string} [supervision] `kind` of the supervisor that produced this state.
  */
-export function nodeProcess(state, pidDir) {
-	if (!state || state.started !== false || !pidDir || !state.name) return state;
+export function nodeProcess(state, pidDir, supervision = "guard") {
+	if (!state || !pidDir || !state.name) return state;
+	const unstartedHere = state.started === false;
+	const diedHere = state.exited === true && supervision === "guard";
+	if (!unstartedHere && !diedHere) return state;
 	const held = readGuardLock(join(pidDir, `${state.name}.pid`));
-	if (!held || identifyPid(held.pid, held.argv) !== "match") return state;
+	if (!held || identifyPid(held.pid, held.argv) !== "match")
+		// Nothing of this name is running on the node. For a thread that never started one that is already
+		// what the state says; for a thread whose own agent died it is the correction. The dead pid stays:
+		// `started: false` says it is not running, and which pid died is what an operator reads the log for.
+		return diedHere ? { ...state, started: false } : state;
 	return {
 		...state,
 		started: true,
 		adopted: true,
+		exited: false,
 		pid: held.pid,
 		// No verdict has been taken against this pid by this thread, which is what makes the reader retake
 		// one rather than publish the refusal as a health state.
