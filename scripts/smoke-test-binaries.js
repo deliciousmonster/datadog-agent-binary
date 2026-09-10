@@ -8,7 +8,8 @@ import { existsSync, mkdtempSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-import { BINARIES, binaryFilename } from "../dist/src/binaries.js";
+import { binariesFor, binaryFilename } from "../dist/src/binaries.js";
+import { pinnedVersion } from "../dist/src/downloader.js";
 import { treeAt } from "../dist/src/layout.js";
 import { currentTarget } from "../dist/src/targets.js";
 import { debugVarsUrl } from "../runtime/delivery.js";
@@ -140,9 +141,47 @@ async function checkCoreAgent(binPath, ports, paths, _resources, spawned) {
 
 // One entry per binary this repo ships, same signature on both, so a future binary with no entry here
 // fails loudly rather than being checked by the wrong function.
+/**
+ * What can be proven about a binary that needs privileges this runner does not have.
+ *
+ * system-probe loads eBPF programs or opens kernel drivers, and security-agent talks to system-probe
+ * over a socket; neither can start usefully on a CI runner, and pretending otherwise would make this
+ * check pass on a binary that cannot run at all. What `version` proves is real and is what would have
+ * caught the one that mattered: a macOS system-probe built with the wrong Go toolchain panicked before
+ * main with `strcase.UnicodeVersion "15.0.0" != unicode.Version "17.0.0"`, and it packaged, and it
+ * passed the publish gate's symbol check. A binary that dies at init cannot print its version.
+ */
+async function checkReportsVersion(binPath) {
+	const wanted = (await pinnedVersion()) ?? "";
+	log(`asking ${binPath} for its version`);
+	const reported = await new Promise((resolve) => {
+		const child = spawn(binPath, ["version"], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		let out = "";
+		child.stdout?.on("data", (chunk) => (out += chunk));
+		child.stderr?.on("data", (chunk) => (out += chunk));
+		child.on("error", (error) => resolve(`did not execute: ${error.message}`));
+		child.on("close", () => resolve(out.trim()));
+	});
+	if (!wanted)
+		throw new Error(
+			".datadog-agent-version is absent, so nothing says what it should report"
+		);
+	if (!reported.includes(wanted))
+		throw new Error(
+			`reported ${JSON.stringify(reported.slice(0, 200))}, which does not carry the pinned ${wanted}`
+		);
+	log(`reports ${wanted}: ${reported.split("\n")[0]}`);
+}
+
 const CHECKS = {
 	"trace-agent": checkTraceAgent,
 	"datadog-agent": checkCoreAgent,
+	// Started for real would need CAP_SYS_ADMIN and an object matching the runner's kernel on Linux, a
+	// /dev/bpf device on macOS, and two kernel drivers on Windows. None of those is a runner.
+	"system-probe": checkReportsVersion,
+	"security-agent": checkReportsVersion,
 };
 
 // Windows answers a rename with EBUSY while anything holds a handle inside the tree. On the CI runner
@@ -239,7 +278,10 @@ async function main() {
 		const runtime = resources.prepareRuntime();
 		writeConfigFiles(runtime.configFiles, console);
 
-		for (const binary of BINARIES) {
+		// binariesFor, not BINARIES: system-probe and security-agent are not on every platform, and macOS
+		// builds no security-agent at all. Asking for one that was never built fails the smoke test for a
+		// binary this platform is not supposed to have.
+		for (const binary of binariesFor(currentTarget())) {
 			const binPath = join(binDir, binaryFilename(binary, currentTarget()));
 			const check = CHECKS[binary.shipsAs];
 			if (!check) {
