@@ -312,8 +312,84 @@ const ACTIONS = {
 
 const realApiKey = () =>
 	readFileSync(join(homedir(), ".config", "datadog", "API_KEY"), "utf8").trim();
+
+/**
+ * The `docker run` that would recreate the container as it actually is, read off the container itself.
+ *
+ * This used to be a hardcoded argument list, which is a second copy of the container's configuration and
+ * went stale the moment the container gained anything. On 2026-09-10 the node was reconfigured with ten
+ * added capabilities, two bind mounts, `--user root` and four DD_ variables so system-probe could load its
+ * programs; the next `wrong-api-key-10min` recreated a container with none of that, and would have run the
+ * rest of the soak against a three-agent node while reporting nothing was wrong. It happened to fail
+ * outright on a name conflict instead, which is the luckier of the two outcomes.
+ *
+ * Captured once at startup rather than read at each recreate, because by the time a recreate needs it the
+ * container may already be gone.
+ */
+async function captureContainerSpec() {
+	// promisify(execFile) resolves {stdout, stderr}; every other docker() caller here ignores the value,
+	// so this is the first one that had to take .stdout and the first that could get it wrong.
+	const result = await docker(
+		"inspect",
+		"--format",
+		"{{json .}}",
+		CONTAINER
+	).catch(() => null);
+	if (!result?.stdout) return null;
+	const c = JSON.parse(result.stdout);
+	const host = c.HostConfig ?? {};
+	const args = ["run", "-d", "--name", CONTAINER];
+	if (c.Config?.User) args.push("--user", c.Config.User);
+	// PATH is the image's own and docker sets it; everything else is replayed as it stands, so a variable
+	// added to the container is carried without this file having to learn its name.
+	for (const entry of c.Config?.Env ?? [])
+		if (!entry.startsWith("PATH=")) args.push("-e", entry);
+	for (const bind of host.Binds ?? []) args.push("-v", bind);
+	for (const [port, bindings] of Object.entries(host.PortBindings ?? {}))
+		for (const b of bindings ?? [])
+			args.push("-p", `${b.HostPort}:${port.split("/")[0]}`);
+	for (const cap of host.CapAdd ?? []) args.push("--cap-add", cap);
+	if (host.Privileged) args.push("--privileged");
+	args.push(c.Config?.Image ?? IMAGE, ...(c.Config?.Cmd ?? []));
+	return args;
+}
+
+/** What a recreate replays. Null until startup captures it, and a recreate refuses rather than guessing. */
+let containerSpec = null;
+
+/**
+ * Wait for the name to be free after a forced removal.
+ *
+ * `docker rm -f` returning is not the name being available: the daemon releases it asynchronously, and the
+ * `docker run` that followed lost that race on 2026-09-10 and reported a name conflict. The failure was
+ * swallowed by a bare catch on the removal, so the log said only that `docker run` failed.
+ */
+async function removeContainer() {
+	await docker("rm", "-f", CONTAINER).catch((error) =>
+		chaosLog(`removing ${CONTAINER} failed, continuing: ${error.message}`)
+	);
+	for (let waited = 0; waited < 30_000; waited += 500) {
+		const found = await docker(
+			"ps",
+			"-aq",
+			"--filter",
+			`name=^${CONTAINER}$`
+		).catch(() => ({ stdout: "" }));
+		if (!found?.stdout?.trim()) return;
+		await new Promise((r) => setTimeout(r, 500));
+	}
+	throw new Error(
+		`${CONTAINER} still holds its name 30s after docker rm -f; nothing can recreate it`
+	);
+}
+
 async function recreate(apiKey) {
-	await docker("rm", "-f", CONTAINER).catch(() => {});
+	if (!containerSpec)
+		throw new Error(
+			"no container spec was captured at startup, so a recreate would build a container that is not " +
+				"the one under test; refusing rather than replacing it with a guess"
+		);
+	await removeContainer();
 	await run("docker", [
 		"run",
 		"--rm",
@@ -325,35 +401,12 @@ async function recreate(apiKey) {
 		"-c",
 		`rm -f ${ROOT}/hdb.pid`,
 	]);
-	await run(
-		"docker",
-		[
-			"run",
-			"-d",
-			"--name",
-			CONTAINER,
-			"-v",
-			`${VOLUME}:${ROOT}`,
-			"-p",
-			"9926:9926",
-			"-p",
-			"9925:9925",
-			"-e",
-			"DD_API_KEY",
-			"-e",
-			"DD_SITE=datadoghq.com",
-			"-e",
-			"DD_ENV=demo",
-			"-e",
-			"DD_SERVICE=harper-ecommerce",
-			"-e",
-			"DD_HOSTNAME=harper-demo",
-			"-e",
-			"DD_LOGS_ENABLED=true",
-			IMAGE,
-		],
-		{ env: { ...process.env, DD_API_KEY: apiKey } }
+	// The captured spec carries whatever DD_API_KEY the container had; this replaces that one entry so the
+	// action changes the key and nothing else.
+	const args = containerSpec.map((a) =>
+		a.startsWith("DD_API_KEY=") ? `DD_API_KEY=${apiKey}` : a
 	);
+	await run("docker", args);
 }
 
 async function fireChaos() {
@@ -579,6 +632,12 @@ async function statusRow() {
 async function main() {
 	log(
 		`soak: ${HOURS}h at ${RPS} req/s against ${CONTAINER} (${IMAGE}); chaos every ${GAP_MIN}-${GAP_MAX} min; output under ${OUT}`
+	);
+	containerSpec = await captureContainerSpec();
+	log(
+		containerSpec
+			? `soak: captured the container's own run configuration (${containerSpec.filter((a) => a === "--cap-add").length} added capabilities, ${containerSpec.filter((a) => a === "-v").length} mounts); recreates replay it`
+			: `soak: ${CONTAINER} is not running, so no run configuration was captured; any chaos action that recreates it will refuse`
 	);
 	const stop = { stopped: false };
 	const stopLoad = startLoad(stop);
