@@ -4,12 +4,20 @@
 // it is queryable or alertable. Measured on the shipped binary: no `process.*` or `system.*` metric name is
 // compiled in at all.
 //
-// The series is named `harper.processes.*`, not `system.processes.*`. Datadog does not reserve that namespace
-// server-side and the counterfeit would be accepted, which is the reason not to: it would carry a different
-// tag set, cadence and aggregation while being indistinguishable from the real check, so anyone who later
-// installs the Python integration gets two sources silently merged.
+// The series publishes under `system.processes.*`, the namespace the Python check uses, because a series
+// under a private name is one nobody's existing dashboard or monitor finds. It was `harper.processes.*`
+// first, on the argument that Datadog does not reserve the namespace so a counterfeit would be accepted and
+// two sources would merge. That risk is real; it is answered rather than avoided. This build has no
+// interpreter, so the `process` check cannot run in the agent this component spawns, and a live
+// `conf.d/process.d/conf.yaml` makes this stand down. `DD_HARPER_PROCESS_METRICS_PREFIX` restores the
+// private namespace for a node that wants the separation.
+//
+// What is filled is a subset. `process.py` also emits cpu.pct, mem.vms, open_file_descriptors, the io
+// counters and the page-fault rates, all of which need /proc reads this does not do. A dashboard that
+// charts those beside mem.rss shows one series populated and the rest empty, which is the cost of sharing
+// the namespace and is stated on the status endpoint rather than left to be discovered.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -36,6 +44,7 @@ export function settings(env = process.env) {
 			.split(",")
 			.map((p) => p.trim())
 			.filter(Boolean);
+	const prefix = String(env.DD_HARPER_PROCESS_METRICS_PREFIX ?? "").trim();
 	return {
 		// Anything but an explicit falsehood is on, so a typo cannot silently stop the data.
 		enabled: !["false", "0", "no", "off"].includes(
@@ -45,9 +54,55 @@ export function settings(env = process.env) {
 			Number.isFinite(seconds) && seconds > 0
 				? seconds
 				: DEFAULT_INTERVAL_SECONDS,
+		// A trailing dot is the mistake an operator makes here, and it would put `system.processes..number`
+		// on the wire, so it is stripped rather than honoured.
+		prefix: prefix ? prefix.replace(/\.+$/, "") : DEFAULT_PREFIX,
 		include: patterns(env.DD_HARPER_PROCESS_METRICS_INCLUDE),
 		exclude: patterns(env.DD_HARPER_PROCESS_METRICS_EXCLUDE),
 	};
+}
+
+/**
+ * The namespace the Python `process` check publishes, which is the one a stock dashboard queries.
+ *
+ * Publishing here was the wrong call the first time. The argument against it was that Datadog does not
+ * reserve the namespace server-side, so a counterfeit would be accepted and two sources would merge
+ * silently. That risk is real and it is not this package's: this build excludes Python, so the `process`
+ * check cannot run in the agent this component spawns, and `standDownFor` below covers the case where an
+ * operator has arranged for something else to fill the namespace.
+ *
+ * What the argument missed is who pays. A series under a private name is one nobody's existing dashboard or
+ * monitor finds, so "the data is there under a different name" costs the operator the work of rewriting
+ * every query, which is the opposite of what shipping it was for.
+ *
+ * The metric names underneath were already Datadog's: `number`, `threads`, `mem.rss`, and `.avg`/`.max`/
+ * `.min` are read straight off `ATTR_TO_METRIC` in `process.py`. Only the prefix and the tag key differed.
+ */
+export const DEFAULT_PREFIX = "system.processes";
+
+/** What this package used before, kept as the documented way to opt out of sharing the namespace. */
+export const PRIVATE_PREFIX = "harper.processes";
+
+/**
+ * Whether something else on this node is already filling `system.processes.*`, so this should stand down.
+ *
+ * The signal is a live `conf.d/process.d/conf.yaml`. That is how the agent is told to run the Python
+ * `process` check, and Datadog ships only a `conf.yaml.example`, so a real one is an operator's deliberate
+ * act. This build cannot run that check today, having no interpreter, but the file still says what the
+ * operator intends and standing down on it is what keeps a later change from producing two sources.
+ *
+ * Not detectable from here: a second, separate Datadog agent on the same host with the check configured.
+ * Nothing this process can read distinguishes that from no agent at all, so an operator in that position
+ * sets DD_HARPER_PROCESS_METRICS_PREFIX and the detail line on the status endpoint says so.
+ *
+ * @param {string | undefined} confdDir @param {(p: string) => unknown} [stat]
+ */
+export function standDownFor(confdDir, stat = undefined) {
+	if (!confdDir) return false;
+	const exists = stat ?? ((p) => existsSync(p));
+	for (const name of ["conf.yaml", "conf.yml"])
+		if (exists(join(confdDir, "process.d", name))) return true;
+	return false;
 }
 
 /**
@@ -182,7 +237,7 @@ export function dogstatsdLines(prefix, metrics, tags = {}) {
 export function processSeries(members, options) {
 	const {
 		group,
-		prefix = "harper.processes",
+		prefix = DEFAULT_PREFIX,
 		tags = {},
 		platform = process.platform,
 	} = options;
@@ -194,7 +249,15 @@ export function processSeries(members, options) {
 		metrics,
 		measured: samples.filter((s) => s !== null).length,
 		asked: members.length,
-		lines: dogstatsdLines(prefix, metrics, { ...tags, process_group: group }),
+		// `process_name` is what process.py tags with (`tags.extend(['process_name:{}'.format(self.name)...`)
+		// and therefore what a stock dashboard groups by, so sharing the namespace without it would put the
+		// data somewhere no existing query looks. `process_group` stays beside it: it is the same value under
+		// the name this component's own status uses, and dropping it would break anything already built here.
+		lines: dogstatsdLines(prefix, metrics, {
+			...tags,
+			process_name: group,
+			process_group: group,
+		}),
 	};
 }
 
@@ -332,6 +395,7 @@ export function startProcessSeries({
 				processSeries(m, {
 					group,
 					tags,
+					prefix: resolved.prefix,
 					include: resolved.include,
 					exclude: resolved.exclude,
 				}).lines
@@ -359,5 +423,6 @@ export function startProcessSeries({
 		stop: () => clearInterval(timer),
 		tick,
 		intervalSeconds: resolved.intervalSeconds,
+		prefix: resolved.prefix,
 	};
 }

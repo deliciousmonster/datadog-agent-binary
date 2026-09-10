@@ -3,7 +3,7 @@
 
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { threadId } from "node:worker_threads";
 
 import { PACKAGE_NAME, resolveBinary } from "./runtime/binary.js";
@@ -13,7 +13,10 @@ import {
 	readDeliverySignal as readSignal,
 } from "./runtime/delivery.js";
 import {
+	DEFAULT_PREFIX,
+	PRIVATE_PREFIX,
 	settings as processMetricSettings,
+	standDownFor,
 	startProcessSeries,
 } from "./runtime/process-metrics.js";
 import { untraceAgentProbes } from "./runtime/probe.js";
@@ -193,7 +196,7 @@ let series;
  * guard replaced under chaos is measured as the process the node runs now rather than as the one it started.
  * Only the claim holder sends; every other thread's timer costs a file read.
  */
-function scheduleProcessSeries(dir) {
+function scheduleProcessSeries(dir, confd) {
 	const resolved = processMetricSettings();
 	if (!resolved.enabled)
 		return {
@@ -201,6 +204,20 @@ function scheduleProcessSeries(dir) {
 			emitting: false,
 			detail: `off: DD_HARPER_PROCESS_METRICS_ENABLED is ${process.env.DD_HARPER_PROCESS_METRICS_ENABLED}`,
 		};
+	// Sharing `system.processes.*` is only safe while nothing else fills it. A live conf.d/process.d/ is the
+	// operator saying they intend the real check to, so this stands down rather than becoming a second source.
+	if (resolved.prefix === DEFAULT_PREFIX && standDownFor(confd)) {
+		series?.stop();
+		series = undefined;
+		return {
+			...resolved,
+			emitting: false,
+			detail:
+				`standing down: ${join(confd, "process.d")} configures the Python \`process\` check, which owns ` +
+				`${DEFAULT_PREFIX}.*. Set DD_HARPER_PROCESS_METRICS_PREFIX (${PRIVATE_PREFIX} is the documented ` +
+				`alternative) to publish alongside it instead`,
+		};
+	}
 	series?.stop();
 	series = startProcessSeries({
 		pidDir: dir,
@@ -219,8 +236,13 @@ function scheduleProcessSeries(dir) {
 		...resolved,
 		emitting: true,
 		detail:
-			`sending harper.processes.* to DogStatsD on 127.0.0.1:${ports.dogstatsd} every ` +
-			`${series.intervalSeconds}s, from whichever thread holds the claim in ${dir}`,
+			`sending ${series.prefix}.* to DogStatsD on 127.0.0.1:${ports.dogstatsd} every ` +
+			`${series.intervalSeconds}s, from whichever thread holds the claim in ${dir}` +
+			(series.prefix === DEFAULT_PREFIX
+				? `. This is the namespace the Python \`process\` check owns, and this fills a subset of it: ` +
+					`number, threads and mem.rss with its avg/max/min. cpu.pct, mem.vms, open_file_descriptors ` +
+					`and the io counters are not collected and will read as no data`
+				: ""),
 	};
 }
 
@@ -314,7 +336,10 @@ async function startAgents(scope) {
 		startedProcesses = status.processes;
 		if (started.reaper) status.reaper = started.reaper;
 		if (started.report?.length) status.supervisionReport = started.report;
-		status.processMetrics = scheduleProcessSeries(runtime.paths.pidDir);
+		status.processMetrics = scheduleProcessSeries(
+			runtime.paths.pidDir,
+			runtime.paths.confd
+		);
 	} catch (error) {
 		status.error = error.message;
 		log.error(

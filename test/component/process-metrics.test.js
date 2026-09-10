@@ -10,6 +10,8 @@ import {
 	aggregate,
 	applyPatterns,
 	claimEmitter,
+	DEFAULT_PREFIX,
+	PRIVATE_PREFIX,
 	claimStaleMs,
 	dogstatsdLines,
 	processSeries,
@@ -17,6 +19,7 @@ import {
 	selfProcess,
 	sendDogstatsd,
 	settings,
+	standDownFor,
 	startProcessSeries,
 } from "../../runtime/process-metrics.js";
 import { loadComponent } from "../support/component.js";
@@ -165,7 +168,7 @@ describe("a series for one supervised group", () => {
 		assert.deepEqual(got.metrics, { number: 0 });
 		assert.deepEqual(
 			got.lines,
-			["harper.processes.number:0|g|#process_group:agents"],
+			["system.processes.number:0|g|#process_group:agents,process_name:agents"],
 			"the count still ships, so a dashboard shows zero measured rather than nothing at all"
 		);
 	});
@@ -569,5 +572,93 @@ describe("the cadence", () => {
 		});
 		assert.equal(timer.intervalSeconds, 60);
 		timer.stop();
+	});
+});
+
+describe("which namespace it publishes under", () => {
+	// A series under a private name is one nobody's dashboard or monitor finds, so it publishes under the
+	// namespace the Python `process` check owns. The metric names underneath were already Datadog's: `number`,
+	// `threads`, `mem.rss` and the avg/max/min suffixes come straight off ATTR_TO_METRIC in process.py.
+	it("defaults to the namespace a stock dashboard queries", () => {
+		assert.equal(settings({}).prefix, "system.processes");
+		assert.equal(DEFAULT_PREFIX, "system.processes");
+	});
+
+	it("tags process_name, which is what process.py tags with and what a dashboard groups by", () => {
+		const got = processSeries([{ name: "self", self: true }], {
+			group: "harper",
+		});
+		assert.ok(
+			got.lines.every((l) =>
+				l.includes("#process_group:harper,process_name:harper")
+			),
+			`a stock query groups by process_name and would find nothing: ${got.lines[0]}`
+		);
+		assert.ok(got.lines.every((l) => l.startsWith("system.processes.")));
+	});
+
+	it("an operator can take the private namespace back", () => {
+		assert.equal(
+			settings({ DD_HARPER_PROCESS_METRICS_PREFIX: PRIVATE_PREFIX }).prefix,
+			"harper.processes"
+		);
+		const got = processSeries([{ name: "self", self: true }], {
+			group: "harper",
+			prefix: PRIVATE_PREFIX,
+		});
+		assert.ok(got.lines.every((l) => l.startsWith("harper.processes.")));
+	});
+
+	it("NEGATIVE: a trailing dot does not become a double dot on the wire", () => {
+		// `system.processes.` is the natural thing to type and would emit `system.processes..number`,
+		// which is a metric name nothing queries and nothing rejects.
+		for (const typed of ["custom.procs.", "custom.procs..", "custom.procs"])
+			assert.equal(
+				settings({ DD_HARPER_PROCESS_METRICS_PREFIX: typed }).prefix,
+				"custom.procs",
+				typed
+			);
+	});
+
+	it("NEGATIVE: whitespace or an empty override falls back rather than emitting a bare name", () => {
+		for (const blank of ["", "   ", undefined])
+			assert.equal(
+				settings({ DD_HARPER_PROCESS_METRICS_PREFIX: blank }).prefix,
+				DEFAULT_PREFIX,
+				JSON.stringify(blank)
+			);
+	});
+});
+
+describe("standing down when something else owns the namespace", () => {
+	// Sharing system.processes.* is only safe while nothing else fills it. A live conf.d/process.d/conf.yaml
+	// is how the agent is told to run the real check, and Datadog ships only conf.yaml.example, so a real one
+	// is a deliberate act. This build has no interpreter so that check cannot run here today; the file still
+	// says what the operator intends, and standing down is what keeps a later change from doubling the series.
+	const fake = (present) => (p) => present.includes(p);
+
+	it("stands down for a configured process check", () => {
+		assert.equal(standDownFor("/c", fake(["/c/process.d/conf.yaml"])), true);
+	});
+
+	it("accepts the .yml spelling, which the agent also reads", () => {
+		assert.equal(standDownFor("/c", fake(["/c/process.d/conf.yml"])), true);
+	});
+
+	it("NEGATIVE: the example file Datadog ships is not a configured check", () => {
+		assert.equal(
+			standDownFor("/c", fake(["/c/process.d/conf.yaml.example"])),
+			false,
+			"every stock install carries the example; standing down for it would never emit at all"
+		);
+	});
+
+	it("NEGATIVE: another check's config does not stand this down", () => {
+		assert.equal(standDownFor("/c", fake(["/c/postgres.d/conf.yaml"])), false);
+	});
+
+	it("NEGATIVE: no conf.d path at all is not a reason to stand down", () => {
+		assert.equal(standDownFor(undefined), false);
+		assert.equal(standDownFor(""), false);
 	});
 });
