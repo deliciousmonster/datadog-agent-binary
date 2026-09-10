@@ -183,8 +183,20 @@ export const BINARIES: readonly AgentBinary[] = [
 		mandatoryArgs: [],
 		argsOverride: "DD_SYSTEM_PROBE_BUILD_ARGS",
 		requiredSymbol: "datadog-agent/cmd/system-probe",
-		// Linux only, and deliberately. `build()` skips `build_object_files` off Linux, so a macOS artifact
-		// is a binary with no eBPF in it: present, startable, and unable to do the thing it exists for.
+		// Linux only, and for two different reasons that were once recorded as one.
+		//
+		// macOS: `tasks/system_probe.py::build()` skips `build_object_files` off Linux, so a macOS artifact
+		// is a binary with no eBPF in it. Present, startable, and unable to do the thing it exists for.
+		//
+		// Windows: upstream does build one (`cmd/system-probe/main_windows.go` and `windows/service` at
+		// 7.82.1), so this is a capability not shipped rather than one that does not exist. It reaches the
+		// kernel through two signed drivers, not eBPF: `pkg/network/driver/handle.go:26` opens `\\.\ddnpm`
+		// and `pkg/windowsdriver/procmon/procmon.go:51` opens `\\.\ddprocmon`. Those arrive in Datadog's
+		// MSI and are installed as kernel drivers, which needs administrator rights and a signature chain an
+		// npm package has no way to satisfy. Shipping the binary alone would put a system-probe.exe on a
+		// Windows node that opens a device nothing created and does nothing, which is the failure this
+		// package keeps refusing to ship. If Windows NPM is ever wanted, the route is the MSI's drivers
+		// installed alongside, and the extraction step would need to read an MSI rather than a .deb.
 		onlyOn: ["linux"],
 	},
 	{
