@@ -134,9 +134,15 @@ jobs:
 
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
+        # libsystemd-dev is the journald half. `mandatoryArgs` excludes python and nothing else, on the
+        # grounds that systemd rode in on that flag with no measurement behind it, so the agent now compiles
+        # `coreos/go-systemd/sdjournal` and needs `systemd/sd-journal.h`. Without it every Linux leg dies
+        # with `fatal error: systemd/sd-journal.h: No such file or directory`, which reads as a missing
+        # header rather than as a capability this package decided to keep. The alternative is excluding
+        # systemd again, which costs the journald log source and the systemd integration.
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential
+          sudo apt-get install -y cmake build-essential libsystemd-dev
 
       - name: Install build dependencies (macOS)
         if: runner.os == 'macOS'

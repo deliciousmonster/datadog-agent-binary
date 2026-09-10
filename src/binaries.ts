@@ -232,7 +232,11 @@ export const BINARIES: readonly AgentBinary[] = [
 		builtAt: "bin/security-agent/security-agent",
 		// `tasks/security_agent.py::build()` takes `build_tags` as a required positional, not as flags the
 		// way the other three do, so this is the one descriptor whose args are a value rather than options.
-		mandatoryArgs: ["--build-tags=", "sysprobe_bundle"],
+		// One argument, not two. `def build(ctx, build_tags, ...)` at tasks/security_agent.py:50 makes
+		// build_tags a required positional, and invoke spells a positional as `--build-tags=value`. Sent as
+		// two argv entries, invoke reads the second as another task name and answers `No idea what
+		// 'sysprobe_bundle' is!`, which reads as a bad tag rather than as a split argument.
+		mandatoryArgs: ["--build-tags=sysprobe_bundle"],
 		argsOverride: "DD_SECURITY_AGENT_BUILD_ARGS",
 		requiredSymbol: "datadog-agent/cmd/security-agent",
 		// Runtime security is a Linux and Windows product; there is no macOS build of it to ship.

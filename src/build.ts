@@ -13,8 +13,16 @@ export interface BuildOptions {
 	readonly outputDir: string;
 }
 
-/** Long enough for a cold Go build on a shared runner. */
-const BUILD_TIMEOUT_MS = 1_200_000;
+/**
+ * Long enough for a cold Go build on the slowest runner, which is macOS.
+ *
+ * Measured rather than guessed, after guessing wrong: at 20 minutes the macos-arm64 leg was killed by
+ * SIGTERM 1,200,762 ms into the core agent build, with the tree still compiling. A killed build reports a
+ * null exit code and a signal, the same shape as an OOM kill or a cancelled job, so the only thing that
+ * told the three apart was the elapsed time this error already prints. 45 minutes sits under the job's own
+ * 60-minute limit, so a genuine hang still ends as a build failure rather than a job timeout.
+ */
+const BUILD_TIMEOUT_MS = 2_700_000;
 
 /** A probe either answers at once or the interpreter it names is unusable. */
 const PROBE_TIMEOUT_MS = 30_000;
