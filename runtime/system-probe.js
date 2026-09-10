@@ -110,6 +110,20 @@ export function eBPFPrivilege({
 }
 
 /**
+ * Where the objects actually sit under the directory the probe package reports.
+ *
+ * The package ships `share/system-probe/`, and upstream's own default is
+ * `${install_path}/embedded/share/system-probe/ebpf` (`pkg/config/setup/system_probe.go:128` at 7.82.1), so
+ * `bpf_dir` names the `ebpf` child rather than its parent. Measured on a live container 2026-09-10: pointed
+ * at the parent, system-probe finds no CO-RE object, falls through to runtime compilation, and fails with
+ * `unable to find kernel headers`. It is a one-segment error that reads as a missing toolchain.
+ */
+const objectDir = (ebpfDir) => `${ebpfDir}/ebpf`;
+
+/** The minimised BTF bundle shipped beside the objects, for kernels that publish none of their own. */
+const btfBundle = (ebpfDir) => `${objectDir(ebpfDir)}/co-re/btf`;
+
+/**
  * The system-probe.yaml every agent on this node reads.
  *
  * Written whether or not system-probe runs. Off, it is the file that stops the core agent asking a socket
@@ -119,6 +133,12 @@ export function eBPFPrivilege({
  * `bpf_dir` is the part that cannot be defaulted. The objects ship in the probe platform package rather than
  * at /opt/datadog-agent, so system-probe has to be told where they landed or it starts, answers `version`,
  * and loads not one program.
+ *
+ * `allow_prebuilt_fallback` has to be set for the same reason, and its default is the trap. Upstream
+ * defaults it to false (`system_probe.go:138`), so a kernel that cannot do CO-RE loads nothing and the
+ * prebuilt objects this package went to the trouble of extracting, verifying and shipping are dead weight
+ * on disk. Shipping 42 MB that can never be read is worse than not shipping it, because the size says the
+ * capability is there.
  */
 export function renderSystemProbeYaml(paths, resolved, ebpfDir) {
 	const yes = (value) => (value ? "true" : "false");
@@ -134,7 +154,15 @@ export function renderSystemProbeYaml(paths, resolved, ebpfDir) {
 			? [
 					"  # Where the probe platform package put Datadog's precompiled objects. Without this",
 					"  # system-probe looks under /opt/datadog-agent, finds nothing, and loads no program.",
-					`  bpf_dir: ${quote(ebpfDir)}`,
+					`  bpf_dir: ${quote(objectDir(ebpfDir))}`,
+					"  # The minimised BTF bundle shipped beside them. The kernel's own /sys/kernel/btf/vmlinux",
+					"  # is used where it exists; this is what carries a kernel that publishes none.",
+					`  btf_path: ${quote(btfBundle(ebpfDir))}`,
+					"  # Without this the prebuilt objects are never loaded, whatever bpf_dir says: upstream",
+					"  # defaults it off, and CO-RE or runtime compilation are then the only paths. Runtime",
+					"  # compilation needs kernel headers a container does not have, so on a kernel where CO-RE",
+					"  # does not apply the shipped objects are the only thing that works.",
+					"  allow_prebuilt_fallback: true",
 				]
 			: []),
 		"log_to_console: false",

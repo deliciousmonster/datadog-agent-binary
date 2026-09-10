@@ -104,13 +104,34 @@ test("NEGATIVE: with everything off, nothing in the config claims to be enabled"
 // Without bpf_dir system-probe looks under /opt/datadog-agent, which is not where an npm package puts
 // anything, so it starts, answers `version`, and loads not one program. Present and inert is the worst
 // outcome available here, because everything downstream reports healthy.
-test("the eBPF object directory is written into the config when the probe package supplies one", () => {
+// Measured on a live container 2026-09-10, and it cost a deploy to find. The probe package reports
+// `share/system-probe`, and upstream's own default is `.../share/system-probe/ebpf`
+// (pkg/config/setup/system_probe.go:128 at 7.82.1), so bpf_dir names the child. One segment out,
+// system-probe finds no CO-RE object, falls through to runtime compilation, and fails with `unable to find
+// kernel headers`, which reads as a missing toolchain rather than as a wrong path.
+test("bpf_dir names the ebpf directory, not the directory holding it", () => {
 	const yaml = renderSystemProbeYaml(
 		PATHS,
 		settings({ DD_SYSTEM_PROBE_ENABLED: "true" }),
 		"/n/m/pkg/share/system-probe"
 	);
-	assert.equal(valueOf(yaml, "bpf_dir"), '"/n/m/pkg/share/system-probe"');
+	assert.equal(valueOf(yaml, "bpf_dir"), '"/n/m/pkg/share/system-probe/ebpf"');
+	assert.equal(
+		valueOf(yaml, "btf_path"),
+		'"/n/m/pkg/share/system-probe/ebpf/co-re/btf"'
+	);
+});
+
+// The other half of the same deploy. `allow_prebuilt_fallback` defaults to false upstream
+// (system_probe.go:138), so without it the prebuilt objects are never read whatever bpf_dir says, and the
+// 42 MB this package extracts, verifies and ships is dead weight that makes the capability look present.
+test("the prebuilt objects are allowed to load, or shipping them buys nothing", () => {
+	const yaml = renderSystemProbeYaml(
+		PATHS,
+		settings({ DD_SYSTEM_PROBE_ENABLED: "true" }),
+		"/n/m/pkg/share/system-probe"
+	);
+	assert.equal(valueOf(yaml, "allow_prebuilt_fallback"), "true");
 });
 
 test("NEGATIVE: no bpf_dir key is written when no probe package supplied one", () => {
@@ -119,11 +140,12 @@ test("NEGATIVE: no bpf_dir key is written when no probe package supplied one", (
 		settings({ DD_SYSTEM_PROBE_ENABLED: "true" }),
 		null
 	);
-	assert.doesNotMatch(
-		yaml,
-		/bpf_dir:/,
-		"wrote a bpf_dir naming nothing, which points system-probe at a path that does not exist"
-	);
+	for (const key of ["bpf_dir", "btf_path", "allow_prebuilt_fallback"])
+		assert.doesNotMatch(
+			yaml,
+			new RegExp(`${key}:`),
+			`wrote ${key} with no objects to point at, which names a path that does not exist`
+		);
 });
 
 test("the security-agent config names its own log and socket, not the core agent's", () => {

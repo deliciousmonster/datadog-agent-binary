@@ -53,8 +53,15 @@ function copyPlatformBinary(pkg) {
 
 const version = readRepoVersion();
 
-const lastArg = process.argv[process.argv.length - 1];
-const platforms = lastArg === "--all" ? TARGETS : [currentTarget()];
+// includes, not the last argument: `--only <name> --all` puts --all in the middle, and reading only the
+// last one silently staged the host's own platform instead of the one asked for.
+const platforms = process.argv.includes("--all") ? TARGETS : [currentTarget()];
+
+// `--only <dirName>` stages one package rather than every package a platform publishes. The probe package
+// is built entirely from extracted binaries, so it can be staged on a machine that has run the extraction
+// and not the build, which is what a kernel test of system-probe needs.
+const onlyAt = process.argv.indexOf("--only");
+const only = onlyAt === -1 ? null : process.argv[onlyAt + 1];
 
 const packageTemplate = {
 	version: version,
@@ -207,6 +214,7 @@ Apache-2.0. The binaries are Datadog's, Apache-2.0.
 
 platforms.forEach((platform) => {
 	for (const pkg of packagesFor(platform)) {
+		if (only && pkg.dirName !== only) continue;
 		copyPlatformBinary(pkg);
 		const packageJson = writePlatformPackageJson(pkg);
 		writePlatformIndexJs(pkg);

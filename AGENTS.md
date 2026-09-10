@@ -115,6 +115,28 @@ charging 145 MB to nodes that never turn system-probe on is the cost the split r
 wants them installs one by name. `runtime/binary.js` asks both packages for every binary, and reports an
 absent probe package as the opt-in it is rather than as a broken install.
 
+### What a node needs before system-probe can load a program
+
+Proven on a live container 2026-09-10, kernel 6.12.76-linuxkit aarch64, with all three modules
+(`network_tracer`, `event_monitor`, `discovery`) started from the objects this package extracts. Four
+things are required and each one failed first in a way that named something else:
+
+1. **The two binaries on `applications.allowedSpawnCommands`.** Harper's sandboxed spawn refuses anything
+   not listed, and the refusal reads `Command ... is not allowed`. Four entries now, not two.
+2. **The container's capabilities, held effectively rather than in the bounding set.** `--cap-add` puts
+   them in the bounding set; a process running as uid 1000 still has `CapEff: 0`. `setcap` on the binary
+   bridges that and costs something: a binary with file capabilities runs non-dumpable, `/proc/self/mem`
+   becomes unreadable, and system-probe's kernel-version detection fails with `permission denied`. Running
+   the container as root is the route that works, and it is what Datadog's own agent container does.
+3. **debugfs or tracefs mounted.** `-v /sys/kernel/debug:/sys/kernel/debug` at `docker run`; a mount made
+   inside a running container does not survive `docker restart`.
+4. **The eBPF objects owned by root.** system-probe refuses an object it does not trust, reporting
+   `has incorrect permissions: user=502, group=20`. An npm install performed as a non-root user leaves
+   them owned by that user and every module fails to load with the objects sitting right there.
+
+None of those four is this package's to fix, and all four are its to state, because each one produces a
+running system-probe that loads nothing while everything downstream reports healthy.
+
 Windows is the exception the descriptor states rather than hides. security-agent exists there and Datadog
 ships it inside an MSI, so `buildOn: ["windows"]` builds it on that leg instead of lifting it out of a
 Debian package it cannot come from. Windows therefore publishes no probe package.

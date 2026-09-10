@@ -462,7 +462,37 @@ const row = (values) =>
 		return value.slice(0, width).padEnd(width);
 	}).join(" ");
 let rows = 0;
-const startedAt = Date.now();
+/**
+ * When this run's clock started, which is not when this process started.
+ *
+ * A restart to load a fix is part of the test, not the end of it, so the clock has to survive one. The
+ * anchor lives in `started` under the output directory and is written once: a run that finds the file
+ * adopts the time in it and keeps counting, and only a run into an empty directory writes a new one. It was
+ * written unconditionally before, so each of this run's three restarts overwrote the origin and `up`
+ * counted from zero again, which lost 26 hours of elapsed time from every line that reports it.
+ */
+function anchorStart(dir) {
+	const file = join(dir, "started");
+	try {
+		const written = readFileSync(file, "utf-8").trim();
+		const at = Date.parse(written.replace(" ", "T"));
+		if (Number.isFinite(at)) {
+			log(
+				`soak: resuming the clock from ${written}, which this directory already carries`
+			);
+			return at;
+		}
+		log(
+			`soak: ${file} reads "${written}", which is not a time; starting the clock now`
+		);
+	} catch {
+		// No anchor here, so this is the first run into this directory.
+	}
+	writeFileSync(file, `${stamp()}\n`);
+	return Date.now();
+}
+
+const startedAt = anchorStart(OUT);
 let lastLoad = { sent: 0, ok: 0, failed: 0 };
 
 async function statusRow() {
@@ -550,7 +580,6 @@ async function main() {
 	log(
 		`soak: ${HOURS}h at ${RPS} req/s against ${CONTAINER} (${IMAGE}); chaos every ${GAP_MIN}-${GAP_MAX} min; output under ${OUT}`
 	);
-	writeFileSync(join(OUT, "started"), `${stamp()}\n`);
 	const stop = { stopped: false };
 	const stopLoad = startLoad(stop);
 	const end = Date.now() + HOURS * 3_600_000;
