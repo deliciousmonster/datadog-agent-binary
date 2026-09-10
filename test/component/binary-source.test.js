@@ -64,13 +64,26 @@ describe("where each binary comes from", () => {
 		}
 	});
 
-	it("the build loop no longer asks for the two that cannot be built on a runner", () => {
+	// system-probe is the one that could not be built on a runner: it needs a kernel-header tree matched to
+	// every target an operator might run. Nothing builds it anywhere.
+	it("the build loop never asks for system-probe on any target", () => {
 		for (const target of TARGETS)
 			for (const binary of builtFor(target))
-				assert.ok(
-					!["system-probe", "security-agent"].includes(binary.shipsAs),
-					`${target.name} still tries to build ${binary.shipsAs}`
+				assert.notEqual(
+					binary.shipsAs,
+					"system-probe",
+					`${target.name} still tries to build system-probe`
 				);
+	});
+
+	// security-agent is lifted on Linux and built on Windows, because the extraction source is a Debian
+	// package. A Windows leg that lifted it would refuse the build for an artefact that cannot exist.
+	it("security-agent is lifted on Linux and built on Windows", () => {
+		const named = (fn, os) =>
+			fn(TARGETS.find((t) => t.os === os)).map((b) => b.shipsAs);
+		assert.ok(named(extractedFor, "linux").includes("security-agent"));
+		assert.ok(named(builtFor, "windows").includes("security-agent"));
+		assert.ok(!named(extractedFor, "windows").includes("security-agent"));
 	});
 
 	it("macOS extracts nothing, because neither release binary exists there", () => {

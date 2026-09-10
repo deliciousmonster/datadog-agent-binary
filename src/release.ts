@@ -17,8 +17,6 @@
 // Verified end to end on 2026-09-10: GOODSIG from `Datadog, Inc. APT key (2023-04-20)`, and both Packages
 // indexes hashing to what the signed Release names.
 
-import type { OS } from "./targets.js";
-
 /** Fingerprint of the key that must have signed the Release file. A different signer fails the build. */
 export const DATADOG_APT_FINGERPRINT =
 	"5F1E256061D813B125E156E8E6266D4AC0962C7D";
@@ -82,14 +80,11 @@ export const EBPF_SOURCE_DIR = "embedded/share/system-probe";
 /** Where the eBPF objects go in the shipped package, and what system-probe is pointed at to find them. */
 export const EBPF_SHIP_DIR = "share/system-probe";
 
-/** Targets that carry an extracted binary at all. */
-export const extractableTargets = (): string[] =>
-	Object.keys(RELEASE_ARTIFACTS);
-
-/** Whether a target can supply extracted binaries; macOS and Windows still build their trace-agent. */
+/** Whether a target can supply extracted binaries at all. */
 export const hasRelease = (targetName: string): boolean =>
 	targetName in RELEASE_ARTIFACTS;
 
-/** system-probe is Linux-only and security-agent is Linux and Windows, so the OS decides what is lifted. */
-export const releaseBinariesFor = (os: OS): string[] =>
-	os === "linux" ? ["trace-agent", "system-probe", "security-agent"] : [];
+// There is deliberately no second list of which binaries come from a release. `binaries.ts` carries that in
+// each descriptor's `from` field, and `extractedFor(target)` reads it. A helper here would be a second
+// answer to the same question, and it was already wrong once: it named the trace-agent, which measurement
+// moved back to a build after this file was written.

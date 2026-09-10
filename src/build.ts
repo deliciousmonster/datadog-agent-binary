@@ -2,12 +2,7 @@ import { spawn } from "node:child_process";
 import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
-import {
-	AgentBinary,
-	binariesFor,
-	builtFor,
-	binaryFilename,
-} from "./binaries.js";
+import { AgentBinary, builtFor, binaryFilename } from "./binaries.js";
 import { buildTree } from "./layout.js";
 import { logger } from "./log.js";
 import { Target } from "./targets.js";

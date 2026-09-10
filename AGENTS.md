@@ -57,9 +57,45 @@ probe on a host that is not Kubernetes.
 
 ## Release
 
-A hand-pushed `v*` tag runs `build-release.yml`: four platform builds, a smoke test on each (on Windows the build tree cannot be moved aside, and the test says so and runs on), a GitHub release, then five publishes. Publishing authenticates with the job's OIDC token through a trusted publisher on each package; there is no npm token on the repository. The dist-tag is derived from the version: the prerelease identifier, or `latest`. npm 11 refuses a prerelease without one.
+A hand-pushed `v*` tag runs `build-release.yml`: four platform builds, a smoke test on each (on Windows the build tree cannot be moved aside, and the test says so and runs on), a GitHub release, then the publishes. Publishing authenticates with the job's OIDC token through a trusted publisher on each package; there is no npm token on the repository. The dist-tag is derived from the version: the prerelease identifier, or `latest`. npm 11 refuses a prerelease without one.
 
-`verify-package.js` gates on the packed tarball rather than the working tree: both binaries in every platform package, each carrying its required symbol and free of the build tag `--build-exclude` drops.
+`verify-package.js` gates on the packed tarball rather than the working tree: every binary a package declares, each carrying its required symbol and free of the build tag `--build-exclude` drops, plus the eBPF objects wherever system-probe ships.
+
+## Where the binaries come from, and which package carries them
+
+Two of the four are compiled here and two are lifted out of Datadog's own signed .deb. `src/binaries.ts`
+says which in each descriptor's `from` field, and that one field drives the build loop, the extraction
+step, the packaging and the publish gate.
+
+The core agent is built because only it links `libdatadog-agent-rtloader`, and building it is how the
+embedded Python runtime gets excluded. The trace-agent is built because this package exists to fix the
+trace-agent, and lifting it would trade that provenance for nothing: stripped, ours is 23,066,288 bytes
+against Datadog's 23,017,272, a difference of 0.2%. system-probe and security-agent are lifted because
+building system-probe needs a kernel-header tree matched to every target an operator might run, which is
+why Datadog precompiles 26 eBPF objects and ships 42 MB of them.
+
+`src/extract.ts` refuses to write a byte until the whole apt trust chain holds: Datadog's key signed
+`Release`, `Release` gives the SHA256 of the `Packages` index, `Packages` gives the SHA256 of the .deb, and
+the download matches the SHA256 pinned in `src/release.ts`. Verified end to end against the live repository
+on 2026-09-10. gpg's home goes under the system temp directory rather than the build tree, because
+gpg-agent's socket path is capped at 104 bytes on macOS and a deep checkout makes gpg report a broken agent
+rather than a long path.
+
+`src/packages.ts` splits the result across two npm packages per platform. The base package
+(`-<platform>`) carries the built binaries and stays an optionalDependency, so every install gets it. The
+probe package (`-probe-<platform>`) carries the lifted ones plus the eBPF objects and is deliberately not
+an optionalDependency: npm installs an optionalDependency on every host whose os and cpu match, and
+charging 145 MB to nodes that never turn system-probe on is the cost the split refuses. An operator who
+wants them installs one by name. `runtime/binary.js` asks both packages for every binary, and reports an
+absent probe package as the opt-in it is rather than as a broken install.
+
+Windows is the exception the descriptor states rather than hides. security-agent exists there and Datadog
+ships it inside an MSI, so `buildOn: ["windows"]` builds it on that leg instead of lifting it out of a
+Debian package it cannot come from. Windows therefore publishes no probe package.
+
+Two package names are new and have no npm trusted publisher yet:
+`@deliciousmonster/datadog-agent-binary-probe-linux-x86_64` and `-probe-linux-arm64`. npm answers a first
+publish to a name with no trusted publisher with a 404, so create both before the next `v*` tag.
 
 Workflow files are parsed by GitHub before any job runs, and a checkout step whose `with:` is left empty fails every run silently in the run list. `yaml.safe_load` before pushing.
 

@@ -11,9 +11,13 @@ const {
 	REPO_ROOT,
 	BINARIES,
 	TARGETS,
+	packagesFor,
 	currentTarget,
 	scaffoldWorkDir,
 } = require("../support/generator.js");
+const { EBPF_SHIP_DIR } = require(
+	path.join(REPO_ROOT, "dist", "src", "release.js")
+);
 
 const TARGET = currentTarget();
 const workDirs = [];
@@ -31,31 +35,38 @@ const buildInfo = (tags = "zlib,zstd,orchestrator,kubelet") =>
 const shipped = (binary, tags) =>
 	`${binary.requiredSymbol}\n${buildInfo(tags)}`;
 
-// A well-formed platform package for one target. Content is a text stand-in, never a real binary -
-// verify-package.js only ever byte-searches it, same as create-platform-packages.js's own tests. What
-// the declared symbol and tag are worth against a real build is test/binaries/publish-gate-values.test.js.
-function writePlatformPackage(workDir, target, binOverrides = {}) {
-	const binDir = path.join(workDir, "npm", target.name, "bin");
+// A well-formed platform package. Content is a text stand-in, never a real binary - verify-package.js only
+// ever byte-searches it, same as create-platform-packages.js's own tests. What the declared symbol and tag
+// are worth against a real build is test/binaries/publish-gate-values.test.js.
+function writePlatformPackage(workDir, pkg, binOverrides = {}) {
+	const { target } = pkg;
+	const packageDir = path.join(workDir, "npm", pkg.dirName);
+	const binDir = path.join(packageDir, "bin");
 	fs.mkdirSync(binDir, { recursive: true });
 	fs.writeFileSync(
-		path.join(workDir, "npm", target.name, "package.json"),
+		path.join(packageDir, "package.json"),
 		JSON.stringify({
-			name: `platform-fixture-${target.name}`,
+			name: `platform-fixture-${pkg.dirName}`,
 			version: "0.0.0",
-			files: ["bin/"],
+			files: pkg.ebpf ? ["bin/", `${EBPF_SHIP_DIR}/`] : ["bin/"],
 			// What create-platform-packages.js writes off the descriptor. Omitted, npm skips the package on
 			// every host and the gate has nothing to compare, so a fixture without these tests neither.
 			os: [target.npmOs],
 			cpu: [target.npmCpu],
 		})
 	);
-	for (const binary of BINARIES) {
+	for (const binary of pkg.binaries) {
 		const override = binOverrides[binary.shipsAs];
 		if (override === "missing") continue;
 		fs.writeFileSync(
 			path.join(binDir, `${binary.shipsAs}${target.exe}`),
 			override ?? shipped(binary)
 		);
+	}
+	if (pkg.ebpf && binOverrides.ebpf !== "missing") {
+		const objects = path.join(packageDir, EBPF_SHIP_DIR, "ebpf");
+		fs.mkdirSync(objects, { recursive: true });
+		fs.writeFileSync(path.join(objects, "tracer.o"), "\0not-an-elf");
 	}
 }
 
@@ -83,11 +94,13 @@ function buildFixture({ binOverrides = {}, missingTargets = [] } = {}) {
 
 	for (const target of TARGETS) {
 		if (missingTargets.includes(target.name)) continue;
-		writePlatformPackage(
-			workDir,
-			target,
-			target.name === TARGET.name ? binOverrides : {}
-		);
+		for (const pkg of packagesFor(target)) {
+			writePlatformPackage(
+				workDir,
+				pkg,
+				target.name === TARGET.name ? binOverrides : {}
+			);
+		}
 	}
 
 	return workDir;

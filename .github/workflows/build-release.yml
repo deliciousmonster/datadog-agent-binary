@@ -253,6 +253,18 @@ jobs:
           path: build/${{ matrix.platform }}/bin/
           retention-days: 90
 
+      # Its own artifact, not folded into agent-*, because the release job treats every agent-* directory
+      # as one platform's binary set and would package 42MB of eBPF objects as if they were binaries.
+      # Ignored where there are none: only the Linux legs extract anything, and system-probe is the only
+      # binary these belong to.
+      - name: Upload ${{ matrix.platform }} eBPF objects
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ebpf-${{ matrix.platform }}
+          path: build/${{ matrix.platform }}/share/
+          if-no-files-found: ignore
+          retention-days: 90
+
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -362,9 +374,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: read
-      # npm authenticates with this OIDC token: a trusted publisher on each of the five packages names
-      # this repository and this workflow file, and provenance is attached from the same token. No npm
-      # token exists on this repository.
+      # npm authenticates with this OIDC token: a trusted publisher on each package names this repository
+      # and this workflow file, and provenance is attached from the same token. No npm token exists on this
+      # repository. Seven packages now: the main one, four base platform packages, and the two Linux probe
+      # packages. A new name has no trusted publisher until one is created for it, and npm answers a first
+      # publish without one with a 404 rather than an authorisation error.
       id-token: write
     # npm publish is the only external call here; it doesn't hang for hours.
     timeout-minutes: 20
@@ -380,6 +394,14 @@ jobs:
           pattern: agent-*
           path: artifacts/
 
+      # The eBPF objects system-probe loads, uploaded separately by the build job. Absent on every leg that
+      # extracted nothing, which is why this does not fail on an empty download.
+      - name: Download eBPF objects
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: ebpf-*
+          path: ebpf-artifacts/
+
       - name: Move binaries to build dirs
         run: |
           pushd artifacts
@@ -391,6 +413,17 @@ jobs:
             mv "$artifact"/* "../build/$platform/bin/"
           done
           popd
+
+          # Beside bin/, not inside it: the build tree and the platform package are the same shape, so
+          # create-platform-packages.js copies rather than rearranges.
+          shopt -s nullglob
+          for artifact in ebpf-artifacts/*
+          do
+            platform=${artifact#ebpf-artifacts/ebpf-}
+            echo "Moving contents of $artifact into build/$platform/share/"
+            mkdir -p "build/$platform/share"
+            mv "$artifact"/* "build/$platform/share/"
+          done
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4

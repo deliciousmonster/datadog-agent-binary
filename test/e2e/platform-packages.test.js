@@ -11,12 +11,16 @@ const { REPO_ROOT, generatePackages } = require("../support/generator.js");
 
 const mainPkg = require(path.join(REPO_ROOT, "package.json"));
 
-// What each generated platform package's os/cpu MUST be (Node's values).
+// What each generated platform package's os/cpu MUST be (Node's values). The `probe-` entries are the
+// opt-in half of the split: same host matching, published at the same version, and deliberately not
+// optionalDependencies of the base package.
 const EXPECTED = {
 	"linux-x86_64": { os: "linux", cpu: "x64" },
 	"linux-arm64": { os: "linux", cpu: "arm64" },
 	"macos-arm64": { os: "darwin", cpu: "arm64" },
 	"windows-x86_64": { os: "win32", cpu: "x64" },
+	"probe-linux-x86_64": { os: "linux", cpu: "x64" },
+	"probe-linux-arm64": { os: "linux", cpu: "arm64" },
 };
 
 let workDir;
@@ -67,12 +71,50 @@ test("each platform package has npm-valid os/cpu (Node values, not human-readabl
 	}
 });
 
+// The base packages and optionalDependencies are two statements of one fact: npm skips an
+// optionalDependency it cannot resolve and exits 0, so a name that drifts leaves the host with no agent
+// and no error. The probe packages are asserted absent from the same list, since listing one there would
+// install 145 MB on every matching host, which is exactly what the split was for.
 test("generated package names exactly match the main package optionalDependencies", () => {
-	const generatedNames = Object.keys(readGenerated())
+	const generated = Object.keys(readGenerated());
+	const declared = Object.keys(mainPkg.optionalDependencies).sort();
+	const base = generated
+		.filter((n) => !n.startsWith("probe-"))
 		.map((n) => `@deliciousmonster/datadog-agent-binary-${n}`)
 		.sort();
-	const declared = Object.keys(mainPkg.optionalDependencies).sort();
-	assert.deepEqual(generatedNames, declared);
+	assert.deepEqual(base, declared);
+
+	const probes = generated.filter((n) => n.startsWith("probe-"));
+	assert.ok(
+		probes.length > 0,
+		"generated no probe packages; the split is gone"
+	);
+	for (const name of probes) {
+		assert.ok(
+			!declared.includes(`@deliciousmonster/datadog-agent-binary-${name}`),
+			`${name} is an optionalDependency, so npm installs it on every matching host`
+		);
+	}
+});
+
+// A probe package that ships system-probe and no objects is a binary that starts, answers `version`, and
+// loads nothing. `files` decides what npm publishes, so the declaration is what this asserts.
+test("a probe package that ships system-probe declares its eBPF objects in files", () => {
+	const generated = readGenerated();
+	for (const [name, pkg] of Object.entries(generated)) {
+		const carries = Object.keys(
+			require(path.join(npmDir, name, "index.js"))
+		).includes("getEbpfDir");
+		if (!carries) continue;
+		assert.ok(
+			pkg.files.some((f) => f.startsWith("share/system-probe")),
+			`${name} exposes getEbpfDir and does not publish share/system-probe/`
+		);
+		assert.ok(
+			fs.existsSync(path.join(npmDir, name, "share", "system-probe")),
+			`${name} exposes getEbpfDir and staged no objects`
+		);
+	}
 });
 
 test("all platform packages are pinned to the main package version", () => {

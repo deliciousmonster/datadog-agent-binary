@@ -27,6 +27,16 @@ export interface AgentBinary {
 	 * 26 of them and ships them at 42 MB, and it is not reproducible on a build runner in any useful sense.
 	 */
 	readonly from: BinarySource;
+	/**
+	 * Systems that build this one whatever `from` says.
+	 *
+	 * The extraction source is a Debian package, so `from: "release"` is a statement about Linux and cannot
+	 * be one about anything else. security-agent exists on Windows and Datadog ships it there inside an MSI,
+	 * which is a second extraction format for one binary. Building it there is the cheaper answer and it is
+	 * the answer this package already had, so the Windows capability is kept rather than quietly dropped
+	 * because the Linux route does not reach it.
+	 */
+	readonly buildOn?: readonly OS[];
 	/** Invoke task that builds it. Meaningless for a `release` binary. */
 	readonly task: string;
 	/** Path under the source tree the task writes to, before the platform's executable suffix. */
@@ -51,15 +61,22 @@ export interface AgentBinary {
 	readonly onlyOn?: readonly OS[];
 }
 
+/** Where one binary comes from on one system, which `buildOn` can override per system. */
+export const sourceOf = (
+	binary: AgentBinary,
+	target: Pick<Target, "os">
+): BinarySource =>
+	binary.buildOn?.includes(target.os) ? "build" : binary.from;
+
 /** The binaries this package compiles for one system. */
 export const builtFor = (target: Pick<Target, "os">): readonly AgentBinary[] =>
-	binariesFor(target).filter((b) => b.from === "build");
+	binariesFor(target).filter((b) => sourceOf(b, target) === "build");
 
 /** The binaries this package lifts out of Datadog's signed release for one system. */
 export const extractedFor = (
 	target: Pick<Target, "os">
 ): readonly AgentBinary[] =>
-	binariesFor(target).filter((b) => b.from === "release");
+	binariesFor(target).filter((b) => sourceOf(b, target) === "release");
 
 /** The binaries that exist for one system, which is not always all of them. */
 export function binariesFor(
@@ -182,6 +199,9 @@ export const BINARIES: readonly AgentBinary[] = [
 		requiredSymbol: "datadog-agent/cmd/security-agent",
 		// Runtime security is a Linux and Windows product; there is no macOS build of it to ship.
 		onlyOn: ["linux", "windows"],
+		// Lifted on Linux, built on Windows. Datadog ships the Windows one inside an MSI, and reading an MSI
+		// is a second extraction format for a single binary; the build already works there.
+		buildOn: ["windows"],
 	},
 ];
 

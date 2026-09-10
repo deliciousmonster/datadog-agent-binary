@@ -1,12 +1,14 @@
 import { mkdir, stat, symlink } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { build } from "./build.js";
+import { extractRelease } from "./extract.js";
 import {
 	fetchAgentSource,
 	fetchLatestVersion,
 	pinnedVersion,
 } from "./downloader.js";
 import { buildTree } from "./layout.js";
+import { EBPF_SHIP_DIR } from "./release.js";
 import { logger } from "./log.js";
 import { Target } from "./targets.js";
 
@@ -40,7 +42,23 @@ export async function buildAgents(request: BuildRequest): Promise<string[]> {
 	await fetchAgentSource(resolved, tree.source);
 	await linkIntoGoPath(tree.goPath, tree.source);
 
-	return build({ target, sourceDir: tree.source, outputDir: tree.bin });
+	const built = await build({
+		target,
+		sourceDir: tree.source,
+		outputDir: tree.bin,
+	});
+	// Into the same `bin/`, so the packaging step reads one directory and never has to know which half a
+	// binary came from. What it does have to know is `from`, which is how the two are split across packages.
+	const lifted = await extractRelease({
+		target,
+		outputDir: tree.bin,
+		// Beside `bin/`, not inside it, and at the same relative path the platform package uses. The build
+		// tree and the package it is copied into are then the same shape, so the packaging step copies
+		// rather than rearranges.
+		ebpfDir: join(tree.root, EBPF_SHIP_DIR),
+		workDir: tree.extract,
+	});
+	return [...built, ...lifted];
 }
 
 export * from "./downloader.js";

@@ -8,11 +8,9 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { platformPackageDir } from "./paths.js";
 import { TARGETS } from "../dist/src/targets.js";
-import {
-	binariesFor,
-	binaryFilename,
-	recordedBuildTags,
-} from "../dist/src/binaries.js";
+import { binaryFilename, recordedBuildTags } from "../dist/src/binaries.js";
+import { allPackages } from "../dist/src/packages.js";
+import { EBPF_SHIP_DIR } from "../dist/src/release.js";
 
 // Windows ships npm as npm.cmd, and node refuses to spawn a .cmd without a shell (CVE-2024-27980), so
 // without this the gate dies `spawnSync npm ENOENT` there instead of reading the tarball.
@@ -33,8 +31,8 @@ const failures = [];
 
 // Checked against the packed listing, not the build tree the binary was copied from: this is the
 // regression test for the entire project, so it has to see exactly what a customer's install sees.
-function verifyPlatformPackage(target) {
-	const dirName = target.name;
+function verifyPlatformPackage(pkg) {
+	const { target, dirName } = pkg;
 	const dir = platformPackageDir(dirName);
 	if (!existsSync(join(dir, "package.json"))) {
 		// A throw mid-copy can leave bin/ populated with no package.json, or - when the very first
@@ -83,9 +81,9 @@ function verifyPlatformPackage(target) {
 		}
 	}
 
-	// Only what this system has. A platform package that never carried system-probe must not fail
-	// for missing it; one that should carry it and does not, still must.
-	for (const binary of binariesFor(target)) {
+	// Only what this package carries. The base package must not fail for having no system-probe in it,
+	// and the probe package must still fail when it does not.
+	for (const binary of pkg.binaries) {
 		const relPath = `bin/${binaryFilename(binary, target)}`;
 		if (!binFiles.includes(relPath)) {
 			failures.push(
@@ -119,11 +117,26 @@ function verifyPlatformPackage(target) {
 			}
 		}
 	}
+
+	// system-probe with no objects beside it is the shape of a shipped feature that does nothing: the
+	// binary starts, answers `version`, and loads not one program. Checked against the packed listing for
+	// the same reason as the binaries, since `files` is what decides whether a staged directory is published.
+	if (pkg.ebpf) {
+		const objects = shipped.filter(
+			(p) => p.startsWith(`${EBPF_SHIP_DIR}/`) && p.endsWith(".o")
+		);
+		if (objects.length === 0) {
+			failures.push(
+				`${dirName}: ships system-probe and not one eBPF object under ${EBPF_SHIP_DIR}/ - ` +
+					"the binary would start and load nothing"
+			);
+		}
+	}
 }
 
-// TARGETS drives this, not readdirSync(npm/): a directory listing never mentions a target whose
+// The package list drives this, not readdirSync(npm/): a directory listing never mentions a package whose
 // npm/<name>/ was never created, which is exactly the gap this gate exists to catch.
-for (const target of TARGETS) verifyPlatformPackage(target);
+for (const pkg of allPackages(TARGETS)) verifyPlatformPackage(pkg);
 
 if (failures.length > 0) {
 	for (const message of failures) console.error(`Publish gate: ${message}`);

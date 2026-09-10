@@ -24,6 +24,12 @@ const { TARGETS, currentTarget } = require(
 const { BINARIES, binariesFor } = require(
 	path.join(REPO_ROOT, "dist", "src", "binaries.js")
 );
+const { packagesFor } = require(
+	path.join(REPO_ROOT, "dist", "src", "packages.js")
+);
+const { EBPF_SHIP_DIR } = require(
+	path.join(REPO_ROOT, "dist", "src", "release.js")
+);
 
 // The tree shape every fixture built from this repo's compiled output needs: a scripts/ dir plus the whole
 // of dist/src, since a caller's copied script resolves its ../dist/src imports relative to itself. Copied
@@ -69,12 +75,19 @@ function generatePackages({ prefix, args = [] }) {
 				`#!/bin/sh\necho ${binary.shipsAs}\n`
 			);
 		}
+		// The extraction step's other output. A build tree with system-probe and no objects beside it is a
+		// state the packaging step is supposed to refuse, so the fixture for the happy path lays them down.
+		if (packagesFor(target).some((pkg) => pkg.ebpf)) {
+			const ebpfDir = path.join(workDir, "build", target.name, EBPF_SHIP_DIR);
+			fs.mkdirSync(path.join(ebpfDir, "ebpf"), { recursive: true });
+			fs.writeFileSync(path.join(ebpfDir, "ebpf", "tracer.o"), "\0not-an-elf");
+		}
 	}
 
 	execFileSync(
 		process.execPath,
 		[path.join(workDir, "scripts", "create-platform-packages.js"), ...args],
-		{ stdio: "ignore" }
+		{ stdio: process.env.DDAB_GEN_DEBUG ? "inherit" : "ignore" }
 	);
 	return { workDir, npmDir: path.join(workDir, "npm") };
 }
@@ -86,5 +99,6 @@ export {
 	TARGETS,
 	BINARIES,
 	binariesFor,
+	packagesFor,
 	currentTarget,
 };
