@@ -60,8 +60,18 @@ const probe = (target: Target): PlatformPackage => ({
 	// Only where system-probe is LIFTED, which is Linux. macOS uses no eBPF and Windows uses kernel
 	// drivers, so shipping objects to either would be 42 MB neither can load.
 	ebpf: extractedFor(target).some((b) => b.shipsAs === "system-probe"),
-	description: `Datadog system-probe and security-agent for ${target.os} ${target.arch}`,
+	// Named from what it carries rather than from a fixed pair: macOS has no security-agent worth
+	// shipping, and a description listing one is a package claiming a binary it does not have.
+	description: `Datadog ${listing(probeBinaries(target))} for ${target.os} ${target.arch}`,
 });
+
+/** `a`, `a and b`, `a, b and c`. */
+const listing = (binaries: readonly AgentBinary[]): string => {
+	const names = binaries.map((b) => b.shipsAs);
+	return names.length < 2
+		? names.join("")
+		: `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+};
 
 /** Every package one target publishes. A target with no opt-in binary publishes only its base package. */
 export function packagesFor(target: Target): PlatformPackage[] {

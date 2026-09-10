@@ -14,6 +14,10 @@ on:
         required: false
 
 env:
+  # Only the toolchain that RUNS the build tasks. Which Go compiles the agent is decided by the agent's
+  # own .go-version, which src/build.ts reads out of the fetched source and passes as GOTOOLCHAIN, so this
+  # number cannot drift from the pinned release the way it did: it read 1.23 against a source asking for
+  # 1.26.5, and passed only because go.mod made Go fetch a newer toolchain on its own.
   GO_VERSION: "1.23"
 
 jobs:

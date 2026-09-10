@@ -93,6 +93,35 @@ const PYTHON_PROBE =
 /** Reports `<major>.<minor> <executable>` for one interpreter name, or rejects if it is absent. */
 type Probe = (candidate: string) => Promise<string>;
 
+/**
+ * The Go toolchain the pinned agent release was written against, from its own `.go-version`.
+ *
+ * Read from the source rather than configured beside it, for the same reason the Node version is read out
+ * of package.json: a second copy of a version number drifts, and this one had. The workflow carried
+ * `GO_VERSION: "1.23"` against a source tree asking for 1.26.5, and it passed only because `go.mod` says
+ * `go 1.26.0` and Go downloads a newer toolchain on its own to satisfy that. So the number in the workflow
+ * was decorative, and the toolchain in use was whatever `go.mod` happened to resolve.
+ *
+ * Where it bites is a toolchain NEWER than the pin, which go.mod does not object to. Measured here on
+ * 2026-09-10: Go 1.27.0 built a macOS system-probe that panicked before main with
+ * `strcase.UnicodeVersion "15.0.0" != unicode.Version "17.0.0"`, because 1.27 moved the Unicode tables and
+ * `charlievieth/strcase v0.0.5` asserts its own match the runtime's. A binary that dies at init is the
+ * worst kind to ship: it packages, it passes a symbol check, and it never runs.
+ */
+export async function goPin(sourceDir: string): Promise<string> {
+	return readFile(join(sourceDir, ".go-version"), "utf8")
+		.then((pin) => pin.trim())
+		.catch(() => "");
+}
+
+/** `GOTOOLCHAIN` for a pin, or nothing when the tag ships no `.go-version` to honour. */
+export function goToolchain(pin: string): NodeJS.ProcessEnv {
+	if (!/^\d+\.\d+(\.\d+)?$/.test(pin)) return {};
+	// `go1.26.5`, not `1.26.5`: GOTOOLCHAIN takes a toolchain name, and an unprefixed version is rejected
+	// rather than ignored, which is the better of the two failures but still a build that does not start.
+	return { GOTOOLCHAIN: `go${pin}` };
+}
+
 /** Same contract as `.go-version`: a tag shipping no file has no opinion. */
 export async function pythonPin(sourceDir: string): Promise<string> {
 	return readFile(join(sourceDir, ".python-version"), "utf8")
@@ -225,7 +254,18 @@ export async function prepareHost(
 	target: Target,
 	sourceDir: string
 ): Promise<NodeJS.ProcessEnv> {
+	const pin = await goPin(sourceDir);
+	const toolchain = goToolchain(pin);
+	if (toolchain.GOTOOLCHAIN)
+		logger.info(
+			`Building with ${toolchain.GOTOOLCHAIN}, which the release pins`
+		);
+	else if (pin)
+		logger.warn(
+			`.go-version reads "${pin}", which is not a version; the toolchain is whatever go.mod resolves`
+		);
 	return {
+		...toolchain,
 		...(await cacheHome()),
 		...(target.os === "windows" ? await windowsPreconditions(sourceDir) : {}),
 	};
