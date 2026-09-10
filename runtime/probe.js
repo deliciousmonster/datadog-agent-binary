@@ -2,6 +2,7 @@
 // polls fail, and on the line this replaces those failures became errored client spans on the customer's own service.
 
 import { request as httpRequest } from "node:http";
+import { connect } from "node:net";
 import { request as httpsRequest } from "node:https";
 import { createRequire } from "node:module";
 
@@ -82,6 +83,57 @@ async function probe(url, timeoutMs) {
 		return await untraced(() => get(url, timeoutMs));
 	} catch {
 		return null;
+	}
+}
+
+/**
+ * Whether anything accepts a connection on a unix socket path. Never throws, same contract as `probe`.
+ *
+ * A connect and an immediate close, with no request written: system-probe speaks HTTP over this socket, but
+ * what is being asked is whether it is listening, and a bare accept answers that without needing to know a
+ * route that could move between agent versions. An ECONNREFUSED, an ENOENT, or a path that is not a socket
+ * all arrive here as false.
+ */
+function probeSocket(path, timeoutMs) {
+	return new Promise((resolve) => {
+		let deadline;
+		const settle = (answered) => {
+			clearTimeout(deadline);
+			socket.destroy();
+			resolve(answered);
+		};
+		const socket = connect(path);
+		socket.on("connect", () => settle(true));
+		socket.on("error", () => settle(false));
+		deadline = setTimeout(() => settle(false), timeoutMs);
+	});
+}
+
+/** {@link pollEndpoint} against a unix socket, for the two agents that serve one instead of a loopback port. */
+export async function pollUnixSocket({
+	path,
+	timeoutMs = 30_000,
+	intervalMs = 250,
+	giveUp,
+}) {
+	const deadline = Date.now() + timeoutMs;
+	let interval = intervalMs;
+	for (;;) {
+		const budget = Math.min(
+			PROBE_TIMEOUT_MS,
+			Math.max(deadline - Date.now(), 1)
+		);
+		// Untraced for the same reason the HTTP probes are: a failed connect during startup would otherwise
+		// become an errored client span on the customer's own service.
+		const answered = await untraced(() => probeSocket(path, budget)).catch(
+			() => false
+		);
+		if (answered) return true;
+		if (giveUp?.() || Date.now() >= deadline) return false;
+		await new Promise((resolve) =>
+			setTimeout(resolve, Math.min(interval, deadline - Date.now()))
+		);
+		interval = Math.min(interval * 2, MAX_INTERVAL_MS);
 	}
 }
 

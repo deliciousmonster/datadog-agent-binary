@@ -65,6 +65,25 @@ async function ask(packageName, shipsAs, file) {
 	return { installed: true, staleMatch: resolved };
 }
 
+/**
+ * Where the probe package put Datadog's precompiled eBPF objects, or null when it is not installed.
+ *
+ * The package states its own layout through `getEbpfDir()` rather than this file computing it, because the
+ * path is that package's business and a computed one goes stale the moment the layout changes. Null is an
+ * ordinary answer: system-probe is opt-in, so most nodes have no probe package at all.
+ */
+export async function resolveEbpfDir() {
+	const probe = `${PACKAGE_NAME}-probe-${platformName()}`;
+	try {
+		const pkg = await import(probe);
+		const getEbpfDir = pkg.getEbpfDir ?? pkg.default?.getEbpfDir;
+		const dir = getEbpfDir?.();
+		return dir && existsSync(dir) ? dir : null;
+	} catch {
+		return null;
+	}
+}
+
 /** The platform packages' accessors first (the npm install path), then a dev checkout's build output. */
 export async function resolveBinary(agent) {
 	const file = `${agent.shipsAs}${EXE}`;

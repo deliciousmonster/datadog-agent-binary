@@ -14,6 +14,12 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { threadId } from "node:worker_threads";
 
+import {
+	renderSecurityAgentYaml,
+	renderSystemProbeYaml,
+	settings as probeSettings,
+} from "./system-probe.js";
+
 // Rejects `rootPath: null`, which Harper's own defaultConfig.yaml ships, and anything relative: a relative
 // root puts the runtime tree, the PID locks and the reaper's replacement-pid file under each worker's cwd.
 const absoluteRoot = (value) => (value && isAbsolute(value) ? value : null);
@@ -154,6 +160,10 @@ function renderLogSources(harperLog, paths) {
 		...source(join(dirname(harperLog), "*.log"), "harper", "harper"),
 		...source(paths.coreLog, "datadog-agent", "datadog-agent"),
 		...source(paths.traceLog, "datadog-trace-agent", "datadog-agent"),
+		// Tailed by path, whether or not the file exists yet: the logs agent picks one up when it appears,
+		// so a node that turns system-probe on later needs no config change to see its log.
+		...source(paths.sysprobeLog, "datadog-system-probe", "datadog-agent"),
+		...source(paths.securityLog, "datadog-security-agent", "datadog-agent"),
 		...source(paths.reaperLog, "datadog-agent-reaper", "harper-process-guard"),
 		"",
 	].join("\n");
@@ -197,7 +207,7 @@ function removeStaleDefaults(confd, owned) {
 
 // The runtime tree lives under Harper's root, never the component directory, which `harper deploy` replaces
 // under a live agent. Named by the component's own directory, not just "datadog": sharing one pidDir means sharing one lock.
-export function prepareRuntime(componentDir, { ports, log }) {
+export function prepareRuntime(componentDir, { ports, log, ebpfDir }) {
 	const root = harperRoot(log);
 	const runtimeDir = root
 		? join(root, "datadog", basename(componentDir))
@@ -211,6 +221,17 @@ export function prepareRuntime(componentDir, { ports, log }) {
 		ipcCert: join(runtimeDir, "run", "ipc_cert.pem"),
 		coreLog: join(runtimeDir, "logs", "agent.log"),
 		traceLog: join(runtimeDir, "logs", "trace-agent.log"),
+		sysprobeLog: join(runtimeDir, "logs", "system-probe.log"),
+		securityLog: join(runtimeDir, "logs", "security-agent.log"),
+		// The core agent takes `--sysprobecfgpath <directory>` and system-probe takes `-c <file>`, so both
+		// spellings of the same file are stated here rather than rebuilt at each call site.
+		sysprobeConfigDir: runtimeDir,
+		sysprobeConfigFile: join(runtimeDir, "system-probe.yaml"),
+		securityConfigFile: join(runtimeDir, "security-agent.yaml"),
+		// Under the runtime tree, never /var/run/datadog: that is the stock install's path and does not
+		// exist beside a component, which is the same reason dogstatsd_socket and receiver_socket are empty.
+		sysprobeSocket: join(runtimeDir, "run", "sysprobe.sock"),
+		securitySocket: join(runtimeDir, "run", "runtime-security.sock"),
 		// Not Harper's own pids/: the guard's reaper stops every guard-written lock it finds in the directory
 		// it watches, and a shared one would hold locks this component never wrote.
 		pidDir: join(runtimeDir, "pids"),
@@ -221,7 +242,14 @@ export function prepareRuntime(componentDir, { ports, log }) {
 	mkdirSync(paths.confd, { recursive: true });
 	mkdirSync(paths.pidDir, { recursive: true });
 
-	const configFiles = { [paths.configFile]: renderDatadogYaml(paths, ports) };
+	const probes = probeSettings();
+	const configFiles = {
+		[paths.configFile]: renderDatadogYaml(paths, ports),
+		// Written whether or not either agent runs. Off, this file is what stops the core agent polling a
+		// socket nothing serves; on, it is where the socket and the eBPF objects are named.
+		[paths.sysprobeConfigFile]: renderSystemProbeYaml(paths, probes, ebpfDir),
+		[paths.securityConfigFile]: renderSecurityAgentYaml(paths, probes),
+	};
 	let checks = [];
 	try {
 		checks = collectCoreChecks(join(componentDir, "conf.d"));
@@ -250,6 +278,7 @@ export function prepareRuntime(componentDir, { ports, log }) {
 		root,
 		paths,
 		configFiles,
+		probes,
 		coreChecks: checks.map((check) => check.name),
 	};
 }

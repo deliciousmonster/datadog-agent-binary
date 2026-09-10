@@ -6,7 +6,11 @@ import { createRequire } from "node:module";
 import { basename, join } from "node:path";
 import { threadId } from "node:worker_threads";
 
-import { PACKAGE_NAME, resolveBinary } from "./runtime/binary.js";
+import {
+	PACKAGE_NAME,
+	resolveBinary,
+	resolveEbpfDir,
+} from "./runtime/binary.js";
 import { prepareRuntime as prepare } from "./runtime/config.js";
 import {
 	debugVarsUrl,
@@ -20,6 +24,7 @@ import {
 	startProcessSeries,
 } from "./runtime/process-metrics.js";
 import { untraceAgentProbes } from "./runtime/probe.js";
+import { eBPFPrivilege } from "./runtime/system-probe.js";
 import {
 	currentReaper,
 	nodeProcess,
@@ -124,7 +129,49 @@ export const AGENTS = [
 		name: "datadog-agent",
 		title: "core agent",
 		shipsAs: "datadog-agent",
-		args: (paths) => ["run", "-c", paths.runtimeDir],
+		// --sysprobecfgpath takes the DIRECTORY holding system-probe.yaml, where -c takes the directory
+		// holding datadog.yaml; both are the runtime tree. Passed whether or not system-probe runs, because
+		// the file it names is what tells this agent to stop polling a socket nothing serves.
+		args: (paths) => [
+			"run",
+			"-c",
+			paths.runtimeDir,
+			"--sysprobecfgpath",
+			paths.sysprobeConfigDir,
+		],
+	},
+	{
+		kind: "sysprobe",
+		name: "datadog-system-probe",
+		title: "system-probe",
+		shipsAs: "system-probe",
+		// Opt-in, and its binary ships in a package an operator installs by name.
+		optional: true,
+		enabled: (probes) => probes.systemProbe,
+		// `-c` here takes the FILE, unlike the core agent's, which takes the directory.
+		args: (paths) => ["run", "-c", paths.sysprobeConfigFile],
+		exitHint:
+			"system-probe loads eBPF programs, which needs root or CAP_SYS_ADMIN and a kernel it has an " +
+			"object for. An immediate non-zero exit is usually one of those two.",
+	},
+	{
+		kind: "security",
+		name: "datadog-security-agent",
+		title: "security-agent",
+		shipsAs: "security-agent",
+		optional: true,
+		enabled: (probes) => probes.security,
+		// Its own config, plus the system-probe file, which is where the runtime-security socket is named.
+		args: (paths) => [
+			"start",
+			"-c",
+			paths.securityConfigFile,
+			"--sysprobe-config",
+			paths.sysprobeConfigFile,
+		],
+		exitHint:
+			"security-agent's runtime security talks to system-probe over its socket, so it exits when " +
+			"system-probe is not running.",
 	},
 ];
 
@@ -133,12 +180,43 @@ export const AGENTS = [
 const CONFIG_ENTRY = `${basename(import.meta.dirname)}: { package: "${PACKAGE_NAME}" }`;
 
 /** The runtime tree and the config files for this node, rendered against the ports this instance resolved. */
-export const prepareRuntime = () =>
-	prepare(import.meta.dirname, { ports, log });
+export const prepareRuntime = (ebpfDir = null) =>
+	prepare(import.meta.dirname, { ports, log, ebpfDir });
 
 /** The trace-agent's delivery counters, off the debug port this instance rendered into datadog.yaml. */
 export const readDeliverySignal = (port = ports.debug) =>
 	readSignal(port, { traceLog: traceLogPath, markDir: pidDir });
+
+/**
+ * What this node resolved about system-probe and security-agent, and what stands between it and running them.
+ *
+ * Reported rather than enforced. The binary is the authority on whether it can load an eBPF program, so a
+ * refusal here would be this component overruling it on a heuristic. What this replaces is a restart loop
+ * whose logs say `operation not permitted` and nothing about which capability is missing.
+ */
+function probeStatus(probes, ebpfDir) {
+	const reasons = [];
+	if (probes.systemProbe) {
+		const privilege = eBPFPrivilege();
+		if (!privilege.able) reasons.push(privilege.why);
+		if (!ebpfDir)
+			reasons.push(
+				`no precompiled eBPF objects were found: ${PACKAGE_NAME}-probe-<platform> is what ships them, ` +
+					"and without it system-probe starts, answers `version`, and loads not one program"
+			);
+		for (const reason of reasons)
+			log.warn(
+				`Datadog supervisor: DD_SYSTEM_PROBE_ENABLED is set and ${reason}`
+			);
+	}
+	return {
+		...probes,
+		ebpfDir,
+		// Empty means nothing known stands in the way, which is not the same as a running probe. The
+		// process's own verified verdict is what says that, and it is reported beside this.
+		blockers: reasons,
+	};
+}
 
 /** Never the value itself, so the status endpoint cannot become a second place the key leaks. */
 const apiKeyStatus = () => (process.env.DD_API_KEY ? "set" : "MISSING");
@@ -272,7 +350,9 @@ async function startAgents(scope) {
 			);
 		}
 
-		const runtime = prepareRuntime();
+		// Before prepareRuntime, because the objects' path is written into the system-probe config it renders.
+		const ebpfDir = await resolveEbpfDir();
+		const runtime = prepareRuntime(ebpfDir);
 		// The getter re-reads the reaper's lock, and this is the only place the path is known.
 		pidDir = runtime.paths.pidDir;
 		traceLogPath = runtime.paths.traceLog;
@@ -280,14 +360,24 @@ async function startAgents(scope) {
 			runtimeDir: runtime.paths.runtimeDir,
 			configFile: runtime.paths.configFile,
 			coreChecks: runtime.coreChecks,
+			probes: probeStatus(runtime.probes, ebpfDir),
 		});
+
+		// Only what this node asked for. An optional agent nobody enabled is not declared at all, so it
+		// cannot be resolved, cannot fail to resolve, and cannot appear in the status as a thing that broke.
+		const wanted = AGENTS.filter(
+			(agent) => !agent.optional || agent.enabled(runtime.probes)
+		);
 
 		// Resolved up front so the fingerprint can never describe a different binary from the one spawned.
 		const failures = [];
 		const binaries = await Promise.all(
-			AGENTS.map((agent, index) =>
+			wanted.map((agent, index) =>
 				resolveBinary(agent).catch((error) => {
 					failures[index] = error.message;
+					// An optional agent this node asked for and cannot find is the operator's own
+					// misconfiguration to fix, not a defect: they set the flag and did not install the
+					// package. It is still a refusal to run something that was requested, so it is logged.
 					log.error(
 						`Datadog supervisor: could not resolve the ${agent.title} binary: ${error.message}`
 					);
@@ -307,7 +397,7 @@ async function startAgents(scope) {
 		];
 
 		const verifyContext = { paths: runtime.paths, ports };
-		const declared = AGENTS.map((agent, index) => ({
+		const declared = wanted.map((agent, index) => ({
 			...agent,
 			command: binaries[index],
 			args: agent.args(runtime.paths),

@@ -210,7 +210,16 @@ test("the runtime tree comes from Harper, not from a variable this package inven
 		);
 		// The agents' own logs ride along under their own service names: the first thing to read when
 		// the node stops reporting is what the agent said, and that file is on the node, not in Datadog.
-		for (const file of ["agent.log", "trace-agent.log", "reaper.log"]) {
+		// system-probe's and security-agent's are named whether or not either runs: the logs agent picks a
+		// file up when it appears, so a node that turns one on later needs no config change to see its log.
+		const agentLogs = [
+			"agent.log",
+			"trace-agent.log",
+			"system-probe.log",
+			"security-agent.log",
+			"reaper.log",
+		];
+		for (const file of agentLogs) {
 			assert.ok(
 				source.includes(
 					JSON.stringify(path.join(fromEnv.paths.runtimeDir, "logs", file))
@@ -220,8 +229,8 @@ test("the runtime tree comes from Harper, not from a variable this package inven
 		}
 		assert.equal(
 			(source.match(/^  - type: file$/gm) ?? []).length,
-			4,
-			"four sources, one per log file"
+			agentLogs.length + 1,
+			"one source per agent log, plus Harper's own log directory"
 		);
 	});
 

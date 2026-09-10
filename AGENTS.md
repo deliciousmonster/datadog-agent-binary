@@ -36,20 +36,46 @@ before the guard asks Harper to spawn, when the pid it names is running somethin
 process; the guard refuses a handed-back pid it cannot identify, so the two together fail loud rather
 than supervise a stranger.
 
+## system-probe and security-agent
+
+Both are wired and both are off by default. `DD_SYSTEM_PROBE_ENABLED=true` and
+`DD_RUNTIME_SECURITY_CONFIG_ENABLED=true` turn them on, in Datadog's own spelling rather than a name this
+package invented. `DD_NETWORK_CONFIG_ENABLED` and `DD_SERVICE_MONITORING_CONFIG_ENABLED` gate NPM and USM
+separately, because NPM watches every connection on the host and USM parses their traffic; either can be
+wanted without the other, and Datadog leaves both off too.
+
+Off is the default here and on is the default for the process series, and the asymmetry is deliberate.
+These cost privileges: system-probe loads eBPF programs, which needs root or CAP_SYS_ADMIN and an object
+matching the running kernel. `eBPFPrivilege()` in `runtime/system-probe.js` reads `CapEff` out of
+`/proc/self/status` and reports what is missing at WARN, rather than letting the supervisor restart a
+process that exits every time with `operation not permitted`. It reports; it does not refuse. The binary is
+the authority on what it can do.
+
+The binaries come from the probe platform package, which is not installed by default, and the eBPF objects
+come with them. `resolveEbpfDir()` asks that package where they landed and the answer is written into
+`system_probe_config.bpf_dir`. Without it system-probe starts, answers `version`, and loads not one
+program, which is the worst outcome available because everything downstream then reports healthy.
+
+`runtime/config.js` writes `system-probe.yaml` on every start whether or not either agent runs, and that
+file is also the fix for the log noise below. The core agent is passed `--sysprobecfgpath <runtimeDir>`,
+system-probe `-c <runtimeDir>/system-probe.yaml`, and security-agent both its own config and
+`--sysprobe-config`, so all three read one file and cannot disagree about the socket.
+
 ## Known log noise, and its cause
 
-The core agent logs `failed to get services: Get "http://sysprobe/debug/stats"` about once a minute
-whenever `process_config.process_collection.enabled` is on. It is ours, not Datadog's: the workloadmeta
-process collector asks system-probe for service discovery
-(`comp/core/workloadmeta/collectors/internal/process/process_collector.go:556` at 7.82.1), and this
-build excludes system-probe. Live Processes itself works; only the discovery half of the collector has
-nothing to talk to.
+The core agent logged `failed to get services: Get "http://sysprobe/debug/stats"` about once a minute
+whenever `process_config.process_collection.enabled` was on. It was ours, not Datadog's: the workloadmeta
+process collector asks system-probe for service discovery, and this build shipped no system-probe. Live
+Processes itself worked; only the discovery half of the collector had nothing to talk to.
 
-The gate is `discovery.enabled` in the *system-probe* config, which defaults on. Turning it off needs
-either `DD_DISCOVERY_ENABLED=false` in the node's environment, which the agents inherit from Harper, or
-a per-agent `env` threaded through the guard's process descriptors, which the guard does not carry
-today. Writing `/etc/datadog-agent/system-probe.yaml` is not a route inside the stock Harper image: the
-`harperdb` user cannot create that directory.
+The gate is `discovery.enabled`, and the part that made it hard to reach is that the collector reads that
+key out of the *system-probe* config rather than the core agent's
+(`comp/core/workloadmeta/collectors/internal/process/process_collector.go:191` at 7.82.1, via
+`serviceDiscoveryEnabled(systemProbeConfig)`). Writing `/etc/datadog-agent/system-probe.yaml` is not a
+route inside the stock Harper image, because the `harperdb` user cannot create that directory. What is a
+route is `--sysprobecfgpath`, which takes the directory to read it from, so the file now lives in the
+runtime tree beside `datadog.yaml` and says `discovery.enabled: false` on any node that is not running
+system-probe. `DD_DISCOVERY_ENABLED` still overrides it, since the environment outranks the file.
 
 Nothing else logs at ERROR in steady state. Measured after a restart on 2026-09-09: the trace-agent and
 the reaper logged nothing at ERROR or WARN, and the core agent logged only this and a Kubelet fallback

@@ -3,7 +3,7 @@
 
 import { describeExit } from "./agent-exit.js";
 import { debugVarsUrl } from "./delivery.js";
-import { parseJson, pollEndpoint } from "./probe.js";
+import { parseJson, pollEndpoint, pollUnixSocket } from "./probe.js";
 
 /** The path dd-trace posts spans to. A receiver that does not advertise it is not one this node can use. */
 const TRACE_ENDPOINT = "/v0.4/traces";
@@ -19,6 +19,10 @@ export const expvarUrl = (port) => `http://127.0.0.1:${port}/debug/vars`;
 // agent has, since a dead process cannot bind the port it is being polled for.
 const pollAgent = (url, state) =>
 	pollEndpoint({ url, giveUp: () => state.exited === true });
+
+/** The same wait, against a unix socket: system-probe and security-agent serve sockets, not loopback ports. */
+const pollSocket = (path, state) =>
+	pollUnixSocket({ path, giveUp: () => state.exited === true });
 
 /** The pid this node's supervisor started, or null. A guard attempt that never reached a spawn leaves it undefined (the guard's src/supervise.js:156), and comparing against that reads a healthy agent as stale. */
 const heldPid = (state) => (typeof state?.pid === "number" ? state.pid : null);
@@ -147,6 +151,56 @@ async function verifyCoreAgent(state, { paths, ports }) {
 	};
 }
 
+/**
+ * Prove system-probe is serving its socket, which is the only thing that makes it useful to anything else.
+ *
+ * A unix socket, not a port, so this is a connect rather than an HTTP poll of a loopback address. The core
+ * agent and security-agent both reach it the same way, so a socket nothing accepts on is precisely the state
+ * where system-probe is running and no consumer can tell.
+ */
+async function verifySystemProbe(state, { paths }) {
+	const socket = paths.sysprobeSocket;
+	const served = await pollSocket(socket, state);
+	if (!served) {
+		return {
+			ok: false,
+			detail:
+				`nothing is accepting connections on ${socket}, so the core agent's service discovery and ` +
+				`security-agent's runtime security have nothing to talk to.${exitDetail(state)} eBPF needs ` +
+				`root or CAP_SYS_ADMIN and an object matching the running kernel; read ${paths.sysprobeLog}`,
+		};
+	}
+	const held = heldPid(state);
+	return {
+		ok: true,
+		detail:
+			`system-probe accepts connections on ${socket}` +
+			(held === null ? "" : ` as pid ${held}`),
+	};
+}
+
+/** The same for security-agent, whose runtime security serves its own socket beside system-probe's. */
+async function verifySecurityAgent(state, { paths }) {
+	const socket = paths.securitySocket;
+	const served = await pollSocket(socket, state);
+	if (!served) {
+		return {
+			ok: false,
+			detail:
+				`nothing is accepting connections on ${socket}, so no runtime-security event can reach the ` +
+				`backend.${exitDetail(state)} It talks to system-probe over its own socket and exits when ` +
+				`system-probe is not running; read ${paths.securityLog}`,
+		};
+	}
+	const held = heldPid(state);
+	return {
+		ok: true,
+		detail:
+			`security-agent accepts connections on ${socket}` +
+			(held === null ? "" : ` as pid ${held}`),
+	};
+}
+
 // A supervisor that never started it has nothing to verify: both verifiers would poll on, and read whatever
 // else holds the port. Strictly false, because a caller that reports no `started` field does have a process.
 const notStarted = (state) =>
@@ -164,12 +218,21 @@ export const verifyLaunch = (agent, state, context) => {
 	// Each supervisor verifies once, after the first spawn, and then rewrites `pid` and `restarts` on this
 	// same object without retaking the verdict. The pid it was taken against is the only record of that.
 	state.verifiedPid = state.pid ?? null;
-	return (
-		notStarted(state) ??
-		(agent.kind === "trace"
-			? verifyTraceAgent(state, context)
-			: verifyCoreAgent(state, context))
-	);
+	const byKind = {
+		trace: verifyTraceAgent,
+		core: verifyCoreAgent,
+		sysprobe: verifySystemProbe,
+		security: verifySecurityAgent,
+	};
+	// Defaulting to the core agent's verifier would hand a new kind a verdict about expvar it never serves,
+	// which reads as a broken agent rather than as a missing verifier.
+	const verify = byKind[agent.kind];
+	if (!verify)
+		return {
+			ok: false,
+			detail: `nothing here knows how to verify an agent of kind "${agent.kind}"`,
+		};
+	return notStarted(state) ?? verify(state, context);
 };
 
 /** True once the process the verdict describes has been replaced. A verdict taken against no pid at all cannot go stale, because it never named one. */
