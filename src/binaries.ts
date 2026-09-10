@@ -1,8 +1,33 @@
 import { OS, Target } from "./targets.js";
 
+export type BinarySource = "build" | "release";
+
 export interface AgentBinary {
 	/** Name the binary ships under, before the platform's executable suffix. */
 	readonly shipsAs: string;
+	/**
+	 * Where this binary comes from.
+	 *
+	 * `build` compiles it from the pinned Datadog source. `release` lifts it out of Datadog's own signed
+	 * package, verified through the chain in verify-release.ts.
+	 *
+	 * The split is not a preference, it is what each binary needs. Measured 2026-09-10 against
+	 * `datadog-agent_7.82.1-1_arm64.deb`: only the core `agent` links `libdatadog-agent-rtloader`, so only
+	 * that one has to be built here to get a Python-free binary. Everything else links neither rtloader nor
+	 * libpython and runs relocated to a bare path in a container that never built it.
+	 *
+	 * The trace-agent stays a build anyway, and the numbers are why. Stripped, this package's trace-agent is
+	 * 23,066,288 bytes against Datadog's 23,017,272, a difference of 49 KB or 0.2%. There is nothing to gain
+	 * by lifting a binary this package already reproduces, and the trace-agent is the one it exists to fix,
+	 * so its provenance is worth keeping.
+	 *
+	 * system-probe and security-agent are the opposite case. Building system-probe needs a Python 3.12 base
+	 * for dda, lxml headers, bazelisk under that exact name, and a kernel-header tree matched to the target,
+	 * because the eBPF objects have to match the kernels an operator runs. That is why Datadog precompiles
+	 * 26 of them and ships them at 42 MB, and it is not reproducible on a build runner in any useful sense.
+	 */
+	readonly from: BinarySource;
+	/** Invoke task that builds it. Meaningless for a `release` binary. */
 	readonly task: string;
 	/** Path under the source tree the task writes to, before the platform's executable suffix. */
 	readonly builtAt: string;
@@ -26,6 +51,16 @@ export interface AgentBinary {
 	readonly onlyOn?: readonly OS[];
 }
 
+/** The binaries this package compiles for one system. */
+export const builtFor = (target: Pick<Target, "os">): readonly AgentBinary[] =>
+	binariesFor(target).filter((b) => b.from === "build");
+
+/** The binaries this package lifts out of Datadog's signed release for one system. */
+export const extractedFor = (
+	target: Pick<Target, "os">
+): readonly AgentBinary[] =>
+	binariesFor(target).filter((b) => b.from === "release");
+
 /** The binaries that exist for one system, which is not always all of them. */
 export function binariesFor(
 	target: Pick<Target, "os">
@@ -36,6 +71,7 @@ export function binariesFor(
 export const BINARIES: readonly AgentBinary[] = [
 	{
 		shipsAs: "datadog-agent",
+		from: "build",
 		task: "agent.build",
 		builtAt: "bin/agent/agent",
 		// These three cost every Python integration and the `system.processes.*` family, and only the last
@@ -106,6 +142,7 @@ export const BINARIES: readonly AgentBinary[] = [
 	},
 	{
 		shipsAs: "trace-agent",
+		from: "build",
 		task: "trace-agent.build",
 		builtAt: "bin/trace-agent/trace-agent",
 		// Deliberately empty. TRACE_AGENT_TAGS carries neither python nor systemd, and
@@ -117,6 +154,7 @@ export const BINARIES: readonly AgentBinary[] = [
 	},
 	{
 		shipsAs: "system-probe",
+		from: "release",
 		task: "system-probe.build",
 		builtAt: "bin/system-probe/system-probe",
 		// Needs neither python nor rtloader: tasks/system_probe.py calls get_build_flags without them and
@@ -134,6 +172,7 @@ export const BINARIES: readonly AgentBinary[] = [
 	},
 	{
 		shipsAs: "security-agent",
+		from: "release",
 		task: "security-agent.build",
 		builtAt: "bin/security-agent/security-agent",
 		// `tasks/security_agent.py::build()` takes `build_tags` as a required positional, not as flags the

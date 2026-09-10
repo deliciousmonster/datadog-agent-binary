@@ -1,8 +1,13 @@
 import { spawn } from "node:child_process";
 import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
-import { AgentBinary, binariesFor, binaryFilename } from "./binaries.js";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
+import {
+	AgentBinary,
+	binariesFor,
+	builtFor,
+	binaryFilename,
+} from "./binaries.js";
 import { buildTree } from "./layout.js";
 import { logger } from "./log.js";
 import { Target } from "./targets.js";
@@ -261,7 +266,7 @@ export async function build({
 	const shipped: string[] = [];
 	// Not every binary exists on every system: system-probe is eBPF and Linux-only, security-agent has no
 	// macOS build. Asking for one that does not exist fails the whole build rather than shipping less.
-	for (const binary of binariesFor(target)) {
+	for (const binary of builtFor(target)) {
 		logger.info(`Building ${binary.shipsAs} for ${target.name}`);
 		await run(
 			"dda",
@@ -273,7 +278,55 @@ export async function build({
 		const from = join(sourceDir, `${binary.builtAt}${target.exe}`);
 		const to = join(resolve(outputDir), binaryFilename(binary, target));
 		await copyFile(from, to);
+		await stripBinary(to, target, env);
 		shipped.push(to);
 	}
 	return shipped;
+}
+
+/**
+ * Drop the debug symbols the build leaves behind, which Datadog's own release does not ship.
+ *
+ * Measured 2026-09-10 on linux-arm64. Unstripped, this package's core agent is 148,670,000 bytes against
+ * Datadog's 111,967,416 and its trace-agent 32,110,328 against 23,017,272, which reads as though we build
+ * something much larger. Stripped, the same two binaries are 110,485,040 and 23,066,288: the core agent
+ * comes out 1.5 MB *smaller* than Datadog's, which is the Python exclusion showing up, and the trace-agent
+ * lands within 49 KB, 0.2%. So the 45.8 MB per platform was never a difference in what was built. It was
+ * DWARF nobody ships and nobody reads.
+ *
+ * Safe against the CI assertion, which is the thing that would break: `verify-package.js` greps the packed
+ * binary for a package path, and Go keeps those in pclntab, which `strip` does not touch. The trace-agent
+ * carries 58 hits stripped against 106 unstripped, and the check asserts presence rather than a count.
+ * Datadog's own stripped trace-agent carries the same 58. Both stripped binaries still report `7.82.1`.
+ *
+ * A missing `strip` is not a build failure. The binary is correct either way and the cost is disk, so a
+ * toolchain without binutils ships a larger package rather than no package.
+ */
+async function stripBinary(
+	file: string,
+	target: Target,
+	env: NodeJS.ProcessEnv
+) {
+	// Windows PE debug data is not in a form GNU strip should be pointed at, and the MSVC-shaped toolchain
+	// a runner has is not guaranteed. Left alone rather than guessed at.
+	if (target.os === "windows") return;
+	const before = (await stat(file)).size;
+	const strip =
+		target.os === "macos" ? ["-S", file] : ["--strip-unneeded", file];
+	try {
+		await run("strip", strip, dirname(file), env);
+	} catch (error) {
+		logger.warn(
+			`Could not strip ${basename(file)}, shipping it with its debug symbols: ${
+				error instanceof Error ? error.message : String(error)
+			}`
+		);
+		return;
+	}
+	const after = (await stat(file)).size;
+	logger.info(
+		`Stripped ${basename(file)}: ${before} -> ${after} bytes, ${Math.round(
+			((before - after) / before) * 100
+		)}% smaller`
+	);
 }
