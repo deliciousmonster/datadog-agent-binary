@@ -12,7 +12,10 @@ import {
 	debugVarsUrl,
 	readDeliverySignal as readSignal,
 } from "./runtime/delivery.js";
-import { settings as processMetricSettings } from "./runtime/process-metrics.js";
+import {
+	settings as processMetricSettings,
+	startProcessSeries,
+} from "./runtime/process-metrics.js";
 import { untraceAgentProbes } from "./runtime/probe.js";
 import {
 	currentReaper,
@@ -69,6 +72,9 @@ const ports = {
 	receiver: resolvePort("DD_APM_RECEIVER_PORT", 8126),
 	expvar: resolvePort("DD_EXPVAR_PORT", 5000),
 	debug: resolvePort("DD_APM_DEBUG_PORT", 5012),
+	// Pinned for the same reason as expvar: this component sends its own process series here, so the sender
+	// and the listener have to come from one number rather than from two defaults that can drift apart.
+	dogstatsd: resolvePort("DD_DOGSTATSD_PORT", 8125),
 };
 
 // Every URL this module polls. probe.js already suppresses these at the call site; this is the public half,
@@ -156,14 +162,14 @@ const baseStatus = () => ({
 	// above are in both because the agent genuinely reads those. This is the plugin's own surface, so
 	// this is where the plugin says what it resolved.
 	//
-	// `emitting` is separate from `enabled` on purpose. Nothing schedules the series yet, so a status that
-	// reported only `enabled: true` would claim a feature that sends nothing. It says what is true.
+	// `emitting` is separate from `enabled` on purpose. It is what this thread's timer is actually doing, so
+	// a thread that has not started yet, or one whose settings turned the series off, cannot report a
+	// feature that sends nothing as if it were sending.
 	processMetrics: {
 		...processMetricSettings(),
 		emitting: false,
 		detail:
-			"configured but not scheduled: no cadence is wired yet, so this component emits no " +
-			"harper.processes.* series. The settings above are what it would use.",
+			"startup has not run on this thread, so no cadence is scheduled here",
 	},
 	processes: [],
 });
@@ -176,6 +182,54 @@ const NOT_STARTED = {
 		`a directory it loaded by scanning componentsRoot never reaches it. Otherwise this thread has not ` +
 		`run startup yet, or it ran under a deploy validation load, which starts nothing`,
 };
+
+/** This thread's series timer, kept so a second startup on the same thread cannot leave two of them running. */
+let series;
+
+/**
+ * Start this thread's `harper.processes.*` timer and describe what it will do, for the status endpoint.
+ *
+ * The members are read per tick from the status this startup produced, through `nodeProcess`, so a pid the
+ * guard replaced under chaos is measured as the process the node runs now rather than as the one it started.
+ * Only the claim holder sends; every other thread's timer costs a file read.
+ */
+function scheduleProcessSeries(dir) {
+	const resolved = processMetricSettings();
+	if (!resolved.enabled)
+		return {
+			...resolved,
+			emitting: false,
+			detail: `off: DD_HARPER_PROCESS_METRICS_ENABLED is ${process.env.DD_HARPER_PROCESS_METRICS_ENABLED}`,
+		};
+	series?.stop();
+	series = startProcessSeries({
+		pidDir: dir,
+		holder: `${process.pid}.${threadId}`,
+		port: ports.dogstatsd,
+		log,
+		members: () => [
+			{ name: "harper", self: true },
+			...AGENTS.map((agent) => {
+				const state = nodeProcess(statusProcess(agent.name), dir);
+				return { name: agent.name, pid: state?.pid };
+			}).filter((m) => Number.isInteger(m.pid)),
+		],
+	});
+	return {
+		...resolved,
+		emitting: true,
+		detail:
+			`sending harper.processes.* to DogStatsD on 127.0.0.1:${ports.dogstatsd} every ` +
+			`${series.intervalSeconds}s, from whichever thread holds the claim in ${dir}`,
+	};
+}
+
+/** The started state for one agent on this thread, or undefined before startup has produced one. */
+const statusProcess = (name) =>
+	startedProcesses.find((state) => state?.name === name);
+
+/** What startup left running on this thread, read by the series timer rather than captured by it. */
+let startedProcesses = [];
 
 // Never rejects: a throw out of handleApplication plants an ErrorResource at the component's root path,
 // which is worse than running without telemetry and saying so.
@@ -257,8 +311,10 @@ async function startAgents(scope) {
 			(agent, index) =>
 				states.get(agent.name) ?? unstarted(agent, failures[index])
 		);
+		startedProcesses = status.processes;
 		if (started.reaper) status.reaper = started.reaper;
 		if (started.report?.length) status.supervisionReport = started.report;
+		status.processMetrics = scheduleProcessSeries(runtime.paths.pidDir);
 	} catch (error) {
 		status.error = error.message;
 		log.error(

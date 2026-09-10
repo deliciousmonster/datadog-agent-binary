@@ -9,7 +9,8 @@
 // tag set, cadence and aggregation while being indistinguishable from the real check, so anyone who later
 // installs the Python integration gets two sources silently merged.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 /**
  * What this node sends, and how often.
@@ -75,7 +76,7 @@ export function applyPatterns(metrics, { include = [], exclude = [] } = {}) {
 }
 
 /** Datadog's own default cadence for a check, so the number an operator knows carries over. */
-const DEFAULT_INTERVAL_SECONDS = 15;
+export const DEFAULT_INTERVAL_SECONDS = 15;
 
 /** Bytes per /proc kB field. */
 const KB = 1024;
@@ -194,5 +195,169 @@ export function processSeries(members, options) {
 		measured: samples.filter((s) => s !== null).length,
 		asked: members.length,
 		lines: dogstatsdLines(prefix, metrics, { ...tags, process_group: group }),
+	};
+}
+
+/** The emitter claim lives beside the guard's own locks, so one directory holds everything this node arbitrates. */
+export const CLAIM_FILE = "process-metrics.claim";
+
+/**
+ * How long a claim survives without a refresh. Three cadences rather than one, so an emitter that misses a
+ * tick to a slow read does not hand the series to a second thread and double every gauge for one interval.
+ */
+export const claimStaleMs = (intervalSeconds) => intervalSeconds * 3000;
+
+/**
+ * Which thread sends. Harper runs many worker threads and every one of them loads this component, so an
+ * ungated timer would emit the same gauges once per thread and multiply `number` and `mem.rss` by the thread
+ * count. The guard already arbitrates the agents this way; this is the same shape for the series.
+ *
+ * A claim is a file holding `<holder> <timestamp>`. The holder refreshes it on every tick, which is what
+ * makes takeover automatic: a thread that dies stops refreshing, and after `staleMs` the next tick from any
+ * other thread takes it. There is no unlock path for that reason.
+ *
+ * @param {object} options
+ * @param {string} options.dir @param {string} options.holder @param {number} options.staleMs
+ * @param {number} [options.now] @param {typeof readFileSync} [options.read] @param {typeof writeFileSync} [options.write]
+ * @returns {boolean} whether the caller may emit this tick
+ */
+export function claimEmitter({
+	dir,
+	holder,
+	staleMs,
+	now = Date.now(),
+	read = readFileSync,
+	write = writeFileSync,
+}) {
+	const file = join(dir, CLAIM_FILE);
+	let held;
+	try {
+		held = String(read(file, "utf-8")).trim().split(/\s+/);
+	} catch {
+		// No claim yet, or one this thread cannot read. Either way nobody demonstrably holds it.
+		held = [];
+	}
+	const [heldBy, stamp] = held;
+	const at = Number(stamp);
+	// A stamp ahead of `now` reads as live, not as expired. Every claimant is a worker thread inside one
+	// Harper process and they share a clock, so the only way to see the future is a clock correction under a
+	// living holder; calling that stale would hand the series to a second sender while the first still runs.
+	// It resolves itself on the holder's next tick, which restamps with the corrected clock.
+	const live = Number.isFinite(at) && now - at < staleMs;
+	if (live && heldBy !== holder) return false;
+	try {
+		write(file, `${holder} ${now}\n`);
+	} catch {
+		// An unwritable pidDir is the guard's problem to report, and it already does. Emitting anyway would
+		// put every thread on the wire, which is the one outcome the claim exists to prevent.
+		return false;
+	}
+	return true;
+}
+
+/**
+ * Send one reading. UDP, because that is what DogStatsD listens on and what every tracer's runtime metrics
+ * already use; a dropped packet costs one interval of one gauge and nothing retries it, which is the right
+ * trade for a level that is resent 15 seconds later.
+ *
+ * @param {readonly string[]} lines
+ * @param {{ port: number, host?: string, socket?: { send: Function, close: Function } }} options
+ * @returns {Promise<number>} lines actually handed to the socket
+ */
+export async function sendDogstatsd(
+	lines,
+	{ port, host = "127.0.0.1", socket }
+) {
+	if (lines.length === 0) return 0;
+	const own = socket ?? (await import("node:dgram")).createSocket("udp4");
+	try {
+		// One packet, newline-separated: DogStatsD reads a multi-metric payload, and one send beats six.
+		const payload = Buffer.from(lines.join("\n"));
+		await new Promise((resolve, reject) =>
+			own.send(payload, port, host, (error) =>
+				error ? reject(error) : resolve(undefined)
+			)
+		);
+		return lines.length;
+	} finally {
+		if (!socket) own.close();
+	}
+}
+
+/**
+ * The cadence. One timer per thread, gated by the claim above, so the node emits one series however many
+ * threads Harper runs.
+ *
+ * `members()` is called per tick rather than captured: the pids it reports change under chaos, and a captured
+ * list would keep measuring a process the guard has already replaced.
+ *
+ * @param {object} options
+ * @param {() => {name: string, pid?: number, self?: boolean}[]} options.members
+ * @param {string} options.pidDir @param {string} options.holder @param {number} options.port
+ * @param {Record<string,string>} [options.tags] @param {import("./log.js").Log} [options.log]
+ * @param {NodeJS.ProcessEnv} [options.env] @param {(fn: () => void, ms: number) => any} [options.setTimer]
+ * @param {typeof sendDogstatsd} [options.send]
+ * @returns {{ stop: () => void, tick: () => Promise<'sent'|'not-owner'|'nothing'|'failed'>, intervalSeconds: number }}
+ */
+export function startProcessSeries({
+	members,
+	pidDir,
+	holder,
+	port,
+	tags = {},
+	log,
+	env = process.env,
+	setTimer = setInterval,
+	send = sendDogstatsd,
+}) {
+	const resolved = settings(env);
+	const groups = () => {
+		const all = members();
+		return [
+			["harper", all.filter((m) => m.self)],
+			["datadog-agents", all.filter((m) => !m.self)],
+		].filter(([, m]) => m.length > 0);
+	};
+	const tick = async () => {
+		if (
+			!claimEmitter({
+				dir: pidDir,
+				holder,
+				staleMs: claimStaleMs(resolved.intervalSeconds),
+			})
+		)
+			return "not-owner";
+		const lines = groups().flatMap(
+			([group, m]) =>
+				processSeries(m, {
+					group,
+					tags,
+					include: resolved.include,
+					exclude: resolved.exclude,
+				}).lines
+		);
+		if (lines.length === 0) return "nothing";
+		try {
+			await send(lines, { port });
+			return "sent";
+		} catch (error) {
+			// Once per failure, not once per tick forever: a DogStatsD that is down stays down for a while,
+			// and a line a tick would bury the node's own logs under this component's retries.
+			log?.warn?.(
+				`Datadog supervisor: could not send the harper.processes.* series to DogStatsD on ` +
+					`127.0.0.1:${port}: ${error instanceof Error ? error.message : String(error)}`
+			);
+			return "failed";
+		}
+	};
+	const timer = setTimer(() => {
+		tick().catch(() => {});
+	}, resolved.intervalSeconds * 1000);
+	// A metrics timer must not be the reason a worker thread stays up.
+	timer?.unref?.();
+	return {
+		stop: () => clearInterval(timer),
+		tick,
+		intervalSeconds: resolved.intervalSeconds,
 	};
 }

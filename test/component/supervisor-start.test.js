@@ -154,12 +154,19 @@ test("the rendered datadog.yaml keeps the credentials off disk and pins what the
 				/^process_config:\n  process_collection:\n    enabled: true$/m,
 				"process collection is not enabled in the rendered config"
 			);
-			// Measured on 7.82.1: the environment outranks the file, so a written line can only ever restate
-			// DD_DOGSTATSD_PORT or the agent's own default, and nothing here polls either port.
+			// cmd_port stays out for the reason every unprobed port does: the environment outranks the file,
+			// so a written line can only restate the agent's own default and nothing here reads that port.
 			assert.doesNotMatch(
 				rendered,
-				/^\s*(dogstatsd_port|cmd_port)\s*:/m,
+				/^\s*cmd_port\s*:/m,
 				"a port line this component never probes cannot change what the agent binds"
+			);
+			// dogstatsd_port is the exception, and it earns it: this component sends its own
+			// harper.processes.* series to that port, so sender and listener have to come from one number.
+			assert.match(
+				rendered,
+				/^dogstatsd_port: 8125$/m,
+				"the port this component sends its own series to must be pinned, not left to a default"
 			);
 			assert.match(
 				rendered,

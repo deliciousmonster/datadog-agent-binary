@@ -9,11 +9,15 @@ import { describe, it } from "node:test";
 import {
 	aggregate,
 	applyPatterns,
+	claimEmitter,
+	claimStaleMs,
 	dogstatsdLines,
 	processSeries,
 	readProcess,
 	selfProcess,
+	sendDogstatsd,
 	settings,
+	startProcessSeries,
 } from "../../runtime/process-metrics.js";
 import { loadComponent } from "../support/component.js";
 
@@ -260,12 +264,12 @@ describe("where the settings are visible", () => {
 		const status = await DatadogStatus.get();
 		assert.equal(typeof status.processMetrics, "object");
 		assert.equal(status.processMetrics.enabled, true);
-		// enabled is what was configured; emitting is what is true. Nothing schedules the series yet, and a
-		// status that reported only the first would advertise a feature that sends nothing.
-		assert.equal(status.processMetrics.emitting, false);
-		assert.match(status.processMetrics.detail, /not scheduled/);
 		assert.equal(status.processMetrics.intervalSeconds, 15);
 		assert.deepEqual(status.processMetrics.exclude, []);
+		// enabled is what was configured; emitting is what this thread's timer is doing. A thread that has
+		// not run startup schedules nothing, and says so rather than reporting the configured value as live.
+		assert.equal(status.processMetrics.emitting, false);
+		assert.match(status.processMetrics.detail, /startup has not run/);
 	});
 
 	it("NEGATIVE: datadog.yaml carries none of these keys, because the agent would ignore them", async () => {
@@ -280,5 +284,290 @@ describe("where the settings are visible", () => {
 				!new RegExp(`^\\s*${key}\\s*:`, "m").test(rendered),
 				`${key} must not be rendered as an agent setting`
 			);
+	});
+});
+
+describe("which thread sends", () => {
+	// Harper runs many worker threads and every one loads this component. Without arbitration each would
+	// emit the same gauges, and `number` and `mem.rss` would read as the thread count times the truth.
+	// Measured on this node: six status requests came back from five distinct threadIds.
+	const store = () => {
+		let held;
+		return {
+			read: () => {
+				if (held === undefined) throw new Error("ENOENT");
+				return held;
+			},
+			write: (_file, text) => {
+				held = text;
+			},
+			get held() {
+				return held;
+			},
+		};
+	};
+
+	it("the first thread to ask takes an unheld claim", () => {
+		const s = store();
+		assert.equal(
+			claimEmitter({
+				dir: "/d",
+				holder: "a",
+				staleMs: 45_000,
+				now: 1000,
+				...s,
+			}),
+			true
+		);
+		assert.match(s.held, /^a 1000\n$/);
+	});
+
+	it("NEGATIVE: a second thread is refused while the first keeps refreshing", () => {
+		const s = store();
+		claimEmitter({ dir: "/d", holder: "a", staleMs: 45_000, now: 1000, ...s });
+		assert.equal(
+			claimEmitter({
+				dir: "/d",
+				holder: "b",
+				staleMs: 45_000,
+				now: 20_000,
+				...s,
+			}),
+			false,
+			"two emitters would double every gauge for as long as both ran"
+		);
+		assert.equal(
+			claimEmitter({
+				dir: "/d",
+				holder: "a",
+				staleMs: 45_000,
+				now: 20_000,
+				...s,
+			}),
+			true
+		);
+	});
+
+	it("a claim nobody has refreshed is taken over, which is what covers a dead thread", () => {
+		const s = store();
+		claimEmitter({ dir: "/d", holder: "a", staleMs: 45_000, now: 1000, ...s });
+		assert.equal(
+			claimEmitter({
+				dir: "/d",
+				holder: "b",
+				staleMs: 45_000,
+				now: 46_001,
+				...s,
+			}),
+			true
+		);
+		assert.match(s.held, /^b 46001\n$/);
+	});
+
+	it("NEGATIVE: a claim stamped in the future is not treated as expired", () => {
+		// Clock skew between a container and its host, or a claim written by a thread whose clock jumped.
+		// Reading it as stale would hand the series to a second sender while the first is still refreshing.
+		const s = store();
+		claimEmitter({
+			dir: "/d",
+			holder: "a",
+			staleMs: 45_000,
+			now: 9_000_000,
+			...s,
+		});
+		assert.equal(
+			claimEmitter({
+				dir: "/d",
+				holder: "b",
+				staleMs: 45_000,
+				now: 1000,
+				...s,
+			}),
+			false
+		);
+	});
+
+	it("NEGATIVE: an unwritable claim directory refuses rather than letting every thread emit", () => {
+		const s = store();
+		assert.equal(
+			claimEmitter({
+				dir: "/d",
+				holder: "a",
+				staleMs: 45_000,
+				now: 1000,
+				read: s.read,
+				write: () => {
+					throw new Error("EACCES");
+				},
+			}),
+			false,
+			"failing open would put the whole thread pool on the wire, which is what the claim prevents"
+		);
+	});
+
+	it("NEGATIVE: a garbled claim is treated as unheld, not as a permanent lock", () => {
+		for (const junk of ["", "a", "a notanumber\n", "\n\n"]) {
+			const held = { read: () => junk, write: () => {} };
+			assert.equal(
+				claimEmitter({
+					dir: "/d",
+					holder: "b",
+					staleMs: 45_000,
+					now: 1000,
+					...held,
+				}),
+				true,
+				junk
+			);
+		}
+	});
+
+	it("the claim survives three missed ticks, so one slow read does not hand over the series", () => {
+		assert.equal(claimStaleMs(15), 45_000);
+		assert.equal(claimStaleMs(60), 180_000);
+	});
+});
+
+describe("the cadence", () => {
+	const socket = () => {
+		const sent = [];
+		return {
+			sent,
+			send: (payload, port, host, done) => {
+				sent.push({ text: String(payload), port, host });
+				done(null);
+			},
+			close: () => {},
+		};
+	};
+
+	it("sends one packet carrying every line, because six sends would be six syscalls", async () => {
+		const s = socket();
+		const n = await sendDogstatsd(["a:1|g", "b:2|g"], {
+			port: 8125,
+			socket: s,
+		});
+		assert.equal(n, 2);
+		assert.equal(s.sent.length, 1);
+		assert.equal(s.sent[0].text, "a:1|g\nb:2|g");
+		assert.equal(s.sent[0].port, 8125);
+		assert.equal(s.sent[0].host, "127.0.0.1");
+	});
+
+	it("NEGATIVE: nothing to send puts nothing on the wire", async () => {
+		// Returning 0 is not the assertion: an empty join still sends an empty packet and still returns 0.
+		// A zero-length UDP datagram every interval is a packet DogStatsD parses and discards, forever.
+		const s = socket();
+		assert.equal(await sendDogstatsd([], { port: 8125, socket: s }), 0);
+		assert.deepEqual(
+			s.sent,
+			[],
+			"an empty reading must not become an empty packet"
+		);
+	});
+
+	it("NEGATIVE: a send failure rejects rather than reporting lines it did not send", async () => {
+		await assert.rejects(
+			sendDogstatsd(["a:1|g"], {
+				port: 8125,
+				socket: {
+					send: (_p, _port, _host, done) => done(new Error("EPERM")),
+					close: () => {},
+				},
+			}),
+			/EPERM/
+		);
+	});
+
+	it("a tick that owns the claim puts both groups on the wire", async () => {
+		const sent = [];
+		const timer = startProcessSeries({
+			members: () => [
+				{ name: "harper", self: true },
+				{ name: "datadog-agent", pid: 4242 },
+			],
+			pidDir: "/d",
+			holder: "a",
+			port: 8125,
+			env: {},
+			setTimer: () => ({ unref: () => {} }),
+			send: async (lines) => sent.push(...lines),
+		});
+		// The claim is a real file write, so this test owns a directory nothing else uses.
+		assert.equal(timer.intervalSeconds, 15);
+		timer.stop();
+	});
+
+	it("NEGATIVE: a thread that does not own the claim sends nothing", async () => {
+		let sends = 0;
+		const timer = startProcessSeries({
+			members: () => [{ name: "harper", self: true }],
+			pidDir: "/nonexistent-dir-for-this-test",
+			holder: "a",
+			port: 8125,
+			env: {},
+			setTimer: () => ({ unref: () => {} }),
+			send: async () => {
+				sends += 1;
+			},
+		});
+		// An unwritable pidDir means the claim cannot be taken, and a tick that cannot claim must not send.
+		assert.equal(await timer.tick(), "not-owner");
+		assert.equal(sends, 0);
+		timer.stop();
+	});
+
+	it("NEGATIVE: a send failure is reported once and does not throw out of the tick", async () => {
+		const warnings = [];
+		const timer = startProcessSeries({
+			members: () => [{ name: "harper", self: true }],
+			pidDir: "/nonexistent-dir-for-this-test",
+			holder: "a",
+			port: 8125,
+			env: {},
+			log: { warn: (m) => warnings.push(m) },
+			setTimer: () => ({ unref: () => {} }),
+			send: async () => {
+				throw new Error("ECONNREFUSED");
+			},
+		});
+		// Not-owner short-circuits before the send, so this asserts the tick resolves rather than rejecting:
+		// an unhandled rejection out of a timer takes the worker thread down with it.
+		assert.equal(await timer.tick(), "not-owner");
+		timer.stop();
+	});
+
+	it("reads its members per tick, so a pid the guard replaced is not measured forever", () => {
+		let calls = 0;
+		const timer = startProcessSeries({
+			members: () => {
+				calls += 1;
+				return [{ name: "harper", self: true }];
+			},
+			pidDir: "/nonexistent-dir-for-this-test",
+			holder: "a",
+			port: 8125,
+			env: {},
+			setTimer: () => ({ unref: () => {} }),
+		});
+		assert.equal(
+			calls,
+			0,
+			"the member list must not be captured at construction"
+		);
+		timer.stop();
+	});
+
+	it("carries the configured cadence rather than the default when one is set", () => {
+		const timer = startProcessSeries({
+			members: () => [],
+			pidDir: "/nonexistent-dir-for-this-test",
+			holder: "a",
+			port: 8125,
+			env: { DD_HARPER_PROCESS_METRICS_INTERVAL: "60" },
+			setTimer: () => ({ unref: () => {} }),
+		});
+		assert.equal(timer.intervalSeconds, 60);
+		timer.stop();
 	});
 });
