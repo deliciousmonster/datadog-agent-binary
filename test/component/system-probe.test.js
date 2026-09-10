@@ -11,7 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-	eBPFPrivilege,
+	probePrivilege,
 	renderSecurityAgentYaml,
 	renderSystemProbeYaml,
 	settings,
@@ -174,7 +174,7 @@ test("NEGATIVE: runtime security does not turn compliance scanning on with it", 
 });
 
 test("root can load an eBPF program", () => {
-	const verdict = eBPFPrivilege({
+	const verdict = probePrivilege({
 		read: () => "CapEff:\t0000000000000000\n",
 		uid: () => 0,
 		platform: "linux",
@@ -188,7 +188,7 @@ test("root can load an eBPF program", () => {
 test("CAP_SYS_ADMIN without root is enough, and so is CAP_BPF alone", () => {
 	const mask = (bit) => (1n << BigInt(bit)).toString(16).padStart(16, "0");
 	for (const bit of [21, 39]) {
-		const verdict = eBPFPrivilege({
+		const verdict = probePrivilege({
 			read: () => `CapEff:\t${mask(bit)}\n`,
 			uid: () => 1000,
 			platform: "linux",
@@ -200,7 +200,7 @@ test("CAP_SYS_ADMIN without root is enough, and so is CAP_BPF alone", () => {
 // The failure this exists to replace: a restart loop whose logs say `operation not permitted` and nothing
 // about which capability is missing.
 test("NEGATIVE: an unprivileged process is refused and told what to add", () => {
-	const verdict = eBPFPrivilege({
+	const verdict = probePrivilege({
 		read: () => "CapEff:\t0000000000000400\n",
 		uid: () => 1000,
 		platform: "linux",
@@ -213,17 +213,53 @@ test("NEGATIVE: an unprivileged process is refused and told what to add", () => 
 
 // Unknown is not permission. A container that publishes no CapEff line must not read as capable, because
 // the reply an operator gets would then be "nothing is wrong" from a node that cannot start the process.
-// eBPF is Linux. A macOS or Windows node that set the flag has to hear that rather than a capability
-// message about a facility its kernel does not have.
-test("NEGATIVE: a system with no eBPF at all says so, rather than reporting a missing capability", () => {
-	const verdict = eBPFPrivilege({ platform: "darwin" });
+// Three platforms, three mechanisms, and reporting the wrong one sends an operator to fix something that
+// was never the problem. macOS uses no eBPF at all, so a capability message there is nonsense.
+test("macOS is judged on a BPF device, not on capabilities it does not use", () => {
+	const able = probePrivilege({
+		platform: "darwin",
+		uid: () => 1000,
+		openBpf: () => undefined,
+	});
+	assert.equal(able.able, true);
+	assert.match(able.why, /bpf/i);
+
+	const denied = probePrivilege({
+		platform: "darwin",
+		uid: () => 1000,
+		openBpf: () => {
+			const e = new Error("permission denied");
+			e.code = "EACCES";
+			throw e;
+		},
+	});
+	assert.equal(denied.able, false);
+	assert.match(denied.why, /access_bpf/);
+	assert.doesNotMatch(
+		denied.why,
+		/CAP_|eBPF program/,
+		"told a macOS operator to add a Linux capability"
+	);
+});
+
+// Windows is unknown rather than refused: nothing here can tell whether the drivers are installed without
+// opening one, and opening a device during a status read is a side effect a read should not take.
+test("Windows reports the drivers as unknown, not as a capability that is missing", () => {
+	const verdict = probePrivilege({ platform: "win32" });
+	assert.equal(verdict.able, null);
+	assert.match(verdict.why, /ddnpm/);
+	assert.match(verdict.why, /ddprocmon/);
+	assert.doesNotMatch(verdict.why, /CAP_|access_bpf/);
+});
+
+test("NEGATIVE: a platform with no system-probe at all says so", () => {
+	const verdict = probePrivilege({ platform: "aix" });
 	assert.equal(verdict.able, false);
-	assert.match(verdict.why, /Linux facility/);
-	assert.doesNotMatch(verdict.why, /CAP_/);
+	assert.match(verdict.why, /no system-probe for aix/);
 });
 
 test("NEGATIVE: capabilities that cannot be read are not treated as capabilities that are held", () => {
-	const verdict = eBPFPrivilege({
+	const verdict = probePrivilege({
 		read: () => {
 			throw new Error("no /proc here");
 		},

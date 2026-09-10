@@ -24,7 +24,7 @@ import {
 	startProcessSeries,
 } from "./runtime/process-metrics.js";
 import { untraceAgentProbes } from "./runtime/probe.js";
-import { eBPFPrivilege } from "./runtime/system-probe.js";
+import { probePrivilege } from "./runtime/system-probe.js";
 import {
 	currentReaper,
 	nodeProcess,
@@ -197,8 +197,11 @@ export const readDeliverySignal = (port = ports.debug) =>
 function probeStatus(probes, ebpfDir) {
 	const reasons = [];
 	if (probes.systemProbe) {
-		const privilege = eBPFPrivilege();
-		if (!privilege.able) reasons.push(privilege.why);
+		const privilege = probePrivilege();
+		// `able: null` is Windows: unknown rather than refused, because nothing here can tell whether the
+		// drivers are installed without opening one. Reported as a blocker either way, since an operator
+		// who has not installed them needs to read it.
+		if (privilege.able !== true) reasons.push(privilege.why);
 		if (!ebpfDir)
 			reasons.push(
 				`no precompiled eBPF objects were found: ${PACKAGE_NAME}-probe-<platform> is what ships them, ` +

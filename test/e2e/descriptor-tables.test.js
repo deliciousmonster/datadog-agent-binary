@@ -13,6 +13,7 @@ const {
 	TARGETS,
 	BINARIES,
 	binariesFor,
+	packagesFor,
 	currentTarget,
 } = require("../support/generator.js");
 const { findTarget } = require(
@@ -22,14 +23,21 @@ const { findTarget } = require(
 let workDir;
 let packageDir;
 
-// Runs the real generator in an isolated copy. Every assertion below iterates the binaries this system
-// actually has, so a code path that assumes one binary fails here rather than at publish. It is
-// binariesFor(target) and not BINARIES because system-probe is Linux-only and security-agent has no macOS
-// build: a package that never carried them must not be failed for missing them.
+// Runs the real generator in an isolated copy. Every assertion below iterates the packages this system
+// actually publishes and the binaries each one carries, so a code path that assumes one binary, or one
+// package, fails here rather than at publish. Not BINARIES: security-agent has no macOS build, and a
+// package that never carried it must not be failed for missing it.
 before(() => {
 	({ workDir } = generatePackages({ prefix: "ddab-descriptors-" }));
 	packageDir = path.join(workDir, "npm", currentTarget().name);
 });
+
+/** Every package this system publishes, paired with the directory the generator staged it in. */
+const staged = () =>
+	packagesFor(currentTarget()).map((pkg) => ({
+		pkg,
+		dir: path.join(workDir, "npm", pkg.dirName),
+	}));
 
 after(() => fs.rmSync(workDir, { recursive: true, force: true }));
 
@@ -39,24 +47,49 @@ test("every binary this system has is packaged, not just the first", () => {
 		mine.length > 1,
 		"the table has collapsed to one entry; this check is now vacuous"
 	);
-	for (const binary of mine) {
-		const shipped = path.join(
-			packageDir,
-			"bin",
-			`${binary.shipsAs}${currentTarget().exe}`
-		);
-		assert.ok(
-			fs.existsSync(shipped),
-			`${binary.shipsAs} was not copied into the platform package`
-		);
-	}
+	const packaged = [];
+	for (const { pkg, dir } of staged())
+		for (const binary of pkg.binaries) {
+			const shipped = path.join(
+				dir,
+				"bin",
+				`${binary.shipsAs}${currentTarget().exe}`
+			);
+			assert.ok(
+				fs.existsSync(shipped),
+				`${binary.shipsAs} was not copied into ${pkg.dirName}`
+			);
+			packaged.push(binary.shipsAs);
+		}
+	// Across the packages, not within one: the split means no single package carries them all, and a binary
+	// that fell out of both would otherwise pass every per-package check above.
+	assert.deepEqual(
+		packaged.sort(),
+		mine.map((b) => b.shipsAs).sort(),
+		"a binary this system has is in no package at all"
+	);
 });
 
-test("the platform package resolves each binary by name", () => {
-	const pkg = require(path.join(packageDir, "index.js"));
-	for (const binary of binariesFor(currentTarget())) {
-		const expected = `${binary.shipsAs}${currentTarget().exe}`;
-		assert.equal(path.basename(pkg.getBinaryPath(binary.shipsAs)), expected);
+test("each package resolves the binaries it carries by name", () => {
+	for (const { pkg, dir } of staged()) {
+		const module = require(path.join(dir, "index.js"));
+		for (const binary of pkg.binaries) {
+			const expected = `${binary.shipsAs}${currentTarget().exe}`;
+			assert.equal(
+				path.basename(module.getBinaryPath(binary.shipsAs)),
+				expected,
+				`${pkg.dirName} resolved ${binary.shipsAs} to the wrong file`
+			);
+		}
+		// And refuses the ones it does not carry, so a caller cannot be handed a path into the other
+		// package that nothing put a binary at.
+		for (const other of binariesFor(currentTarget()))
+			if (!pkg.binaries.includes(other))
+				assert.throws(
+					() => module.getBinaryPath(other.shipsAs),
+					/Unknown binary/,
+					`${pkg.dirName} answered for ${other.shipsAs}, which it does not ship`
+				);
 	}
 });
 
@@ -172,19 +205,25 @@ test("the table ships the four binaries the agent is, not the two it was", () =>
 });
 
 test("a binary that is not cross-platform says so, and the filter honours it", () => {
+	// system-probe exists on all three, by three mechanisms: eBPF on Linux, packet capture on macOS
+	// (tracer_darwin.go), kernel drivers on Windows (ddnpm, ddprocmon). It carried onlyOn: ["linux"] once,
+	// on an inference from a skipped build_object_files that is true only where the probes are eBPF.
 	const probe = BINARIES.find((b) => b.shipsAs === "system-probe");
-	// Linux only, and deliberately: tasks/system_probe.py's build() skips build_object_files off Linux, so a
-	// macOS artifact is a binary with no eBPF in it. Shipping that would imply a capability it lacks.
-	assert.deepEqual(probe.onlyOn, ["linux"]);
+	assert.equal(probe.onlyOn, undefined, "system-probe exists on every target");
+
+	// security-agent is Linux and Windows. It compiles on darwin (main_nix.go is !windows) and there is no
+	// eventmonitor_darwin.go, so a macOS one would start with nothing to talk to.
 	const security = BINARIES.find((b) => b.shipsAs === "security-agent");
 	assert.deepEqual(security.onlyOn, ["linux", "windows"]);
 
 	const shipsAs = (os) => binariesFor({ os }).map((b) => b.shipsAs);
-	assert.ok(shipsAs("linux").includes("system-probe"));
-	assert.ok(!shipsAs("macos").includes("system-probe"));
+	for (const os of ["linux", "macos", "windows"])
+		assert.ok(
+			shipsAs(os).includes("system-probe"),
+			`${os} ships no system-probe`
+		);
 	assert.ok(!shipsAs("macos").includes("security-agent"));
 	assert.ok(shipsAs("windows").includes("security-agent"));
-	assert.ok(!shipsAs("windows").includes("system-probe"));
 });
 
 test("NEGATIVE: the two that are cross-platform stay on every system", () => {

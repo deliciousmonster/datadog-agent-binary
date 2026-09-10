@@ -21,6 +21,8 @@ const EXPECTED = {
 	"windows-x86_64": { os: "win32", cpu: "x64" },
 	"probe-linux-x86_64": { os: "linux", cpu: "x64" },
 	"probe-linux-arm64": { os: "linux", cpu: "arm64" },
+	"probe-macos-arm64": { os: "darwin", cpu: "arm64" },
+	"probe-windows-x86_64": { os: "win32", cpu: "x64" },
 };
 
 let workDir;

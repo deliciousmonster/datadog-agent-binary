@@ -37,6 +37,18 @@ export interface AgentBinary {
 	 * because the Linux route does not reach it.
 	 */
 	readonly buildOn?: readonly OS[];
+	/**
+	 * Whether this binary ships in the opt-in probe package rather than the base one.
+	 *
+	 * Separate from `from`, and the two were conflated once. The split used to key on where a binary came
+	 * from, because on Linux the lifted pair and the opt-in pair happened to be the same two binaries. They
+	 * are answers to different questions: `from` is where the bytes come from, and this is whether an
+	 * operator has to ask for them. system-probe and security-agent are opt-in because of what they are -
+	 * privileged, and inert until a host is configured for them - not because of where they were built. Key
+	 * the split on source and a Windows system-probe, which is built rather than lifted, lands in the base
+	 * package and is installed on every Windows node that wanted neither.
+	 */
+	readonly optional?: boolean;
 	/** Invoke task that builds it. Meaningless for a `release` binary. */
 	readonly task: string;
 	/** Path under the source tree the task writes to, before the platform's executable suffix. */
@@ -77,6 +89,16 @@ export const extractedFor = (
 	target: Pick<Target, "os">
 ): readonly AgentBinary[] =>
 	binariesFor(target).filter((b) => sourceOf(b, target) === "release");
+
+/** The binaries the base package carries: what every install gets. */
+export const baseBinaries = (
+	target: Pick<Target, "os">
+): readonly AgentBinary[] => binariesFor(target).filter((b) => !b.optional);
+
+/** The binaries the opt-in probe package carries, which an operator installs by name. */
+export const probeBinaries = (
+	target: Pick<Target, "os">
+): readonly AgentBinary[] => binariesFor(target).filter((b) => b.optional);
 
 /** The binaries that exist for one system, which is not always all of them. */
 export function binariesFor(
@@ -182,22 +204,26 @@ export const BINARIES: readonly AgentBinary[] = [
 		// day.
 		mandatoryArgs: [],
 		argsOverride: "DD_SYSTEM_PROBE_BUILD_ARGS",
+		optional: true,
 		requiredSymbol: "datadog-agent/cmd/system-probe",
-		// Linux only, and for two different reasons that were once recorded as one.
+		// Every system, and by three different mechanisms. Recorded as Linux-only once, on an inference
+		// that turned out to be wrong on both of the others.
 		//
-		// macOS: `tasks/system_probe.py::build()` skips `build_object_files` off Linux, so a macOS artifact
-		// is a binary with no eBPF in it. Present, startable, and unable to do the thing it exists for.
+		// Linux: eBPF, loaded from the 26 precompiled objects the probe package ships.
 		//
-		// Windows: upstream does build one (`cmd/system-probe/main_windows.go` and `windows/service` at
-		// 7.82.1), so this is a capability not shipped rather than one that does not exist. It reaches the
-		// kernel through two signed drivers, not eBPF: `pkg/network/driver/handle.go:26` opens `\\.\ddnpm`
-		// and `pkg/windowsdriver/procmon/procmon.go:51` opens `\\.\ddprocmon`. Those arrive in Datadog's
-		// MSI and are installed as kernel drivers, which needs administrator rights and a signature chain an
-		// npm package has no way to satisfy. Shipping the binary alone would put a system-probe.exe on a
-		// Windows node that opens a device nothing created and does nothing, which is the failure this
-		// package keeps refusing to ship. If Windows NPM is ever wanted, the route is the MSI's drivers
-		// installed alongside, and the extraction step would need to read an MSI rather than a .deb.
-		onlyOn: ["linux"],
+		// macOS: no eBPF at all, so the absence of objects there costs nothing. `pkg/network/tracer/
+		// tracer_darwin.go` is a full Tracer with DNS and connection tracking, and
+		// `connection/ebpfless_tracer_darwin.go` is the packet-capture source under it; traceroute states
+		// outright that no driver is needed. The earlier note here read a skipped `build_object_files` as a
+		// binary with no probes in it, which is true only where the probes are eBPF. Built rather than
+		// lifted, because the extraction source is a Debian package.
+		//
+		// Windows: two signed kernel drivers rather than eBPF. `pkg/network/driver/handle.go:26` opens
+		// `\\.\ddnpm` and `pkg/windowsdriver/procmon/procmon.go:51` opens `\\.\ddprocmon`. Those arrive in
+		// Datadog's MSI and install as kernel drivers, which needs administrator rights and a signature
+		// chain no npm package can satisfy, so the binary ships and the drivers are the operator's step.
+		// That is the same division as Linux, where the capabilities and mounts are the operator's too.
+		buildOn: ["macos", "windows"],
 	},
 	{
 		shipsAs: "security-agent",
@@ -213,6 +239,7 @@ export const BINARIES: readonly AgentBinary[] = [
 		onlyOn: ["linux", "windows"],
 		// Lifted on Linux, built on Windows. Datadog ships the Windows one inside an MSI, and reading an MSI
 		// is a second extraction format for a single binary; the build already works there.
+		optional: true,
 		buildOn: ["windows"],
 	},
 ];

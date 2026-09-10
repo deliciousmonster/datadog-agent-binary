@@ -15,7 +15,12 @@
 // create-platform-packages.js, verify-package.js and update-optional-deps.js all read these, so a rename
 // cannot land in two of the three.
 
-import { AgentBinary, builtFor, extractedFor } from "./binaries.js";
+import {
+	AgentBinary,
+	baseBinaries,
+	extractedFor,
+	probeBinaries,
+} from "./binaries.js";
 import { Target } from "./targets.js";
 
 export const SCOPE = "@deliciousmonster/datadog-agent-binary";
@@ -38,7 +43,7 @@ const base = (target: Target): PlatformPackage => ({
 	name: `${SCOPE}-${target.name}`,
 	dirName: target.name,
 	target,
-	binaries: builtFor(target),
+	binaries: baseBinaries(target),
 	optionalDependency: true,
 	ebpf: false,
 	description: `Datadog core agent and trace-agent for ${target.os} ${target.arch}`,
@@ -48,18 +53,20 @@ const probe = (target: Target): PlatformPackage => ({
 	name: `${SCOPE}-probe-${target.name}`,
 	dirName: `probe-${target.name}`,
 	target,
-	binaries: extractedFor(target),
+	binaries: probeBinaries(target),
 	// Deliberately not an optionalDependency. npm would install it on every matching host, which is the
 	// 145 MB the split exists to avoid charging people who never turn these on.
 	optionalDependency: false,
+	// Only where system-probe is LIFTED, which is Linux. macOS uses no eBPF and Windows uses kernel
+	// drivers, so shipping objects to either would be 42 MB neither can load.
 	ebpf: extractedFor(target).some((b) => b.shipsAs === "system-probe"),
 	description: `Datadog system-probe and security-agent for ${target.os} ${target.arch}`,
 });
 
-/** Every package one target publishes. A target with nothing to extract publishes only its base package. */
+/** Every package one target publishes. A target with no opt-in binary publishes only its base package. */
 export function packagesFor(target: Target): PlatformPackage[] {
 	const packages = [base(target)];
-	if (extractedFor(target).length > 0) packages.push(probe(target));
+	if (probeBinaries(target).length > 0) packages.push(probe(target));
 	return packages;
 }
 

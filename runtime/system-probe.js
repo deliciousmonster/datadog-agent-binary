@@ -15,7 +15,7 @@
 // this component can write one because the core agent takes `--sysprobecfgpath` and reads it from wherever
 // it is told rather than only from /etc/datadog-agent.
 
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync } from "node:fs";
 
 /** Whether a `DD_`-style flag reads as on. Absent is off here, unlike the process series: these cost privileges. */
 const on = (value) =>
@@ -59,27 +59,19 @@ const CAP_SYS_ADMIN = 21n;
 const CAP_BPF = 39n;
 
 /**
- * Whether this process could load an eBPF program, and if not, why.
+ * Whether this process could load an eBPF program on Linux, and if not, why.
  *
  * Root is the simple case. Otherwise the effective capability set says it, and `/proc/self/status`'s
  * `CapEff` is where the kernel publishes it as a hex mask. A kernel new enough to split CAP_BPF out of
  * CAP_SYS_ADMIN accepts either, so both bits are checked rather than the older one alone.
  *
- * Reported rather than enforced. system-probe itself is the authority on what it can do, and a check here
- * that refused to start it would be this package overruling the binary on the strength of a heuristic. What
- * this buys is a WARN naming the missing capability instead of a restart loop whose logs say `operation not
- * permitted` and nothing about how to fix it.
+ * One thing measured rather than assumed: `setcap` on the binary bridges the gap between a container's
+ * bounding set and an unprivileged process's effective set, and it costs something. A binary that gained
+ * privilege runs non-dumpable, `/proc/self/mem` becomes unreadable, and system-probe's kernel-version
+ * detection then fails with `permission denied`. Running as root is the route that works, and it is what
+ * Datadog's own agent container does.
  */
-export function eBPFPrivilege({
-	read = () => readFileSync("/proc/self/status", "utf-8"),
-	uid = process.getuid,
-	platform = process.platform,
-} = {}) {
-	if (platform !== "linux")
-		return {
-			able: false,
-			why: `eBPF is a Linux facility and this is ${platform}`,
-		};
+function linuxPrivilege(read, uid) {
 	if (typeof uid === "function" && uid() === 0)
 		return { able: true, why: "running as root" };
 	let mask;
@@ -106,6 +98,73 @@ export function eBPFPrivilege({
 			`this process is not root and its effective capabilities (CapEff=0x${mask.toString(16)}) carry ` +
 			"neither CAP_SYS_ADMIN nor CAP_BPF, so no eBPF program can be loaded. Run the container with " +
 			"--cap-add SYS_ADMIN (and a writable /sys/fs/bpf), or leave DD_SYSTEM_PROBE_ENABLED unset",
+	};
+}
+
+/**
+ * The same question on macOS, where the answer has nothing to do with eBPF.
+ *
+ * The darwin tracer captures packets rather than loading programs, so what it needs is a BPF device:
+ * `/dev/bpf0` and its siblings, which are root-owned and group `access_bpf`. Reported by trying to open
+ * one, because the group membership, the device permissions and the sandbox all bear on whether it works
+ * and only the open answers all three at once.
+ */
+function macosPrivilege(openBpf, uid) {
+	if (typeof uid === "function" && uid() === 0)
+		return { able: true, why: "running as root" };
+	try {
+		openBpf();
+		return { able: true, why: "this process can open a /dev/bpf device" };
+	} catch (error) {
+		return {
+			able: false,
+			why:
+				`this process is not root and cannot open /dev/bpf0 (${error.code ?? error.message}), so the ` +
+				"packet-capture tracer has no device to read. Run as root, or add the user to the access_bpf " +
+				"group, or leave DD_SYSTEM_PROBE_ENABLED unset",
+		};
+	}
+}
+
+/**
+ * And on Windows, where it is neither capabilities nor a device but two signed kernel drivers.
+ *
+ * `\\.\ddnpm` and `\\.\ddprocmon` arrive in Datadog's MSI and install as kernel drivers, which needs
+ * administrator rights and a signature chain an npm package cannot satisfy. So this reports the
+ * requirement rather than testing it: opening a device to find out would be a side effect taken during a
+ * status read, and the binary's own log says it plainly the moment it starts.
+ */
+const windowsPrivilege = () => ({
+	able: null,
+	why:
+		"Windows system-probe reaches the kernel through the ddnpm and ddprocmon drivers, which this " +
+		"package cannot install. Install them from Datadog's agent MSI; without them system-probe starts " +
+		"and opens a device nothing created",
+});
+
+/**
+ * Whether this host can run system-probe, and if not, what stands in the way.
+ *
+ * Three platforms, three different answers, and the mechanism differs on each: eBPF capabilities on Linux,
+ * a BPF device on macOS, kernel drivers on Windows. `able: null` on Windows means unknown rather than
+ * refused, because nothing here can tell whether the drivers are installed without opening one.
+ *
+ * Reported, never enforced. system-probe is the authority on what it can do, and a check here that refused
+ * to start it would be this package overruling the binary on a heuristic. What this buys is a line naming
+ * the missing thing instead of a restart loop whose logs say `operation not permitted`.
+ */
+export function probePrivilege({
+	read = () => readFileSync("/proc/self/status", "utf-8"),
+	openBpf = () => closeSync(openSync("/dev/bpf0", "r")),
+	uid = process.getuid,
+	platform = process.platform,
+} = {}) {
+	if (platform === "linux") return linuxPrivilege(read, uid);
+	if (platform === "darwin") return macosPrivilege(openBpf, uid);
+	if (platform === "win32") return windowsPrivilege();
+	return {
+		able: false,
+		why: `there is no system-probe for ${platform}`,
 	};
 }
 

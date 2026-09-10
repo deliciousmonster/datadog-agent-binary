@@ -64,16 +64,23 @@ describe("where each binary comes from", () => {
 		}
 	});
 
-	// system-probe is the one that could not be built on a runner: it needs a kernel-header tree matched to
-	// every target an operator might run. Nothing builds it anywhere.
-	it("the build loop never asks for system-probe on any target", () => {
-		for (const target of TARGETS)
-			for (const binary of builtFor(target))
-				assert.notEqual(
-					binary.shipsAs,
-					"system-probe",
-					`${target.name} still tries to build system-probe`
-				);
+	// Linux system-probe is the one that could not be built on a runner: the eBPF objects need a kernel-
+	// header tree matched to every kernel an operator might run, which is why Datadog precompiles 26 of
+	// them. Off Linux there are no objects to compile, so the same binary is an ordinary Go build.
+	it("system-probe is lifted on Linux and built everywhere else", () => {
+		const named = (fn, os) =>
+			fn(TARGETS.find((t) => t.os === os)).map((b) => b.shipsAs);
+		assert.ok(
+			named(extractedFor, "linux").includes("system-probe"),
+			"Linux builds system-probe, which needs a kernel-header tree per target"
+		);
+		for (const os of ["macos", "windows"]) {
+			assert.ok(
+				named(builtFor, os).includes("system-probe"),
+				`${os} does not build system-probe, and cannot lift it from a Debian package`
+			);
+			assert.ok(!named(extractedFor, os).includes("system-probe"));
+		}
 	});
 
 	// security-agent is lifted on Linux and built on Windows, because the extraction source is a Debian
