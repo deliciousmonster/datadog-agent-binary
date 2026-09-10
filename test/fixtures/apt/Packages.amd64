@@ -1,0 +1,25 @@
+Package: datadog-agent
+Version: 1:7.82.1-1
+License: Apache License Version 2.0
+Vendor: Datadog <package@datadoghq.com>
+Architecture: amd64
+Maintainer: Datadog Packages <package@datadoghq.com>
+Installed-Size: 759013
+Conflicts: datadog-iot-agent
+Recommends: datadog-signing-keys (>= 1:1.4.0)
+Section: utils
+Priority: extra
+Homepage: http://www.datadoghq.com
+Filename: pool/d/da/datadog-agent_7.82.1-1_amd64.deb
+Size: 160658506
+SHA1: 3de35347e4d44db6d94cf6f21cfb016cda026cba
+SHA256: 2009d485f194ac47c1be7ac3212aaebc12803743d7242d81d6b6bfd4a1db0575
+MD5sum: 6c910ded9841c56adff4da7c224a0b5e
+Description: Datadog Monitoring Agent
+ The Datadog Monitoring Agent is a lightweight process that monitors system
+ processes and services, and sends information back to your Datadog account.
+ .
+ This package installs and runs the advanced Agent daemon, which queues and
+ forwards metrics from your applications as well as system services.
+ .
+ See http://www.datadoghq.com/ for more information

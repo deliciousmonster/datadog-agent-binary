@@ -1,0 +1,15 @@
+Origin: Datadog
+Label: Datadog
+Suite: stable
+Codename: stable
+Architectures: amd64 arm64
+Components: 7
+# Derived fixture. The Packages stanzas beside it are verbatim from the signed repository on
+# 2026-09-10, including the .deb SHA256 the pin is checked against. The hashes below are of those
+# trimmed files, so the chain is exercised end to end without carrying an 868 KB index in the repo.
+MD5Sum:
+ 06539025947bfb0b22505994c38c8404 980 7/binary-amd64/Packages
+ c08ae697f1abe737ba8613f7ecdbe191 980 7/binary-arm64/Packages
+SHA256:
+ 815112203bcf146239a13d6034f2d0c934b6f8a67d43779f833cf13d798d3ee4 980 7/binary-amd64/Packages
+ 5ea18eedbd06253ddace39c807ee08ea449334f844e6269f428e1a698ee6b8cb 980 7/binary-arm64/Packages
