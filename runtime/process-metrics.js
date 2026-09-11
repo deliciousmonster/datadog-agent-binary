@@ -19,6 +19,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { threadId } from "node:worker_threads";
 
 /**
  * What this node sends, and how often.
@@ -424,5 +425,84 @@ export function startProcessSeries({
 		tick,
 		intervalSeconds: resolved.intervalSeconds,
 		prefix: resolved.prefix,
+	};
+}
+
+/**
+ * Start this thread's `harper.processes.*` timer and describe what it will do, for the status endpoint.
+ *
+ * Members are read per tick rather than captured, so a pid the guard replaced under chaos is measured as
+ * the process the node runs now rather than the one it started. Only the claim holder sends; every other
+ * thread's timer costs a file read.
+ *
+ * @param {object} options
+ * @param {string} options.pidDir
+ * @param {string} options.confd
+ * @param {number} options.port DogStatsD.
+ * @param {import('./log.js').Log} options.log
+ * @param {() => Array<{name: string, pid?: number, self?: boolean}>} options.members
+ * @param {{ stop(): void } | undefined} options.previous This thread's existing timer, stopped first so a
+ *   second startup cannot leave two of them running.
+ * @returns {{ state: object, series: { stop(): void } | undefined }}
+ */
+export function scheduleSeries({
+	pidDir,
+	confd,
+	port,
+	log,
+	members,
+	previous,
+}) {
+	const resolved = settings();
+	if (!resolved.enabled) {
+		previous?.stop();
+		return {
+			series: undefined,
+			state: {
+				...resolved,
+				emitting: false,
+				detail: `off: DD_HARPER_PROCESS_METRICS_ENABLED is ${process.env.DD_HARPER_PROCESS_METRICS_ENABLED}`,
+			},
+		};
+	}
+	// Sharing `system.processes.*` is only safe while nothing else fills it. A live conf.d/process.d/ is
+	// the operator saying they intend the real check to, so this stands down rather than becoming a second
+	// source.
+	if (resolved.prefix === DEFAULT_PREFIX && standDownFor(confd)) {
+		previous?.stop();
+		return {
+			series: undefined,
+			state: {
+				...resolved,
+				emitting: false,
+				detail:
+					`standing down: ${join(confd, "process.d")} configures the Python \`process\` check, which owns ` +
+					`${DEFAULT_PREFIX}.*. Set DD_HARPER_PROCESS_METRICS_PREFIX (${PRIVATE_PREFIX} is the documented ` +
+					`alternative) to publish alongside it instead`,
+			},
+		};
+	}
+	previous?.stop();
+	const series = startProcessSeries({
+		pidDir,
+		holder: `${process.pid}.${threadId}`,
+		port,
+		log,
+		members,
+	});
+	return {
+		series,
+		state: {
+			...resolved,
+			emitting: true,
+			detail:
+				`sending ${series.prefix}.* to DogStatsD on 127.0.0.1:${port} every ` +
+				`${series.intervalSeconds}s, from whichever thread holds the claim in ${pidDir}` +
+				(series.prefix === DEFAULT_PREFIX
+					? `. This is the namespace the Python \`process\` check owns, and this fills a subset of it: ` +
+						`number, threads and mem.rss with its avg/max/min. cpu.pct, mem.vms, open_file_descriptors ` +
+						`and the io counters are not collected and will read as no data`
+					: ""),
+		},
 	};
 }

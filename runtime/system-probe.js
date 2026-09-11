@@ -278,3 +278,42 @@ export function renderSecurityAgentYaml(paths, resolved) {
 		"",
 	].join("\n");
 }
+
+/**
+ * What this node resolved about system-probe and security-agent, and what stands between it and running
+ * them.
+ *
+ * Reported rather than enforced. The binary is the authority on whether it can load an eBPF program, so a
+ * refusal here would be this component overruling it on a heuristic. What this replaces is a restart loop
+ * whose logs say `operation not permitted` and nothing about which capability is missing.
+ *
+ * @param {object} probes What settings() resolved from the environment.
+ * @param {string | null} ebpfDir Where the precompiled objects are, or null if none were found.
+ * @param {{ log: import('./log.js').Log, packageName: string }} context
+ */
+export function probeStatus(probes, ebpfDir, { log, packageName }) {
+	const reasons = [];
+	if (probes.systemProbe) {
+		const privilege = probePrivilege();
+		// `able: null` is Windows: unknown rather than refused, because nothing here can tell whether the
+		// drivers are installed without opening one. Reported as a blocker either way, since an operator
+		// who has not installed them needs to read it.
+		if (privilege.able !== true) reasons.push(privilege.why);
+		if (!ebpfDir)
+			reasons.push(
+				`no precompiled eBPF objects were found: ${packageName}-probe-<platform> is what ships them, ` +
+					"and without it system-probe starts, answers `version`, and loads not one program"
+			);
+		for (const reason of reasons)
+			log.warn(
+				`Datadog supervisor: DD_SYSTEM_PROBE_ENABLED is set and ${reason}`
+			);
+	}
+	return {
+		...probes,
+		ebpfDir,
+		// Empty means nothing known stands in the way, which is not the same as a running probe. The
+		// process's own verified verdict is what says that, and it is reported beside this.
+		blockers: reasons,
+	};
+}

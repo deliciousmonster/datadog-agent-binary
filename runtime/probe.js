@@ -165,3 +165,34 @@ export async function pollEndpoint({
 		interval = Math.min(interval * 2, MAX_INTERVAL_MS);
 	}
 }
+
+/**
+ * Keep this component's own polling out of the host application's APM.
+ *
+ * dd-trace is resolved rather than imported: it belongs to the host application and this package does not
+ * ship it. A process with no tracer has nothing to keep the probes out of, which is the silent path. A
+ * tracer that answers `use()` with a shape untraceAgentProbes did not expect is different: the probes stay
+ * traced and start appearing as spans, so that one gets a line.
+ *
+ * @param {readonly string[]} urls Every endpoint this component polls.
+ * @param {import('./log.js').Log} log
+ * @param {(id: string) => unknown} [require] Injected for tests; defaults to this module's own resolver.
+ */
+export function suppressAgentProbes(urls, log, require = undefined) {
+	const load = require ?? createRequire(import.meta.url);
+	let tracer;
+	try {
+		tracer = load("dd-trace");
+	} catch {
+		return { traced: false, reason: "dd-trace is not resolvable from here" };
+	}
+	try {
+		untraceAgentProbes(tracer, urls);
+		return { traced: true };
+	} catch (error) {
+		log.error(
+			`Datadog supervisor: found dd-trace but could not configure it to ignore the agent probes: ${error.stack ?? error.message}. Probe requests may now appear as spans in APM.`
+		);
+		return { traced: false, reason: error.message };
+	}
+}
