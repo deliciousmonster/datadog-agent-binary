@@ -189,11 +189,19 @@ const CHECKS = {
 	// /dev/bpf device on macOS, and two kernel drivers on Windows. None of those is a runner.
 	"system-probe": checkReportsVersion,
 	// security-agent loads a config even to print its version, where system-probe does not: without one
-	// it answers `unable to load Datadog config file: Config File Not Found` and never reaches the version.
+	// it answers `unable to load Datadog config file: Config File Not Found` and never reaches the
+	// version. --cfgpath takes the directory, which is the form both it and process-agent accept and the
+	// one the supervisor already passes them; `-c <file>` works too and is the flag CI saw fail.
 	"security-agent": (binPath, ports, paths, resources, spawned) =>
 		checkReportsVersion(binPath, ports, paths, resources, spawned, [
-			"-c",
-			paths.configFile,
+			"--cfgpath",
+			paths.runtimeDir,
+		]),
+	// process-agent answers bare, and is given the same directory anyway so the three agree.
+	"process-agent": (binPath, ports, paths, resources, spawned) =>
+		checkReportsVersion(binPath, ports, paths, resources, spawned, [
+			"--cfgpath",
+			paths.runtimeDir,
 		]),
 };
 
