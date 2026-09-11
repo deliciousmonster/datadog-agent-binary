@@ -234,6 +234,10 @@ export function prepareRuntime(componentDir, { ports, log, ebpfDir }) {
 		sysprobeConfigDir: runtimeDir,
 		sysprobeConfigFile: join(runtimeDir, "system-probe.yaml"),
 		securityConfigFile: join(runtimeDir, "security-agent.yaml"),
+		// Where runtime security looks for its rule policies. Under the runtime tree, not
+		// /etc/datadog-agent/runtime-security.d, which is the stock install's path and which the
+		// harperdb user cannot create.
+		securityPolicies: join(runtimeDir, "runtime-security.d"),
 		// Under the runtime tree, never /var/run/datadog: that is the stock install's path and does not
 		// exist beside a component, which is the same reason dogstatsd_socket and receiver_socket are empty.
 		sysprobeSocket: join(runtimeDir, "run", "sysprobe.sock"),
@@ -247,6 +251,10 @@ export function prepareRuntime(componentDir, { ports, log, ebpfDir }) {
 	mkdirSync(dirname(paths.coreLog), { recursive: true });
 	mkdirSync(paths.confd, { recursive: true });
 	mkdirSync(paths.pidDir, { recursive: true });
+	// Created whether or not runtime security runs: an enabled policy engine pointed at a directory that
+	// does not exist logs `error while loading policies` every start, and an empty directory is a
+	// correct answer meaning "no custom rules", where a missing one is a misconfiguration.
+	mkdirSync(paths.securityPolicies, { recursive: true });
 
 	const probes = probeSettings();
 	const configFiles = {

@@ -243,6 +243,10 @@ export function renderSystemProbeYaml(paths, resolved, ebpfDir) {
 		"runtime_security_config:",
 		`  enabled: ${yes(resolved.security)}`,
 		`  socket: ${quote(paths.securitySocket)}`,
+		"  # The stock path is /etc/datadog-agent/runtime-security.d, which the harperdb user cannot",
+		"  # create, so an enabled engine logs `error while loading policies` on every start.",
+		"  policies:",
+		`    dir: ${quote(paths.securityPolicies)}`,
 		"",
 	].join("\n");
 }
@@ -265,6 +269,8 @@ export function renderSecurityAgentYaml(paths, resolved) {
 		"runtime_security_config:",
 		`  enabled: ${resolved.security ? "true" : "false"}`,
 		`  socket: ${quote(paths.securitySocket)}`,
+		"  policies:",
+		`    dir: ${quote(paths.securityPolicies)}`,
 		"# Off unless asked for: CSPM scans the host's configuration and is a separate product from runtime",
 		"# security. DD_COMPLIANCE_CONFIG_ENABLED=true turns it on, and the environment outranks this file.",
 		"compliance_config:",
