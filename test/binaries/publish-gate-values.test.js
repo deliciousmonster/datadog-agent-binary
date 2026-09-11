@@ -14,8 +14,11 @@ import { REPO_ROOT, withRealBinaries } from "../support/component.js";
 // The gate's own reader, not a copy of it: a parser that drifted from the one verify-package.js runs
 // would let this pass while the release still refuses.
 // A URL, not a path: import() refuses a bare `D:\...` on Windows (ERR_UNSUPPORTED_ESM_URL_SCHEME).
-const { BINARIES, recordedBuildTags } = await import(
+const { binariesFor, recordedBuildTags } = await import(
 	pathToFileURL(path.join(REPO_ROOT, "dist", "src", "binaries.js")).href
+);
+const { currentTarget } = await import(
+	pathToFileURL(path.join(REPO_ROOT, "dist", "src", "targets.js")).href
 );
 
 const binaryFor = (files, shipsAs) =>
@@ -25,7 +28,9 @@ const binaryFor = (files, shipsAs) =>
 
 test("every requiredSymbol the gate demands is in the binary mandatoryArgs produces", async () => {
 	await withRealBinaries((files) => {
-		for (const binary of BINARIES) {
+		// binariesFor, not BINARIES: macOS builds no security-agent, so asking for one here reads a path
+		// that is undefined and fails with a TypeError about the argument rather than about the binary.
+		for (const binary of binariesFor(currentTarget())) {
 			assert.ok(
 				binaryFor(files, binary.shipsAs).includes(
 					Buffer.from(binary.requiredSymbol, "latin1")
@@ -38,7 +43,9 @@ test("every requiredSymbol the gate demands is in the binary mandatoryArgs produ
 
 test("no forbiddenBuildTag the gate refuses is in the tag set the build records", async () => {
 	await withRealBinaries((files) => {
-		for (const binary of BINARIES.filter((entry) => entry.forbiddenBuildTag)) {
+		for (const binary of binariesFor(currentTarget()).filter(
+			(entry) => entry.forbiddenBuildTag
+		)) {
 			const tags = recordedBuildTags(binaryFor(files, binary.shipsAs));
 			assert.notEqual(
 				tags,

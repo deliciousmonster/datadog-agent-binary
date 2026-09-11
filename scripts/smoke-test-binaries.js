@@ -151,7 +151,14 @@ async function checkCoreAgent(binPath, ports, paths, _resources, spawned) {
  * main with `strcase.UnicodeVersion "15.0.0" != unicode.Version "17.0.0"`, and it packaged, and it
  * passed the publish gate's symbol check. A binary that dies at init cannot print its version.
  */
-async function checkReportsVersion(binPath) {
+async function checkReportsVersion(
+	binPath,
+	_ports,
+	paths,
+	_resources,
+	_spawned,
+	extraArgs = []
+) {
 	const wanted = (await pinnedVersion()) ?? "";
 	log(`asking ${binPath} for its version`);
 	const reported = await new Promise((resolve) => {
@@ -181,7 +188,13 @@ const CHECKS = {
 	// Started for real would need CAP_SYS_ADMIN and an object matching the runner's kernel on Linux, a
 	// /dev/bpf device on macOS, and two kernel drivers on Windows. None of those is a runner.
 	"system-probe": checkReportsVersion,
-	"security-agent": checkReportsVersion,
+	// security-agent loads a config even to print its version, where system-probe does not: without one
+	// it answers `unable to load Datadog config file: Config File Not Found` and never reaches the version.
+	"security-agent": (binPath, ports, paths, resources, spawned) =>
+		checkReportsVersion(binPath, ports, paths, resources, spawned, [
+			"-c",
+			paths.configFile,
+		]),
 };
 
 // Windows answers a rename with EBUSY while anything holds a handle inside the tree. On the CI runner
