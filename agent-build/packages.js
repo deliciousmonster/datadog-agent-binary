@@ -1,3 +1,4 @@
+// @ts-check
 // How the binaries are split across npm packages, stated once.
 //
 // Two packages per platform, and the split is `from`. The base package carries what this repo builds: the
@@ -15,31 +16,29 @@
 // create-platform-packages.js, verify-package.js and update-optional-deps.js all read these, so a rename
 // cannot land in two of the three.
 
-import {
-	AgentBinary,
-	baseBinaries,
-	extractedFor,
-	probeBinaries,
-} from "./binaries.js";
-import { Target } from "./targets.js";
+import { baseBinaries, extractedFor, probeBinaries } from "./binaries.js";
+
+/** @typedef {import("./binaries.js").AgentBinary} AgentBinary */
+/** @typedef {import("./toolchain.js").Target} Target */
 
 export const SCOPE = "@deliciousmonster/datadog-agent-binary";
 
-/** What a platform package is: its npm name, the directory it is staged in, and what it carries. */
-export interface PlatformPackage {
-	readonly name: string;
-	/** Directory name under `npm/`. Matches the npm name's last segment so the two never drift. */
-	readonly dirName: string;
-	readonly target: Target;
-	readonly binaries: readonly AgentBinary[];
-	/** Whether the base package lists this one in optionalDependencies. */
-	readonly optionalDependency: boolean;
-	/** Whether this package also ships the precompiled eBPF objects beside its binaries. */
-	readonly ebpf: boolean;
-	readonly description: string;
-}
+/**
+ * What a platform package is: its npm name, the directory it is staged in, and what it carries.
+ *
+ * @typedef {object} PlatformPackage
+ * @property {string} name
+ * @property {string} dirName Directory name under `npm/`. Matches the npm name's last segment so the two
+ *   never drift.
+ * @property {Target} target
+ * @property {readonly AgentBinary[]} binaries
+ * @property {boolean} optionalDependency Whether the base package lists this one in optionalDependencies.
+ * @property {boolean} ebpf Whether this package also ships the precompiled eBPF objects beside its binaries.
+ * @property {string} description
+ */
 
-const base = (target: Target): PlatformPackage => ({
+/** @param {Target} target @returns {PlatformPackage} */
+const base = (target) => ({
 	name: `${SCOPE}-${target.name}`,
 	dirName: target.name,
 	target,
@@ -49,7 +48,8 @@ const base = (target: Target): PlatformPackage => ({
 	description: `Datadog core agent and trace-agent for ${target.os} ${target.arch}`,
 });
 
-const probe = (target: Target): PlatformPackage => ({
+/** @param {Target} target @returns {PlatformPackage} */
+const probe = (target) => ({
 	name: `${SCOPE}-probe-${target.name}`,
 	dirName: `probe-${target.name}`,
 	target,
@@ -66,7 +66,8 @@ const probe = (target: Target): PlatformPackage => ({
 });
 
 /** `a`, `a and b`, `a, b and c`. */
-const listing = (binaries: readonly AgentBinary[]): string => {
+/** @param {readonly AgentBinary[]} binaries @returns {string} */
+const listing = (binaries) => {
 	const names = binaries.map((b) => b.shipsAs);
 	return names.length < 2
 		? names.join("")
@@ -74,12 +75,13 @@ const listing = (binaries: readonly AgentBinary[]): string => {
 };
 
 /** Every package one target publishes. A target with no opt-in binary publishes only its base package. */
-export function packagesFor(target: Target): PlatformPackage[] {
+/** @param {Target} target @returns {PlatformPackage[]} */
+export function packagesFor(target) {
 	const packages = [base(target)];
 	if (probeBinaries(target).length > 0) packages.push(probe(target));
 	return packages;
 }
 
 /** Every package across every target, which is what the publish job and the publish gate both walk. */
-export const allPackages = (targets: readonly Target[]): PlatformPackage[] =>
-	targets.flatMap(packagesFor);
+/** @param {readonly Target[]} targets @returns {PlatformPackage[]} */
+export const allPackages = (targets) => targets.flatMap(packagesFor);

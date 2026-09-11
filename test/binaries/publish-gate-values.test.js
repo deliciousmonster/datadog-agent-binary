@@ -15,10 +15,10 @@ import { REPO_ROOT, withRealBinaries } from "../support/component.js";
 // would let this pass while the release still refuses.
 // A URL, not a path: import() refuses a bare `D:\...` on Windows (ERR_UNSUPPORTED_ESM_URL_SCHEME).
 const { binariesFor, recordedBuildTags } = await import(
-	pathToFileURL(path.join(REPO_ROOT, "dist", "src", "binaries.js")).href
+	pathToFileURL(path.join(REPO_ROOT, "agent-build", "binaries.js")).href
 );
 const { currentTarget } = await import(
-	pathToFileURL(path.join(REPO_ROOT, "dist", "src", "targets.js")).href
+	pathToFileURL(path.join(REPO_ROOT, "agent-build", "toolchain.js")).href
 );
 
 const binaryFor = (files, shipsAs) =>

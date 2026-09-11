@@ -9,9 +9,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { binariesFor, sourceOf } from "../../dist/src/binaries.js";
-import { allPackages, packagesFor, SCOPE } from "../../dist/src/packages.js";
-import { TARGETS, findTarget } from "../../dist/src/targets.js";
+import { binariesFor, sourceOf } from "../../agent-build/binaries.js";
+import { allPackages, packagesFor, SCOPE } from "../../agent-build/packages.js";
+import { TARGETS, findTarget } from "../../agent-build/toolchain.js";
 
 test("every binary a target has lands in exactly one of its packages", () => {
 	for (const target of TARGETS) {

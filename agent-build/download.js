@@ -1,3 +1,4 @@
+// @ts-check
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -8,7 +9,8 @@ const RELEASES =
 	"https://api.github.com/repos/DataDog/datadog-agent/releases/latest";
 
 /** The pinned release, so a package cannot be labelled one version and built from another. */
-export async function pinnedVersion(): Promise<string | undefined> {
+/** @returns {Promise<string | undefined>} */
+export async function pinnedVersion() {
 	try {
 		return (
 			(
@@ -22,7 +24,8 @@ export async function pinnedVersion(): Promise<string | undefined> {
 
 // GITHUB_TOKEN when the runner has one: unauthenticated this is 60 requests an hour per IP, shared
 // across every runner, and the build fails on "rate limit exceeded" rather than anything real.
-export async function fetchLatestVersion(): Promise<string> {
+/** @returns {Promise<string>} */
+export async function fetchLatestVersion() {
 	const token = process.env.GITHUB_TOKEN;
 	const response = await fetch(RELEASES, {
 		headers: token ? { authorization: `Bearer ${token}` } : {},
@@ -30,14 +33,12 @@ export async function fetchLatestVersion(): Promise<string> {
 	if (!response.ok) {
 		throw new Error(`Failed to fetch latest version: ${response.statusText}`);
 	}
-	return ((await response.json()) as { tag_name: string }).tag_name;
+	return /** @type {{ tag_name: string }} */ (await response.json()).tag_name;
 }
 
 /** Clones the pinned tag into `into`, replacing whatever was there. Returns the path. */
-export async function fetchAgentSource(
-	version: string,
-	into: string
-): Promise<string> {
+/** @param {string} version @param {string} into @returns {Promise<string>} */
+export async function fetchAgentSource(version, into) {
 	logger.info(`Cloning Datadog Agent ${version}`);
 	await mkdir(dirname(into), { recursive: true });
 	await rm(into, { recursive: true, force: true });

@@ -1,3 +1,4 @@
+// @ts-check
 // Proves a downloaded Datadog artefact is the one this package pinned, before anything is extracted from it.
 //
 // The pin alone is not enough. A SHA256 in this repository says "the file has not changed since somebody
@@ -16,13 +17,16 @@ import {
 	DATADOG_APT_COMPONENT,
 	DATADOG_APT_FINGERPRINT,
 	DATADOG_APT_SUITE,
-	type ReleaseArtifact,
 } from "./release.js";
 
-export const sha256 = (bytes: Uint8Array): string =>
+/** @typedef {import("./release.js").ReleaseArtifact} ReleaseArtifact */
+
+/** @param {Uint8Array} bytes @returns {string} */
+export const sha256 = (bytes) =>
 	createHash("sha256").update(bytes).digest("hex");
 
 /** URL of the signed Release file and its detached signature, for one suite. */
+/** @param {string} [base] @param {string} [suite] */
 export const releaseUrls = (
 	base = DATADOG_APT_BASE,
 	suite = DATADOG_APT_SUITE
@@ -31,17 +35,17 @@ export const releaseUrls = (
 	signature: `${base}/dists/${suite}/Release.gpg`,
 });
 
+/** @param {string} debArch @param {string} [base] @param {string} [suite] @param {string} [component] */
 export const packagesUrl = (
-	debArch: string,
+	debArch,
 	base = DATADOG_APT_BASE,
 	suite = DATADOG_APT_SUITE,
 	component = DATADOG_APT_COMPONENT
 ) => `${base}/dists/${suite}/${component}/binary-${debArch}/Packages`;
 
-export const artifactUrl = (
-	artifact: ReleaseArtifact,
-	base = DATADOG_APT_BASE
-) => `${base}/${artifact.path}`;
+/** @param {ReleaseArtifact} artifact @param {string} [base] */
+export const artifactUrl = (artifact, base = DATADOG_APT_BASE) =>
+	`${base}/${artifact.path}`;
 
 /**
  * The SHA256 a signed Release file gives for one path under it.
@@ -51,10 +55,8 @@ export const artifactUrl = (
  * never match; the failure mode is a confusing mismatch rather than a wrong accept, but the fix is to scope
  * the read to the section rather than to hope.
  */
-export function hashFromRelease(
-	release: string,
-	path: string
-): string | undefined {
+/** @param {string} release @param {string} path @returns {string | undefined} */
+export function hashFromRelease(release, path) {
 	let inSection = false;
 	for (const line of release.split("\n")) {
 		if (/^SHA256:\s*$/.test(line)) {
@@ -76,10 +78,8 @@ export function hashFromRelease(
  * Stanzas are blank-line separated and `Filename:` is the pool path, so the stanza carrying our filename is
  * the one whose SHA256 applies. Reading the first SHA256 in the file would take some other package's.
  */
-export function hashFromPackages(
-	packages: string,
-	poolPath: string
-): string | undefined {
+/** @param {string} packages @param {string} poolPath @returns {string | undefined} */
+export function hashFromPackages(packages, poolPath) {
 	for (const stanza of packages.split(/\n\n+/)) {
 		if (
 			!new RegExp(`^Filename:\\s*${escapeRe(poolPath)}\\s*$`, "m").test(stanza)
@@ -91,26 +91,26 @@ export function hashFromPackages(
 	return undefined;
 }
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRe = (/** @type {string} */ s) =>
+	s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-export interface ReleaseCheck {
-	readonly ok: boolean;
-	readonly failures: readonly string[];
-	readonly checked: readonly string[];
-}
+/**
+ * @typedef {object} ReleaseCheck
+ * @property {boolean} ok
+ * @property {readonly string[]} failures
+ * @property {readonly string[]} checked
+ */
 
-export interface VerifyInputs {
-	readonly artifact: ReleaseArtifact;
-	/** Raw bytes of the .deb. */
-	readonly bytes: Uint8Array;
-	readonly release: string;
-	readonly packages: string;
-	/**
-	 * What a gpg verify of Release.gpg against Release reported. The caller runs gpg because spawning is
-	 * the caller's business here as everywhere else in this package.
-	 */
-	readonly signature: { readonly good: boolean; readonly fingerprint?: string };
-}
+/**
+ * @typedef {object} VerifyInputs
+ * @property {ReleaseArtifact} artifact
+ * @property {Uint8Array} bytes Raw bytes of the .deb.
+ * @property {string} release
+ * @property {string} packages
+ * @property {{ good: boolean, fingerprint?: string }} signature What a gpg verify of Release.gpg against
+ *   Release reported. The caller runs gpg because spawning is the caller's business here as everywhere
+ *   else in this package.
+ */
 
 /**
  * Walk the chain and report every step that failed, rather than the first.
@@ -118,15 +118,18 @@ export interface VerifyInputs {
  * All four have to hold. A caller that publishes on a partial pass has no chain at all, so `ok` is the
  * conjunction and the failures are for whoever has to fix it.
  */
+/** @param {VerifyInputs} inputs @returns {ReleaseCheck} */
 export function verifyRelease({
 	artifact,
 	bytes,
 	release,
 	packages,
 	signature,
-}: VerifyInputs): ReleaseCheck {
-	const failures: string[] = [];
-	const checked: string[] = [];
+}) {
+	/** @type {string[]} */
+	const failures = [];
+	/** @type {string[]} */
+	const checked = [];
 
 	if (!signature.good)
 		failures.push(
@@ -179,7 +182,7 @@ export function verifyRelease({
 }
 
 /** gpg prints a fingerprint with no separators; a human writing one down uses spaces. Compare neither way. */
-const normaliseFingerprint = (value: string | undefined) =>
+const normaliseFingerprint = (/** @type {string | undefined} */ value) =>
 	(value ?? "").replace(/\s+/g, "").toUpperCase();
 
 /**
@@ -188,10 +191,8 @@ const normaliseFingerprint = (value: string | undefined) =>
  * VALIDSIG carries the full fingerprint and GOODSIG only the long key id, so the fingerprint comes from
  * VALIDSIG and the good/bad verdict from either. A run that printed neither is not a pass.
  */
-export function readGpgStatus(status: string): {
-	good: boolean;
-	fingerprint?: string;
-} {
+/** @param {string} status @returns {{ good: boolean, fingerprint?: string }} */
+export function readGpgStatus(status) {
 	if (/^\[GNUPG:\] BADSIG /m.test(status)) return { good: false };
 	const valid = /^\[GNUPG:\] VALIDSIG ([0-9A-F]{40})/m.exec(status);
 	const good = /^\[GNUPG:\] GOODSIG /m.test(status);

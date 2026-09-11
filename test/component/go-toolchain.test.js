@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { goPin, goToolchain } from "../../dist/src/build.js";
+import { goPin, goToolchain } from "../../agent-build/compile.js";
 
 const withSource = async (contents, run) => {
 	const dir = mkdtempSync(join(tmpdir(), "ddab-gopin-"));

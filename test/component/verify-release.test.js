@@ -9,14 +9,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { RELEASE_ARTIFACTS } from "../../dist/src/release.js";
+import { RELEASE_ARTIFACTS } from "../../agent-build/release.js";
 import {
 	hashFromPackages,
 	hashFromRelease,
 	readGpgStatus,
 	sha256,
 	verifyRelease,
-} from "../../dist/src/verify-release.js";
+} from "../../agent-build/verify-release.js";
 
 const FIXTURES = join(import.meta.dirname, "..", "fixtures", "apt");
 const read = (name) => readFileSync(join(FIXTURES, name), "utf-8");

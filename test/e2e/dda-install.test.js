@@ -11,7 +11,7 @@ const path = require("node:path");
 const { REPO_ROOT } = require("../support/generator.js");
 const { withTempDir } = require("../support/sandbox.js");
 const { pipxInterpreter, pythonPin } = require(
-	path.join(REPO_ROOT, "dist", "src", "build.js")
+	path.join(REPO_ROOT, "agent-build", "compile.js")
 );
 
 // Probes are supplied rather than run: the host's own python decides nothing here.

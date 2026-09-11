@@ -1,28 +1,26 @@
+// @ts-check
 import { mkdir, stat, symlink } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { build } from "./build.js";
+import { build } from "./compile.js";
 import { extractRelease } from "./extract.js";
 import {
 	fetchAgentSource,
 	fetchLatestVersion,
 	pinnedVersion,
-} from "./downloader.js";
+} from "./download.js";
 import { buildTree } from "./layout.js";
 import { EBPF_SHIP_DIR } from "./release.js";
 import { logger } from "./log.js";
-import { Target } from "./targets.js";
-
-export interface BuildRequest {
-	readonly target: Target;
-	readonly version?: string;
-}
+/**
+ * @typedef {object} BuildRequest
+ * @property {import("./toolchain.js").Target} target
+ * @property {string} [version]
+ */
 
 // The Go toolchain resolves the agent by import path, so the source has to appear under
 // GOPATH/src/github.com/DataDog/datadog-agent rather than wherever it happened to unpack.
-async function linkIntoGoPath(
-	goPath: string,
-	sourceDir: string
-): Promise<void> {
+/** @param {string} goPath @param {string} sourceDir @returns {Promise<void>} */
+async function linkIntoGoPath(goPath, sourceDir) {
 	const goSrcDir = join(goPath, "src", "github.com", "DataDog");
 	await mkdir(goSrcDir, { recursive: true });
 	const link = join(goSrcDir, "datadog-agent");
@@ -32,7 +30,8 @@ async function linkIntoGoPath(
 }
 
 /** Fetches the source, prepares GOPATH, and builds every binary for one target. Throws on failure. */
-export async function buildAgents(request: BuildRequest): Promise<string[]> {
+/** @param {BuildRequest} request @returns {Promise<string[]>} */
+export async function buildAgents(request) {
 	const { target, version } = request;
 	const resolved =
 		version ?? (await pinnedVersion()) ?? (await fetchLatestVersion());
@@ -61,5 +60,5 @@ export async function buildAgents(request: BuildRequest): Promise<string[]> {
 	return [...built, ...lifted];
 }
 
-export * from "./downloader.js";
-export * from "./targets.js";
+export * from "./download.js";
+export * from "./toolchain.js";

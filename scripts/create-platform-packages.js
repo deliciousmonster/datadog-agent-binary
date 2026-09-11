@@ -10,15 +10,15 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT, readRepoVersion, platformPackageDir } from "./paths.js";
-import { TARGETS, currentTarget } from "../dist/src/targets.js";
-import { binaryFilename, sourceOf } from "../dist/src/binaries.js";
-import { SCOPE, packagesFor } from "../dist/src/packages.js";
-import { buildTree } from "../dist/src/layout.js";
+import { TARGETS, currentTarget } from "../agent-build/toolchain.js";
+import { binaryFilename, sourceOf } from "../agent-build/binaries.js";
+import { SCOPE, packagesFor } from "../agent-build/packages.js";
+import { buildTree } from "../agent-build/layout.js";
 import {
 	EBPF_SHIP_DIR,
 	RELEASE_ARTIFACTS,
 	DATADOG_APT_BASE,
-} from "../dist/src/release.js";
+} from "../agent-build/release.js";
 
 function copyPlatformBinary(pkg) {
 	const packageDir = platformPackageDir(pkg.dirName);

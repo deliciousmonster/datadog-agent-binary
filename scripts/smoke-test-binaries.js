@@ -9,10 +9,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { binariesFor, binaryFilename } from "../dist/src/binaries.js";
-import { pinnedVersion } from "../dist/src/downloader.js";
-import { treeAt } from "../dist/src/layout.js";
-import { currentTarget } from "../dist/src/targets.js";
+import { binariesFor, binaryFilename } from "../agent-build/binaries.js";
+import { pinnedVersion } from "../agent-build/download.js";
+import { treeAt } from "../agent-build/layout.js";
+import { currentTarget } from "../agent-build/toolchain.js";
 import {
 	debugVarsUrl,
 	receiverInfoUrl,
@@ -101,7 +101,7 @@ async function checkTraceAgent(binPath, ports, paths, resources, spawned) {
 		});
 	} catch (error) {
 		throw new Error(
-			`sending a real span failed: ${error.message}\n${proc.output()}`
+			`sending a real span failed: ${/** @type {Error} */ (error).message}\n${proc.output()}`
 		);
 	}
 
@@ -225,7 +225,8 @@ async function rename(from, to) {
 			renameSync(from, to);
 			return true;
 		} catch (error) {
-			if (error.code !== "EBUSY") throw error;
+			if (/** @type {NodeJS.ErrnoException} */ (error).code !== "EBUSY")
+				throw error;
 			if (attempt === RENAME_ATTEMPTS) {
 				if (process.platform !== "win32") throw error;
 				log(
@@ -325,7 +326,9 @@ async function main() {
 			try {
 				await check(binPath, ports, runtime.paths, resources, spawned);
 			} catch (error) {
-				failures.push(`${binary.shipsAs}: ${error.message}`);
+				failures.push(
+					`${binary.shipsAs}: ${/** @type {Error} */ (error).message}`
+				);
 			}
 		}
 	} finally {

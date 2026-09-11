@@ -16,7 +16,7 @@ const {
 	scaffoldWorkDir,
 } = require("../support/generator.js");
 const { EBPF_SHIP_DIR } = require(
-	path.join(REPO_ROOT, "dist", "src", "release.js")
+	path.join(REPO_ROOT, "agent-build", "release.js")
 );
 
 const TARGET = currentTarget();
@@ -232,7 +232,7 @@ test("NEGATIVE: a platform package whose os does not match its target refuses th
 // table is reproducible by editing the copy.
 test("NEGATIVE: a stale dist/ carrying no npm os refuses the release rather than agreeing with itself", () => {
 	const workDir = buildFixture();
-	const table = path.join(workDir, "dist", "src", "targets.js");
+	const table = path.join(workDir, "agent-build", "toolchain.js");
 	fs.writeFileSync(
 		table,
 		fs

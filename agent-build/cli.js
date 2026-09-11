@@ -7,12 +7,14 @@ import {
 	currentTarget,
 	fetchLatestVersion,
 	targetNames,
-} from "./index.js";
+} from "./agent.js";
 
 // One exit path: commands throw, and the failure is reported here rather than in each action.
+/** @template T @param {(options: T) => Promise<void>} action */
 const run =
-	<T>(action: (options: T) => Promise<void>) =>
-	async (options: T): Promise<void> => {
+	(action) =>
+	/** @param {T} options @returns {Promise<void>} */
+	async (options) => {
 		try {
 			await action(options);
 		} catch (error) {
@@ -33,14 +35,17 @@ program
 	// No output option: scripts/create-platform-packages.js reads the built binaries back out of
 	// build/<target>/bin, so a relocatable tree is a tree the packaging step cannot find.
 	.action(
-		run(async (options: { datadogVersion?: string; debug?: boolean }) => {
-			if (options.debug) process.env.DEBUG = "1";
-			const shipped = await buildAgents({
-				target: currentTarget(),
-				version: options.datadogVersion,
-			});
-			for (const path of shipped) logger.info(`Built ${path}`);
-		})
+		run(
+			/** @param {{ datadogVersion?: string; debug?: boolean }} options */
+			async (options) => {
+				if (options.debug) process.env.DEBUG = "1";
+				const shipped = await buildAgents({
+					target: currentTarget(),
+					version: options.datadogVersion,
+				});
+				for (const path of shipped) logger.info(`Built ${path}`);
+			}
+		)
 	);
 
 program

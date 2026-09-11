@@ -1,17 +1,21 @@
+// @ts-check
 import { spawn } from "node:child_process";
 import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
-import { AgentBinary, builtFor, binaryFilename } from "./binaries.js";
+import { builtFor, binaryFilename } from "./binaries.js";
+
+/** @typedef {import("./binaries.js").AgentBinary} AgentBinary */
+/** @typedef {import("./toolchain.js").Target} Target */
 import { buildTree } from "./layout.js";
 import { logger } from "./log.js";
-import { Target } from "./targets.js";
 
-export interface BuildOptions {
-	readonly target: Target;
-	readonly sourceDir: string;
-	readonly outputDir: string;
-}
+/**
+ * @typedef {object} BuildOptions
+ * @property {Target} target
+ * @property {string} sourceDir
+ * @property {string} outputDir
+ */
 
 /**
  * Long enough for a cold Go build on the slowest runner, which is macOS.
@@ -27,13 +31,15 @@ const BUILD_TIMEOUT_MS = 2_700_000;
 /** A probe either answers at once or the interpreter it names is unusable. */
 const PROBE_TIMEOUT_MS = 30_000;
 
-interface RunOptions {
-	/** Return stdout instead of streaming it, for a command whose output is the answer. */
-	readonly capture?: boolean;
-	readonly timeoutMs?: number;
-}
+/**
+ * @typedef {object} RunOptions
+ * @property {boolean} [capture] Return stdout instead of streaming it, for a command whose output is the
+ *   answer.
+ * @property {number} [timeoutMs]
+ */
 
-export function environment(target: Target): NodeJS.ProcessEnv {
+/** @param {Target} target @returns {NodeJS.ProcessEnv} */
+export function environment(target) {
 	const goPath = buildTree(process.cwd(), target).goPath;
 	return {
 		...process.env,
@@ -48,25 +54,23 @@ export function environment(target: Target): NodeJS.ProcessEnv {
 
 // Streams rather than buffering: a cold agent build outlives any reasonable buffer,
 // and the output is the only progress signal CI has.
-function run(
-	command: string,
-	args: readonly string[],
-	cwd: string,
-	env: NodeJS.ProcessEnv,
-	options: RunOptions = {}
-): Promise<string> {
+/**
+ * @param {string} command @param {readonly string[]} args @param {string} cwd
+ * @param {NodeJS.ProcessEnv} env @param {RunOptions} [options] @returns {Promise<string>}
+ */
+function run(command, args, cwd, env, options = {}) {
 	logger.debug(`${command} ${args.join(" ")}`);
 	const timeoutMs = options.timeoutMs ?? BUILD_TIMEOUT_MS;
 	return new Promise((fulfil, reject) => {
 		const startedAt = Date.now();
-		const child = spawn(command, args, {
+		const child = spawn(command, /** @type {string[]} */ (args), {
 			cwd,
 			env,
 			stdio: options.capture ? ["ignore", "pipe", "ignore"] : "inherit",
 			timeout: timeoutMs,
 		});
 		let output = "";
-		child.stdout?.on("data", (chunk: Buffer) => {
+		child.stdout?.on("data", (/** @type {Buffer} */ chunk) => {
 			output += chunk;
 		});
 		child.on("error", reject);
@@ -90,7 +94,8 @@ function run(
 
 // The override adds flags; it cannot remove one. Letting it replace the list would let a CI
 // variable ship an agent with embedded Python, which only runs on the machine that built it.
-export function buildArgs(binary: AgentBinary): string[] {
+/** @param {AgentBinary} binary @returns {string[]} */
+export function buildArgs(binary) {
 	const extra = process.env[binary.argsOverride]?.trim();
 	return [...binary.mandatoryArgs, ...(extra ? extra.split(/\s+/) : [])];
 }
@@ -98,8 +103,11 @@ export function buildArgs(binary: AgentBinary): string[] {
 const PYTHON_PROBE =
 	"import sys;print('%d.%d' % sys.version_info[:2], sys.executable)";
 
-/** Reports `<major>.<minor> <executable>` for one interpreter name, or rejects if it is absent. */
-type Probe = (candidate: string) => Promise<string>;
+/**
+ * Reports `<major>.<minor> <executable>` for one interpreter name, or rejects if it is absent.
+ *
+ * @typedef {(candidate: string) => Promise<string>} Probe
+ */
 
 /**
  * The Go toolchain the pinned agent release was written against, from its own `.go-version`.
@@ -116,14 +124,16 @@ type Probe = (candidate: string) => Promise<string>;
  * `charlievieth/strcase v0.0.5` asserts its own match the runtime's. A binary that dies at init is the
  * worst kind to ship: it packages, it passes a symbol check, and it never runs.
  */
-export async function goPin(sourceDir: string): Promise<string> {
+/** @param {string} sourceDir @returns {Promise<string>} */
+export async function goPin(sourceDir) {
 	return readFile(join(sourceDir, ".go-version"), "utf8")
 		.then((pin) => pin.trim())
 		.catch(() => "");
 }
 
 /** `GOTOOLCHAIN` for a pin, or nothing when the tag ships no `.go-version` to honour. */
-export function goToolchain(pin: string): NodeJS.ProcessEnv {
+/** @param {string} pin @returns {NodeJS.ProcessEnv} */
+export function goToolchain(pin) {
 	if (!/^\d+\.\d+(\.\d+)?$/.test(pin)) return {};
 	// `go1.26.5`, not `1.26.5`: GOTOOLCHAIN takes a toolchain name, and an unprefixed version is rejected
 	// rather than ignored, which is the better of the two failures but still a build that does not start.
@@ -131,14 +141,16 @@ export function goToolchain(pin: string): NodeJS.ProcessEnv {
 }
 
 /** Same contract as `.go-version`: a tag shipping no file has no opinion. */
-export async function pythonPin(sourceDir: string): Promise<string> {
+/** @param {string} sourceDir @returns {Promise<string>} */
+export async function pythonPin(sourceDir) {
 	return readFile(join(sourceDir, ".python-version"), "utf8")
 		.then((pin) => pin.trim())
 		.catch(() => "");
 }
 
-const atLeast = (version: string, pin: string): boolean => {
-	const parts = (v: string): number[] => v.split(".").map(Number);
+/** @param {string} version @param {string} pin @returns {boolean} */
+const atLeast = (version, pin) => {
+	const parts = (/** @type {string} */ v) => v.split(".").map(Number);
 	const [major, minor = 0] = parts(version);
 	const [pinMajor, pinMinor = 0] = parts(pin);
 	return major > pinMajor || (major === pinMajor && minor >= pinMinor);
@@ -148,10 +160,8 @@ const atLeast = (version: string, pin: string): boolean => {
  * pipx builds each venv with the interpreter pipx itself was installed under, which PATH does not
  * change; ubuntu-22.04's pipx runs under 3.10 and so rejected every dda against upstream's 3.12.
  */
-export async function pipxInterpreter(
-	pin: string,
-	probe: Probe
-): Promise<string[]> {
+/** @param {string} pin @param {Probe} probe @returns {Promise<string[]>} */
+export async function pipxInterpreter(pin, probe) {
 	if (!pin) return [];
 	for (const candidate of ["python3", "python"]) {
 		const reported = await probe(candidate).catch(() => "");
@@ -163,7 +173,8 @@ export async function pipxInterpreter(
 	return [];
 }
 
-async function ensureDda(cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
+/** @param {string} cwd @param {NodeJS.ProcessEnv} env @returns {Promise<void>} */
+async function ensureDda(cwd, env) {
 	try {
 		await run("dda", ["--version"], cwd, env);
 	} catch {
@@ -184,7 +195,8 @@ async function ensureDda(cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
 
 // Upstream's tools/bazel exits 2 when CI is set and XDG_CACHE_HOME does not already name a
 // directory, and derives GOCACHE from it. Off CI the same wrapper prints a hint and carries on.
-async function cacheHome(): Promise<NodeJS.ProcessEnv> {
+/** @returns {Promise<NodeJS.ProcessEnv>} */
+async function cacheHome() {
 	if (!process.env.CI) return {};
 	const configured = process.env.XDG_CACHE_HOME?.trim();
 	const dir = configured ? resolve(configured) : join(homedir(), ".cache");
@@ -195,7 +207,8 @@ async function cacheHome(): Promise<NodeJS.ProcessEnv> {
 
 // Upstream's .bazelrc names chocolatey's MSYS2 path; the GitHub image installs to the first entry.
 // BAZEL_SH leads, since that is the name upstream already gives this setting.
-export function windowsShellCandidates(): string[] {
+/** @returns {string[]} */
+export function windowsShellCandidates() {
 	const drive = (process.env.SystemDrive || "C:").replace(/[\\/]+$/, "");
 	const configured = process.env.BAZEL_SH?.trim();
 	return [
@@ -205,9 +218,8 @@ export function windowsShellCandidates(): string[] {
 	];
 }
 
-export async function resolveWindowsShell(
-	candidates: readonly string[]
-): Promise<string> {
+/** @param {readonly string[]} candidates @returns {Promise<string>} */
+export async function resolveWindowsShell(candidates) {
 	for (const candidate of candidates) {
 		try {
 			await stat(candidate);
@@ -227,10 +239,8 @@ export async function resolveWindowsShell(
  * `try-import %workspace%/user.bazelrc` is .bazelrc's last line and the file is gitignored at the
  * tag, so the override patches nothing of upstream's. Bazel reads a backslash in an rc file as an escape.
  */
-export async function writeBazelShellOverride(
-	sourceDir: string,
-	shell: string
-): Promise<void> {
+/** @param {string} sourceDir @param {string} shell @returns {Promise<void>} */
+export async function writeBazelShellOverride(sourceDir, shell) {
 	const posix = shell.replace(/\\/g, "/");
 	await writeFile(
 		join(sourceDir, "user.bazelrc"),
@@ -245,9 +255,8 @@ export async function writeBazelShellOverride(
 
 // tools/bazel.bat exits 2 when %TEMP% is on a volume where NTFS creates no 8.3 short name, which is
 // every volume but the profile's; GitHub puts the workspace and RUNNER_TEMP on D:.
-async function windowsPreconditions(
-	sourceDir: string
-): Promise<NodeJS.ProcessEnv> {
+/** @param {string} sourceDir @returns {Promise<NodeJS.ProcessEnv>} */
+async function windowsPreconditions(sourceDir) {
 	await writeBazelShellOverride(
 		sourceDir,
 		await resolveWindowsShell(windowsShellCandidates())
@@ -258,10 +267,8 @@ async function windowsPreconditions(
 }
 
 /** Creates what upstream's build assumes already exists, and reports the variables naming it. */
-export async function prepareHost(
-	target: Target,
-	sourceDir: string
-): Promise<NodeJS.ProcessEnv> {
+/** @param {Target} target @param {string} sourceDir @returns {Promise<NodeJS.ProcessEnv>} */
+export async function prepareHost(target, sourceDir) {
 	const pin = await goPin(sourceDir);
 	const toolchain = goToolchain(pin);
 	if (toolchain.GOTOOLCHAIN)
@@ -280,11 +287,8 @@ export async function prepareHost(
 }
 
 /** Builds every binary for one target and returns their shipped paths. Throws on the first failure. */
-export async function build({
-	target,
-	sourceDir,
-	outputDir,
-}: BuildOptions): Promise<string[]> {
+/** @param {BuildOptions} options @returns {Promise<string[]>} */
+export async function build({ target, sourceDir, outputDir }) {
 	const base = environment(target);
 	if (target.precondition) {
 		const [command, ...args] = target.precondition.split(" ");
@@ -306,7 +310,8 @@ export async function build({
 		env
 	);
 
-	const shipped: string[] = [];
+	/** @type {string[]} */
+	const shipped = [];
 	// Not every binary exists on every system: system-probe is eBPF and Linux-only, security-agent has no
 	// macOS build. Asking for one that does not exist fails the whole build rather than shipping less.
 	for (const binary of builtFor(target)) {
@@ -345,11 +350,8 @@ export async function build({
  * A missing `strip` is not a build failure. The binary is correct either way and the cost is disk, so a
  * toolchain without binutils ships a larger package rather than no package.
  */
-async function stripBinary(
-	file: string,
-	target: Target,
-	env: NodeJS.ProcessEnv
-) {
+/** @param {string} file @param {Target} target @param {NodeJS.ProcessEnv} env */
+async function stripBinary(file, target, env) {
 	// Windows PE debug data is not in a form GNU strip should be pointed at, and the MSVC-shaped toolchain
 	// a runner has is not guaranteed. Left alone rather than guessed at.
 	if (target.os === "windows") return;

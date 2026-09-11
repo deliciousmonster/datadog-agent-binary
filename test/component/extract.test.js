@@ -16,10 +16,10 @@ import {
 	readArMembers,
 	tarFlagFor,
 	wantedFrom,
-} from "../../dist/src/extract.js";
-import { TARGETS, findTarget } from "../../dist/src/targets.js";
-import { RELEASE_ARTIFACTS } from "../../dist/src/release.js";
-import { extractedFor } from "../../dist/src/binaries.js";
+} from "../../agent-build/extract.js";
+import { TARGETS, findTarget } from "../../agent-build/toolchain.js";
+import { RELEASE_ARTIFACTS } from "../../agent-build/release.js";
+import { extractedFor } from "../../agent-build/binaries.js";
 
 const scratch = () => mkdtempSync(join(tmpdir(), "ddab-extract-"));
 

@@ -167,7 +167,7 @@ test("every supported target has a matrix leg that builds it, and vice versa", (
 	);
 
 	const { targetNames } = require(
-		path.join(REPO_ROOT, "dist", "src", "targets.js")
+		path.join(REPO_ROOT, "agent-build", "toolchain.js")
 	);
 	assert.deepEqual(legs.slice().sort(), targetNames().slice().sort());
 });

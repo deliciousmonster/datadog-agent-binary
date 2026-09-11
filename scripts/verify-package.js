@@ -7,10 +7,10 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { platformPackageDir } from "./paths.js";
-import { TARGETS } from "../dist/src/targets.js";
-import { binaryFilename, recordedBuildTags } from "../dist/src/binaries.js";
-import { allPackages } from "../dist/src/packages.js";
-import { EBPF_SHIP_DIR } from "../dist/src/release.js";
+import { TARGETS } from "../agent-build/toolchain.js";
+import { binaryFilename, recordedBuildTags } from "../agent-build/binaries.js";
+import { allPackages } from "../agent-build/packages.js";
+import { EBPF_SHIP_DIR } from "../agent-build/release.js";
 
 // Windows ships npm as npm.cmd, and node refuses to spawn a .cmd without a shell (CVE-2024-27980), so
 // without this the gate dies `spawnSync npm ENOENT` there instead of reading the tarball.

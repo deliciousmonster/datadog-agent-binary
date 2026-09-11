@@ -29,6 +29,55 @@ import {
 	renderSystemProbeYaml,
 } from "./render.js";
 
+/**
+ * The five ports this node resolved, read once per component instance.
+ *
+ * @typedef {object} Ports
+ * @property {number} receiver @property {number} expvar @property {number} debug
+ * @property {number} dogstatsd @property {number} processExpvar
+ */
+
+/**
+ * What an operator asked for on the opt-in half, in Datadog's own spelling.
+ *
+ * @typedef {object} ProbeSettings
+ * @property {boolean} systemProbe @property {boolean} security
+ * @property {{ discovery: boolean, networkMonitoring: boolean, serviceMonitoring: boolean }} modules
+ */
+
+/**
+ * Every path this node writes or reads under the runtime tree. One object, because the core agent takes the
+ * directory holding a file and system-probe takes the file, so both spellings of one path are stated rather
+ * than rebuilt per call site.
+ *
+ * @typedef {Record<string, string>} RuntimePaths
+ */
+
+/**
+ * What prepareRuntime settled: the tree, the files to write into it, and what it resolved on the way.
+ *
+ * @typedef {object} Runtime
+ * @property {string | null} root Harper's root, or null when nothing could name one.
+ * @property {RuntimePaths} paths
+ * @property {Record<string, string>} configFiles Absolute path to contents, written before anything spawns.
+ * @property {ProbeSettings} probes
+ * @property {string[]} coreChecks The checks that were collected, by name.
+ */
+
+/**
+ * One declared process, as the start path hands it to a supervisor.
+ *
+ * @typedef {object} Agent
+ * @property {string} shipsAs The binary's filename, which is what the resolver asks a platform package for.
+ * @property {string} name Harper's spawn name, which is also the PID-lock filename.
+ * @property {string} kind Which verifier proves this one is the agent it claims to be.
+ * @property {string} title What an operator reads in a log line.
+ * @property {boolean} [optional] Started only where `enabled` says so.
+ * @property {(probes: ProbeSettings) => boolean} [enabled]
+ * @property {(paths: RuntimePaths) => string[]} args
+ * @property {string} [exitHint] What an immediate non-zero exit from this one usually means.
+ */
+
 /** How an operator reading a log knows which component is speaking. */
 export const LABEL = "Datadog supervisor";
 
@@ -87,6 +136,7 @@ export const resolveEbpfDir = () => resolver.resolveDir(PROBE, "getEbpfDir");
  *
  * @param {import('@deliciousmonster/harper-process-guard').Log} log
  */
+/** @param {import("@deliciousmonster/harper-process-guard").Log} log @returns {Ports} */
 export function resolvePorts(log) {
 	const port = (/** @type {string} */ name, /** @type {number} */ fallback) =>
 		resolvePort(name, fallback, log, LABEL);
@@ -207,6 +257,7 @@ export const KNOWN = Object.keys(table({ receiver: 0 }));
  * @param {readonly string[]} names
  * @param {{ receiver: number }} ports
  */
+/** @returns {Agent[]} */
 export function agentsFor(names, ports) {
 	const known = table(ports);
 	const unknown = names.filter((name) => !known[name]);
@@ -255,6 +306,7 @@ const on = (value) =>
  * host, USM parses protocol traffic; either can be wanted without the other, and both are off in Datadog's
  * own default too.
  */
+/** @param {NodeJS.ProcessEnv} [env] @returns {ProbeSettings} */
 export function probeSettings(env = process.env) {
 	const systemProbe = on(env.DD_SYSTEM_PROBE_ENABLED);
 	const security = on(env.DD_RUNTIME_SECURITY_CONFIG_ENABLED);
@@ -308,7 +360,7 @@ function linuxPrivilege(read, uid) {
 			able: false,
 			why: "this process is not root and its effective capabilities could not be read from /proc/self/status",
 		};
-	const has = (bit) => (mask >> bit) & 1n;
+	const has = (/** @type {bigint} */ bit) => (mask >> bit) & 1n;
 	if (has(CAP_SYS_ADMIN) || has(CAP_BPF))
 		return {
 			able: true,
@@ -341,7 +393,7 @@ function macosPrivilege(openBpf, uid) {
 		return {
 			able: false,
 			why:
-				`this process is not root and cannot open /dev/bpf0 (${error.code ?? error.message}), so the ` +
+				`this process is not root and cannot open /dev/bpf0 (${/** @type {NodeJS.ErrnoException} */ (error).code ?? /** @type {Error} */ (error).message}), so the ` +
 				"packet-capture tracer has no device to read. Run as root, or add the user to the access_bpf " +
 				"group, or leave DD_SYSTEM_PROBE_ENABLED unset",
 		};
@@ -398,7 +450,7 @@ export function probePrivilege({
  * refusal here would be this component overruling it on a heuristic. What this replaces is a restart loop
  * whose logs say `operation not permitted` and nothing about which capability is missing.
  *
- * @param {object} probes What probeSettings() resolved from the environment.
+ * @param {ProbeSettings} probes What probeSettings() resolved from the environment.
  * @param {string | null} ebpfDir Where the precompiled objects are, or null if none were found.
  * @param {{ log: import('@deliciousmonster/harper-process-guard').Log }} context
  */
@@ -434,6 +486,11 @@ export function probeStatus(probes, ebpfDir, { log }) {
 
 // The runtime tree lives under Harper's root, never the component directory, which `harper deploy` replaces
 // under a live agent. Named by the component's own directory, not just "datadog": sharing one pidDir means sharing one lock.
+/**
+ * @param {string} componentDir
+ * @param {{ ports: Ports, log: import("@deliciousmonster/harper-process-guard").Log, ebpfDir: string | null }} context
+ * @returns {Runtime}
+ */
 export function prepareRuntime(componentDir, { ports, log, ebpfDir }) {
 	const root = hostRoot(log, LABEL);
 	const runtimeDir = root
@@ -505,7 +562,7 @@ export function prepareRuntime(componentDir, { ports, log, ebpfDir }) {
 		removeStaleDefaults(paths.confd, owned);
 	} catch (error) {
 		log.warn(
-			`${LABEL}: no core check configuration was collected (${error.message}), so the agent ` +
+			`${LABEL}: no core check configuration was collected (${/** @type {Error} */ (error).message}), so the agent ` +
 				`will report healthy and collect no host metrics. Traces are unaffected.`
 		);
 	}

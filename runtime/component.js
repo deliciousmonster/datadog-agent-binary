@@ -108,6 +108,7 @@ untraceWith(untraced);
 // A process-global setting, so the next `tracer.use('http', ...)` from anywhere replaces it: dd-trace's
 // configurePlugin overwrites a plugin's config rather than merging into it. Kept only as a fallback for
 // releases where the private store above has moved; it cannot stand alone.
+/** @param {any} tracer @param {readonly string[]} blocklist */
 export function untraceAgentProbes(tracer, blocklist) {
 	tracer.use("http", { client: { blocklist } }); // under `client`, or the server half drops inbound traces too
 }
@@ -137,9 +138,9 @@ export function suppressAgentProbes(urls, log, require = undefined) {
 		return { traced: true };
 	} catch (error) {
 		log.error(
-			`${LABEL}: found dd-trace but could not configure it to ignore the agent probes: ${error.stack ?? error.message}. Probe requests may now appear as spans in APM.`
+			`${LABEL}: found dd-trace but could not configure it to ignore the agent probes: ${/** @type {Error} */ (error).stack ?? /** @type {Error} */ (error).message}. Probe requests may now appear as spans in APM.`
 		);
-		return { traced: false, reason: error.message };
+		return { traced: false, reason: /** @type {Error} */ (error).message };
 	}
 }
 // -- Who holds them up ------------------------------------------------------------------------------------
@@ -176,7 +177,7 @@ export const apiKeyStatus = () => (process.env.DD_API_KEY ? "set" : "MISSING");
 /**
  * The fields every status shape starts from, so NOT_STARTED and a real startup cannot drift apart.
  *
- * @param {{ receiver: number }} ports
+ * @param {import("./datadog.js").Ports} ports
  */
 export function baseStatus(ports) {
 	return {
@@ -205,7 +206,7 @@ export function baseStatus(ports) {
  * What a thread that has not started anything reports. The detail leads with the likeliest cause, because
  * a component Harper loaded by scanning componentsRoot reaches this and nothing else.
  *
- * @param {{ receiver: number }} ports
+ * @param {import("./datadog.js").Ports} ports
  * @param {string} configEntry
  */
 export function notStarted(ports, configEntry) {
@@ -224,10 +225,10 @@ export function notStarted(ports, configEntry) {
  * which is why it gets an endpoint at all.
  *
  * @param {object} options
- * @param {Function} options.ResourceBase Harper's Resource, or a stub outside a compartment.
+ * @param {new () => object} options.ResourceBase Harper's Resource, or a stub outside a compartment.
  * @param {ComponentState} options.state
- * @param {object} options.notStarted
- * @param {() => Promise<object>} options.readDeliverySignal
+ * @param {Record<string, any>} options.notStarted
+ * @param {() => Promise<any>} options.readDeliverySignal
  */
 export function createStatusResource({
 	ResourceBase,
@@ -239,6 +240,7 @@ export function createStatusResource({
 		static async get() {
 			// The counters belong to the node's trace-agent, not to this thread, so they are read whether
 			// or not this thread is the one that started it.
+			/** @type {[Record<string, any>, any]} */
 			const [status, delivery] = await Promise.all([
 				state.supervisor ?? notStarted,
 				readDeliverySignal(),
@@ -248,7 +250,7 @@ export function createStatusResource({
 				// Read here rather than copied at boot: a verdict the supervisor took before a restart
 				// describes a process this node no longer runs.
 				processes: await Promise.all(
-					status.processes.map((process) =>
+					status.processes.map((/** @type {any} */ process) =>
 						// nodeProcess first: a thread that refused a handed-back pid has no process of its
 						// own, and the verdict has to be retaken against the one the node actually runs.
 						retakeVerdict(
@@ -277,11 +279,11 @@ export function createStatusResource({
 
 /**
  * @param {object} options
- * @param {readonly object[]} options.agents Declared processes, in start order.
- * @param {object} options.ports
+ * @param {readonly import("./datadog.js").Agent[]} options.agents Declared processes, in start order.
+ * @param {import("./datadog.js").Ports} options.ports
  * @param {import('@deliciousmonster/harper-process-guard').Log} options.log
  * @param {Function} options.spawn Harper's constrained spawn.
- * @param {(ebpfDir: string | null) => object} options.prepareRuntime
+ * @param {(ebpfDir: string | null) => import("./datadog.js").Runtime} options.prepareRuntime
  * @param {ComponentState} options.state
  */
 export function createStart({
@@ -293,13 +295,14 @@ export function createStart({
 	state,
 }) {
 	/** The started state for one process on this thread, or undefined before startup produced one. */
-	const startedProcess = (name) =>
-		state.started.find((process) => process?.name === name);
+	const startedProcess = (/** @type {string} */ name) =>
+		state.started.find((/** @type {any} */ process) => process?.name === name);
 
 	// Never rejects: a throw out of handleApplication plants an ErrorResource at the component's root path,
 	// which is worse than running without telemetry and saying so.
 	return async function start(scope) {
 		const supervision = supervisorFor(scope, { log, spawn });
+		/** @type {Record<string, any>} */
 		const status = { supervision: supervision.kind, ...baseStatus(ports) };
 		try {
 			// Measured on 7.82.1 rather than inferred from one shared config, because the two agents fail
@@ -333,6 +336,7 @@ export function createStart({
 			);
 
 			// Resolved up front so the fingerprint can never describe a different binary from the one spawned.
+			/** @type {string[]} */
 			const failures = [];
 			const binaries = await Promise.all(
 				wanted.map((agent, index) =>
@@ -417,8 +421,9 @@ export function createStart({
 			state.series = series.series;
 			status.processMetrics = series.state;
 		} catch (error) {
-			status.error = error.message;
-			log.error(`${LABEL}: startup failed: ${error.stack ?? error.message}`);
+			const thrown = /** @type {Error} */ (error);
+			status.error = thrown.message;
+			log.error(`${LABEL}: startup failed: ${thrown.stack ?? thrown.message}`);
 		}
 		return status;
 	};
@@ -436,7 +441,7 @@ export function createStart({
  * @param {object} options
  * @param {Function} options.spawn Harper's constrained spawn, read in resources.js and handed down.
  * @param {object} [options.logger] Harper's compartment logger, or undefined outside a compartment.
- * @param {Function} [options.Resource] Harper's Resource base, or undefined outside a compartment.
+ * @param {new () => object} [options.Resource] Harper's Resource base, or undefined outside a compartment.
  * @param {readonly string[]} options.processes Binary filenames, in start order. See runtime/datadog.js.
  */
 export function datadog({ spawn, logger, Resource, processes }) {

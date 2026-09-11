@@ -22,10 +22,10 @@ const { findFreePort } = await import("../support/loopback.js");
 const { withTempDir } = await import("../support/sandbox.js");
 
 const { currentTarget } = require(
-	path.join(REPO_ROOT, "dist", "src", "targets.js")
+	path.join(REPO_ROOT, "agent-build", "toolchain.js")
 );
 const { BINARIES } = require(
-	path.join(REPO_ROOT, "dist", "src", "binaries.js")
+	path.join(REPO_ROOT, "agent-build", "binaries.js")
 );
 const { resolveBinary } = await import("../../runtime/datadog.js");
 

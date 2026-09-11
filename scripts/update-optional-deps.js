@@ -3,8 +3,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "./paths.js";
-import { TARGETS } from "../dist/src/targets.js";
-import { allPackages } from "../dist/src/packages.js";
+import { TARGETS } from "../agent-build/toolchain.js";
+import { allPackages } from "../agent-build/packages.js";
 
 const packageJsonPath = join(REPO_ROOT, "package.json");
 const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));

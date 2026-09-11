@@ -10,7 +10,9 @@ export function findFreePort() {
 		const server = net.createServer();
 		server.once("error", reject);
 		server.listen(0, "127.0.0.1", () => {
-			const { port } = server.address();
+			const { port } = /** @type {import("node:net").AddressInfo} */ (
+				server.address()
+			);
 			server.close(() => resolve(port));
 		});
 	});

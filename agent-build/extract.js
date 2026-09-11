@@ -1,3 +1,4 @@
+// @ts-check
 // Lifts the binaries this package does not build out of Datadog's own signed package.
 //
 // Nothing here trusts the download. `verifyRelease` walks the whole chain first, and this refuses to write
@@ -15,16 +16,18 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 
-import { AgentBinary, binaryFilename, extractedFor } from "./binaries.js";
+import { binaryFilename, extractedFor } from "./binaries.js";
 import { logger } from "./log.js";
 import {
 	DATADOG_APT_KEY_URL,
 	EBPF_SOURCE_DIR,
 	RELEASE_ARTIFACTS,
 	RELEASE_PATHS,
-	type ReleaseArtifact,
 } from "./release.js";
-import { Target } from "./targets.js";
+
+/** @typedef {import("./binaries.js").AgentBinary} AgentBinary */
+/** @typedef {import("./release.js").ReleaseArtifact} ReleaseArtifact */
+/** @typedef {import("./toolchain.js").Target} Target */
 import {
 	artifactUrl,
 	packagesUrl,
@@ -46,11 +49,12 @@ const PAYLOAD_ROOT = "opt/datadog-agent";
  */
 const DATA_MEMBER = /^data\.tar(\.(zst|xz|gz|bz2))?$/;
 
-export interface ArArchiveMember {
-	readonly name: string;
-	readonly offset: number;
-	readonly size: number;
-}
+/**
+ * @typedef {object} ArArchiveMember
+ * @property {string} name
+ * @property {number} offset
+ * @property {number} size
+ */
 
 /**
  * Parse an `ar` archive header table.
@@ -60,11 +64,13 @@ export interface ArArchiveMember {
  * and a silent wrong answer is worse than a refusal, so an unrecognised name is returned as-is for the
  * caller to fail on rather than guessed at.
  */
-export function readArMembers(bytes: Uint8Array): ArArchiveMember[] {
+/** @param {Uint8Array} bytes @returns {ArArchiveMember[]} */
+export function readArMembers(bytes) {
 	const text = new TextDecoder("latin1");
 	if (text.decode(bytes.subarray(0, 8)) !== "!<arch>\n")
 		throw new Error("not an ar archive: the magic bytes are wrong");
-	const members: ArArchiveMember[] = [];
+	/** @type {ArArchiveMember[]} */
+	const members = [];
 	let at = 8;
 	while (at + 60 <= bytes.byteLength) {
 		const header = text.decode(bytes.subarray(at, at + 60));
@@ -83,7 +89,8 @@ export function readArMembers(bytes: Uint8Array): ArArchiveMember[] {
 }
 
 /** The compressed payload member, or a refusal naming what was there instead. */
-export function findDataMember(members: readonly ArArchiveMember[]) {
+/** @param {readonly ArArchiveMember[]} members */
+export function findDataMember(members) {
 	const found = members.find((m) => DATA_MEMBER.test(m.name));
 	if (!found)
 		throw new Error(
@@ -93,9 +100,11 @@ export function findDataMember(members: readonly ArArchiveMember[]) {
 }
 
 /** `tar`'s flag for the compression a member's name declares. Unknown suffixes are refused, not guessed. */
-export function tarFlagFor(memberName: string): string {
+/** @param {string} memberName @returns {string} */
+export function tarFlagFor(memberName) {
 	const suffix = memberName.split(".").pop();
-	const flags: Record<string, string> = {
+	/** @type {Record<string, string>} */
+	const flags = {
 		zst: "--zstd",
 		xz: "-J",
 		gz: "-z",
@@ -111,10 +120,11 @@ export function tarFlagFor(memberName: string): string {
 }
 
 /** What one target needs out of the release: binaries by their path in the payload, plus the eBPF objects. */
-export function wantedFrom(target: Target): {
-	binaries: { binary: AgentBinary; payloadPath: string }[];
-	ebpf: boolean;
-} {
+/**
+ * @param {Target} target
+ * @returns {{ binaries: { binary: AgentBinary, payloadPath: string }[], ebpf: boolean }}
+ */
+export function wantedFrom(target) {
 	const binaries = extractedFor(target).map((binary) => {
 		const payloadPath = RELEASE_PATHS[binary.shipsAs];
 		if (!payloadPath)
@@ -130,21 +140,17 @@ export function wantedFrom(target: Target): {
 	};
 }
 
-interface Fetcher {
-	(url: string): Promise<Uint8Array>;
-}
+/** @typedef {(url: string) => Promise<Uint8Array>} Fetcher */
 
-/** What a gpg verify of the detached signature reported. Injected so the refusal path is testable. */
-interface SignatureCheck {
-	(
-		release: Uint8Array,
-		signature: Uint8Array,
-		key: Uint8Array,
-		workDir: string
-	): Promise<{ good: boolean; fingerprint?: string }>;
-}
+/**
+ * What a gpg verify of the detached signature reported. Injected so the refusal path is testable.
+ *
+ * @typedef {(release: Uint8Array, signature: Uint8Array, key: Uint8Array, workDir: string) =>
+ *   Promise<{ good: boolean, fingerprint?: string }>} SignatureCheck
+ */
 
-const fetchBytes: Fetcher = async (url) => {
+/** @type {Fetcher} */
+const fetchBytes = async (url) => {
 	const response = await fetch(url);
 	if (!response.ok)
 		throw new Error(
@@ -153,7 +159,8 @@ const fetchBytes: Fetcher = async (url) => {
 	return new Uint8Array(await response.arrayBuffer());
 };
 
-const asText = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+const asText = (/** @type {Uint8Array} */ bytes) =>
+	new TextDecoder().decode(bytes);
 
 /**
  * Verify Datadog's signature over the Release file, using the caller's gpg.
@@ -168,12 +175,8 @@ const asText = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
  * File name too long`, which reads as a broken gpg installation rather than as a path that is too long.
  * Measured here on 2026-09-10 under a session scratch directory, at 104 characters.
  */
-export async function checkSignature(
-	release: Uint8Array,
-	signature: Uint8Array,
-	key: Uint8Array,
-	workDir: string
-) {
+/** @type {SignatureCheck} */
+export async function checkSignature(release, signature, key, workDir) {
 	const home = await mkdtemp(join(tmpdir(), "ddab-gpg-"));
 	const files = {
 		key: join(workDir, "datadog.asc"),
@@ -199,7 +202,9 @@ export async function checkSignature(
 				files.release,
 			],
 			{ env }
-		).catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? "" }));
+		).catch((/** @type {{ stdout?: string }} */ error) => ({
+			stdout: error.stdout ?? "",
+		}));
 		return readGpgStatus(status.stdout ?? "");
 	} finally {
 		// The agent holds this open, so it is asked to stop before the directory goes. A failure to stop it
@@ -209,17 +214,17 @@ export async function checkSignature(
 	}
 }
 
-export interface ExtractOptions {
-	readonly target: Target;
-	/** Where the binaries land, beside the built ones. */
-	readonly outputDir: string;
-	/** Where the eBPF objects land. Not under `outputDir`: they are data, not executables. */
-	readonly ebpfDir: string;
-	readonly workDir: string;
-	readonly fetch?: Fetcher;
-	readonly verifySignature?: SignatureCheck;
-	readonly artifact?: ReleaseArtifact;
-}
+/**
+ * @typedef {object} ExtractOptions
+ * @property {Target} target
+ * @property {string} outputDir Where the binaries land, beside the built ones.
+ * @property {string} ebpfDir Where the eBPF objects land. Not under `outputDir`: they are data, not
+ *   executables.
+ * @property {string} workDir
+ * @property {Fetcher} [fetch]
+ * @property {SignatureCheck} [verifySignature]
+ * @property {ReleaseArtifact} [artifact]
+ */
 
 /**
  * Put every `from: "release"` binary for one target into `outputDir`, or refuse and write nothing.
@@ -227,6 +232,7 @@ export interface ExtractOptions {
  * Returns the paths written, matching what the build step returns, so the packaging step does not care
  * which half a binary came from.
  */
+/** @param {ExtractOptions} options @returns {Promise<string[]>} */
 export async function extractRelease({
 	target,
 	outputDir,
@@ -235,7 +241,7 @@ export async function extractRelease({
 	fetch: get = fetchBytes,
 	verifySignature = checkSignature,
 	artifact = RELEASE_ARTIFACTS[target.name],
-}: ExtractOptions): Promise<string[]> {
+}) {
 	const wanted = wantedFrom(target);
 	if (wanted.binaries.length === 0) return [];
 	if (!artifact)
@@ -296,7 +302,8 @@ export async function extractRelease({
 		...members,
 	]);
 
-	const written: string[] = [];
+	/** @type {string[]} */
+	const written = [];
 	for (const { binary, payloadPath } of wanted.binaries) {
 		const from = join(unpacked, PAYLOAD_ROOT, payloadPath);
 		const to = join(outputDir, binaryFilename(binary, target));

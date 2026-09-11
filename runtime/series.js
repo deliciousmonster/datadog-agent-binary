@@ -191,7 +191,8 @@ export function dogstatsdLines(prefix, metrics, tags = {}) {
  * One reading for one named process group, ready to send.
  *
  * @param {{ name: string, pid?: number, self?: boolean }[]} members
- * @param {{ group: string, prefix?: string, tags?: Record<string,string>, platform?: string }} options
+ * @param {{ group: string, prefix?: string, tags?: Record<string,string>, platform?: string,
+ *   include?: readonly string[], exclude?: readonly string[] }} options
  */
 export function processSeries(members, options) {
 	const {
@@ -267,7 +268,7 @@ export async function sendDogstatsd(
  * @param {Record<string,string>} [options.tags] @param {import("@deliciousmonster/harper-process-guard").Log} [options.log]
  * @param {NodeJS.ProcessEnv} [options.env] @param {(fn: () => void, ms: number) => any} [options.setTimer]
  * @param {typeof sendDogstatsd} [options.send]
- * @returns {{ stop: () => void, tick: () => Promise<'sent'|'not-owner'|'nothing'|'failed'>, intervalSeconds: number }}
+ * @returns {{ stop: () => void, tick: () => Promise<'sent'|'not-owner'|'nothing'|'failed'>, intervalSeconds: number, prefix: string }}
  */
 export function startProcessSeries({
 	members,
@@ -283,10 +284,12 @@ export function startProcessSeries({
 	const resolved = seriesSettings(env);
 	const groups = () => {
 		const all = members();
-		return [
+		/** @type {[string, { name: string, pid?: number, self?: boolean }[]][]} */
+		const grouped = [
 			["harper", all.filter((m) => m.self)],
 			["datadog-agents", all.filter((m) => !m.self)],
-		].filter(([, m]) => m.length > 0);
+		];
+		return grouped.filter(([, m]) => m.length > 0);
 	};
 	const tick = async () => {
 		if (

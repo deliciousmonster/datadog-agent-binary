@@ -15,15 +15,15 @@ on:
 
 env:
   # Only the toolchain that RUNS the build tasks. Which Go compiles the agent is decided by the agent's
-  # own .go-version, which src/build.ts reads out of the fetched source and passes as GOTOOLCHAIN, so this
+  # own .go-version, which agent-build/compile.js reads out of the fetched source and passes as GOTOOLCHAIN,
+  # so this
   # number cannot drift from the pinned release the way it did: it read 1.23 against a source asking for
   # 1.26.5, and passed only because go.mod made Go fetch a newer toolchain on its own.
   GO_VERSION: "1.23"
 
 jobs:
-  # The single source of the release version, so build and publish agree on it. Nothing else:
-  # a cold tsc is under half a second, so compiling here and shipping dist/ around cost more
-  # than it saved and serialised the whole matrix behind a job that only reads a ref.
+  # The single source of the release version, so build and publish agree on it. Nothing else: there is
+  # nothing to compile, so a job that only reads a ref has nothing to hand the matrix.
   prepare:
     runs-on: ubuntu-latest
     # Reading a ref and writing one output. No checkout, no install.
@@ -157,9 +157,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build TypeScript
-        run: npm run build
-
       - name: Build ${{ matrix.platform }}
         shell: bash
         env:
@@ -172,7 +169,7 @@ jobs:
         run: |
           args=()
           if [ -n "$DATADOG_VERSION" ]; then args=(--datadog-version "$DATADOG_VERSION"); fi
-          node dist/src/cli.js build "${args[@]}"
+          node agent-build/cli.js build "${args[@]}"
           ls -l "build/${{ matrix.platform }}/bin/"
 
       # The agent build starts a Bazel server (the config-schema step does, whatever the rtloader flags
@@ -196,8 +193,6 @@ jobs:
       # count for the same input) against these same real binaries, on every leg this matrix builds -
       # not just wherever a developer happens to have the locally-patched Harper test/live/ needs.
       #
-      # Calls node --test directly, not `npm run test:binaries`: that script's own `npm run
-      # build` prefix would recompile dist/ from scratch, already current from the step above.
       # Windows runs the same directory through the gate, which subtracts what windows-gate-checks.mjs
       # names and refuses a run that executed nothing. The step limit is for a runner a leaked agent
       # keeps alive: a hang here once cost the leg its whole 60-minute job. One file at a time: both
@@ -230,7 +225,7 @@ jobs:
         run: |
           set -e
           # Derived, not hardcoded: a second binary added to BINARIES is covered here automatically.
-          bins=$(node -e "console.log(require('./dist/src/binaries.js').BINARIES.map(b=>b.shipsAs).join(' '))")
+          bins=$(node -e "console.log(require('./agent-build/binaries.js').BINARIES.map(b=>b.shipsAs).join(' '))")
 
           check() {
             bin="$1"; label="$2"; prefix="$3"; limit="$4"
@@ -447,13 +442,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # The release tag (vX.Y.Z) is the version everything is published at, so
-      # the npm package version must match it. This runs the `version` lifecycle
-      # script (build + update-optional-deps), keeping optionalDependencies
+      # The release tag (vX.Y.Z) is the version everything is published at, so the npm package version must
+      # match it. This runs the `version` lifecycle script (update-optional-deps), keeping optionalDependencies
       # pinned to the same version. --allow-same-version makes re-runs safe.
-      #
-      # update-optional-deps keeps its own build prefix (see package.json): this is where dist/
-      # is compiled in this job, and the two steps below both read it.
       - name: Set package version from tag
         env:
           VERSION: ${{ needs.prepare.outputs.version }}

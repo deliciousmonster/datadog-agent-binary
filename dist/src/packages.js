@@ -1,0 +1,59 @@
+// How the binaries are split across npm packages, stated once.
+//
+// Two packages per platform, and the split is `from`. The base package carries what this repo builds: the
+// core agent and the trace-agent, which is what a Harper node needs to send metrics and traces. The probe
+// package carries what is lifted out of Datadog's release: system-probe, security-agent, and the 42 MB of
+// precompiled eBPF objects system-probe is useless without.
+//
+// The probe package is not an optionalDependency, so it is not installed unless an operator asks for it.
+// That is the whole reason for the split. system-probe wants CAP_SYS_ADMIN or root and a kernel it has an
+// object for, security-agent wants a runtime-security policy set, and neither does anything on a node that
+// has not configured them. Shipping 145 MB per platform to every install so that a minority can turn on a
+// feature is the cost the base package refuses; publishing them so the minority can have them is the
+// capability the split preserves. Nothing is dropped, and nothing is paid for twice.
+//
+// create-platform-packages.js, verify-package.js and update-optional-deps.js all read these, so a rename
+// cannot land in two of the three.
+import { baseBinaries, extractedFor, probeBinaries, } from "./binaries.js";
+export const SCOPE = "@deliciousmonster/datadog-agent-binary";
+const base = (target) => ({
+    name: `${SCOPE}-${target.name}`,
+    dirName: target.name,
+    target,
+    binaries: baseBinaries(target),
+    optionalDependency: true,
+    ebpf: false,
+    description: `Datadog core agent and trace-agent for ${target.os} ${target.arch}`,
+});
+const probe = (target) => ({
+    name: `${SCOPE}-probe-${target.name}`,
+    dirName: `probe-${target.name}`,
+    target,
+    binaries: probeBinaries(target),
+    // Deliberately not an optionalDependency. npm would install it on every matching host, which is the
+    // 145 MB the split exists to avoid charging people who never turn these on.
+    optionalDependency: false,
+    // Only where system-probe is LIFTED, which is Linux. macOS uses no eBPF and Windows uses kernel
+    // drivers, so shipping objects to either would be 42 MB neither can load.
+    ebpf: extractedFor(target).some((b) => b.shipsAs === "system-probe"),
+    // Named from what it carries rather than from a fixed pair: macOS has no security-agent worth
+    // shipping, and a description listing one is a package claiming a binary it does not have.
+    description: `Datadog ${listing(probeBinaries(target))} for ${target.os} ${target.arch}`,
+});
+/** `a`, `a and b`, `a, b and c`. */
+const listing = (binaries) => {
+    const names = binaries.map((b) => b.shipsAs);
+    return names.length < 2
+        ? names.join("")
+        : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+};
+/** Every package one target publishes. A target with no opt-in binary publishes only its base package. */
+export function packagesFor(target) {
+    const packages = [base(target)];
+    if (probeBinaries(target).length > 0)
+        packages.push(probe(target));
+    return packages;
+}
+/** Every package across every target, which is what the publish job and the publish gate both walk. */
+export const allPackages = (targets) => targets.flatMap(packagesFor);
+//# sourceMappingURL=packages.js.map

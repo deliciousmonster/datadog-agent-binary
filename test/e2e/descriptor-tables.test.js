@@ -17,7 +17,7 @@ const {
 	currentTarget,
 } = require("../support/generator.js");
 const { findTarget } = require(
-	path.join(REPO_ROOT, "dist", "src", "targets.js")
+	path.join(REPO_ROOT, "agent-build", "toolchain.js")
 );
 
 let workDir;
@@ -112,7 +112,7 @@ test("an unknown binary name throws rather than returning a path that does not e
 // coat-tails with no measurement recorded for it. `src/binaries.ts` carries both halves.
 test("the override adds flags and cannot drop the python exclusion", () => {
 	const { buildArgs } = require(
-		path.join(REPO_ROOT, "dist", "src", "build.js")
+		path.join(REPO_ROOT, "agent-build", "compile.js")
 	);
 	const core = BINARIES.find((b) => b.shipsAs === "datadog-agent");
 	assert.ok(core.mandatoryArgs.includes("--build-exclude=python"));
@@ -174,7 +174,7 @@ test("the table spells goos, goarch and exe the way the Go toolchain names them,
 // GitHub API that rate-limits at 60 an hour per IP across every runner.
 test("the agent version is pinned in the repo, not resolved from the network", async () => {
 	const { pinnedVersion } = require(
-		path.join(REPO_ROOT, "dist", "src", "downloader.js")
+		path.join(REPO_ROOT, "agent-build", "download.js")
 	);
 	const pin = await pinnedVersion();
 	assert.match(

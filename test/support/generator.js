@@ -19,27 +19,27 @@ function findRepoRoot(start) {
 
 const REPO_ROOT = findRepoRoot(import.meta.dirname);
 const { TARGETS, currentTarget } = require(
-	path.join(REPO_ROOT, "dist", "src", "targets.js")
+	path.join(REPO_ROOT, "agent-build", "toolchain.js")
 );
 const { BINARIES, binariesFor } = require(
-	path.join(REPO_ROOT, "dist", "src", "binaries.js")
+	path.join(REPO_ROOT, "agent-build", "binaries.js")
 );
 const { packagesFor } = require(
-	path.join(REPO_ROOT, "dist", "src", "packages.js")
+	path.join(REPO_ROOT, "agent-build", "packages.js")
 );
 const { EBPF_SHIP_DIR } = require(
-	path.join(REPO_ROOT, "dist", "src", "release.js")
+	path.join(REPO_ROOT, "agent-build", "release.js")
 );
 
-// The tree shape every fixture built from this repo's compiled output needs: a scripts/ dir plus the whole
-// of dist/src, since a caller's copied script resolves its ../dist/src imports relative to itself. Copied
+// The tree shape every fixture built from this repo needs: a scripts/ dir plus the whole of agent-build,
+// since a caller's copied script resolves its ../agent-build imports relative to itself. Copied
 // wholesale rather than named table by table, so a script that starts importing one more never breaks here.
 function scaffoldWorkDir(prefix) {
 	const workDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 	fs.mkdirSync(path.join(workDir, "scripts"));
 	fs.cpSync(
-		path.join(REPO_ROOT, "dist", "src"),
-		path.join(workDir, "dist", "src"),
+		path.join(REPO_ROOT, "agent-build"),
+		path.join(workDir, "agent-build"),
 		{ recursive: true }
 	);
 	return workDir;

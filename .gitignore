@@ -4,8 +4,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Build outputs
-dist/
+# Build outputs. There is no dist/: nothing here compiles, and the four scripts and nine suites that used
+# to read one are the reason. build/ is the agent build tree, npm/ the staged platform packages.
 build/
 release/
 npm/

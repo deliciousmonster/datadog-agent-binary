@@ -9,8 +9,8 @@ import {
 	binariesFor,
 	builtFor,
 	extractedFor,
-} from "../../dist/src/binaries.js";
-import { TARGETS } from "../../dist/src/targets.js";
+} from "../../agent-build/binaries.js";
+import { TARGETS } from "../../agent-build/toolchain.js";
 
 describe("where each binary comes from", () => {
 	it("only the core agent and the trace-agent are built here", () => {

@@ -11,7 +11,7 @@ const path = require("node:path");
 const { REPO_ROOT } = require("../support/generator.js");
 const { withEnv, withHome, withTempDir } = require("../support/sandbox.js");
 const { findTarget } = require(
-	path.join(REPO_ROOT, "dist", "src", "targets.js")
+	path.join(REPO_ROOT, "agent-build", "toolchain.js")
 );
 const {
 	environment,
@@ -19,7 +19,7 @@ const {
 	resolveWindowsShell,
 	windowsShellCandidates,
 	writeBazelShellOverride,
-} = require(path.join(REPO_ROOT, "dist", "src", "build.js"));
+} = require(path.join(REPO_ROOT, "agent-build", "compile.js"));
 
 const LINUX = findTarget("linux-x86_64");
 const WINDOWS = findTarget("windows-x86_64");

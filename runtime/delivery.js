@@ -259,7 +259,17 @@ export function recallStatsWindow(
 	return seen === undefined ? undefined : at - seen;
 }
 
-/** The trace-agent's own delivery counters. Never rejects: an endpoint that does not answer is itself a verdict. */
+/**
+ * The trace-agent's own delivery counters. Never rejects: an endpoint that does not answer is itself a verdict.
+ *
+ * @param {number} port
+ * @param {object} [options]
+ * @param {string} [options.traceLog] The trace-agent's log, which is the only trace-hop evidence this agent
+ *   build gives. Absent, the verdict cannot separate refused from not-refused and says so.
+ * @param {string} [options.markDir] Where the shared stats mark lives, so every thread on the node reads the
+ *   same last-acceptance rather than its own.
+ * @param {() => number} [options.now]
+ */
 export async function readSignal(
 	port,
 	{ traceLog, markDir, now = Date.now } = {}

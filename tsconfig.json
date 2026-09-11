@@ -1,24 +1,36 @@
 {
 	"compilerOptions": {
-		"target": "ES2020",
+		"target": "ES2022",
 		"module": "node16",
-		"lib": ["ES2020"],
+		"moduleResolution": "node16",
+		"lib": ["ES2022"],
 		// TS7 stops auto-including node_modules/@types; without this every `process` reference dies on TS2591.
 		"types": ["node"],
-		"outDir": "./dist",
-		// The repo root, not src/: the build half imports from runtime/, and every input must sit under
-		// rootDir. Output mirrors the tree, so the CLI compiles to dist/src/cli.js.
-		"rootDir": ".",
+		// Nothing is emitted. The checker is the whole product, so `allowJs` plus `checkJs` is what replaced
+		// a build step whose only output was a dist/ that four scripts and nine suites then read stale.
+		"noEmit": true,
 		"allowJs": true,
+		"checkJs": true,
 		"strict": true,
+		"noImplicitAny": false,
+		"strictNullChecks": false,
 		"esModuleInterop": true,
+		// The guard and the kit are plain JS with JSDoc and emit no declarations, so their types live in their
+		// own source. Reading it is what gives this repo real types for `Log` and every guard export.
+		"maxNodeModuleJsDepth": 1,
 		"skipLibCheck": true,
 		"forceConsistentCasingInFileNames": true,
-		"sourceMap": true,
-		"moduleResolution": "node16",
 		"resolveJsonModule": true,
 		"allowSyntheticDefaultImports": true
 	},
-	"include": ["src/**/*"],
-	"exclude": ["node_modules", "dist", "**/*.test.ts"]
+	// runtime/ is in here because it is the half a customer runs and the old tsconfig checked only src/.
+	// standDownFor called an existsSync this file never imported, and nothing said so until a start threw.
+	"include": [
+		"types/**/*.d.ts",
+		"agent-build/**/*.js",
+		"runtime/**/*.js",
+		"resources.js",
+		"scripts/**/*.js",
+		"scripts/**/*.mjs"
+	]
 }

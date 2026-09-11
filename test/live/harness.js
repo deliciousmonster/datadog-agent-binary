@@ -33,7 +33,7 @@ const COMPONENT_NAME = basename(REPO_ROOT);
 // The same table resources.js's own AGENTS array and scripts/create-platform-packages.js build
 // from, so a binary added there is resolved here without this file naming it separately.
 const { BINARIES } = await import(
-	join(REPO_ROOT, "dist", "src", "binaries.js")
+	join(REPO_ROOT, "agent-build", "binaries.js")
 );
 
 // The version this tree says it is, which is the one a tag of this tree publishes. The registry row
