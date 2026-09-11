@@ -5,6 +5,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { join } from "node:path";
 
 import {
 	aggregate,
@@ -635,26 +636,39 @@ describe("standing down when something else owns the namespace", () => {
 	// is how the agent is told to run the real check, and Datadog ships only conf.yaml.example, so a real one
 	// is a deliberate act. This build has no interpreter so that check cannot run here today; the file still
 	// says what the operator intends, and standing down is what keeps a later change from doubling the series.
+	// standDownFor asks the filesystem with a joined path, so the file names here are joined too.
+	// Spelling them with forward slashes passed on darwin and failed on Windows, where join writes
+	// separators the literal does not have and every lookup missed.
+	const conf = (...parts) => join("/c", ...parts);
 	const fake = (present) => (p) => present.includes(p);
 
 	it("stands down for a configured process check", () => {
-		assert.equal(standDownFor("/c", fake(["/c/process.d/conf.yaml"])), true);
+		assert.equal(
+			standDownFor("/c", fake([conf("process.d", "conf.yaml")])),
+			true
+		);
 	});
 
 	it("accepts the .yml spelling, which the agent also reads", () => {
-		assert.equal(standDownFor("/c", fake(["/c/process.d/conf.yml"])), true);
+		assert.equal(
+			standDownFor("/c", fake([conf("process.d", "conf.yml")])),
+			true
+		);
 	});
 
 	it("NEGATIVE: the example file Datadog ships is not a configured check", () => {
 		assert.equal(
-			standDownFor("/c", fake(["/c/process.d/conf.yaml.example"])),
+			standDownFor("/c", fake([conf("process.d", "conf.yaml.example")])),
 			false,
 			"every stock install carries the example; standing down for it would never emit at all"
 		);
 	});
 
 	it("NEGATIVE: another check's config does not stand this down", () => {
-		assert.equal(standDownFor("/c", fake(["/c/postgres.d/conf.yaml"])), false);
+		assert.equal(
+			standDownFor("/c", fake([conf("postgres.d", "conf.yaml")])),
+			false
+		);
 	});
 
 	it("NEGATIVE: no conf.d path at all is not a reason to stand down", () => {

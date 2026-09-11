@@ -7,6 +7,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { binariesFor, binaryFilename } from "../dist/src/binaries.js";
 import { pinnedVersion } from "../dist/src/downloader.js";
@@ -151,6 +152,8 @@ async function checkCoreAgent(binPath, ports, paths, _resources, spawned) {
  * main with `strcase.UnicodeVersion "15.0.0" != unicode.Version "17.0.0"`, and it packaged, and it
  * passed the publish gate's symbol check. A binary that dies at init cannot print its version.
  */
+export const versionArgv = (extraArgs = []) => ["version", ...extraArgs];
+
 async function checkReportsVersion(
 	binPath,
 	_ports,
@@ -160,9 +163,10 @@ async function checkReportsVersion(
 	extraArgs = []
 ) {
 	const wanted = (await pinnedVersion()) ?? "";
-	log(`asking ${binPath} for its version`);
+	const argv = versionArgv(extraArgs);
+	log(`asking ${binPath} for its version as ${argv.join(" ")}`);
 	const reported = await new Promise((resolve) => {
-		const child = spawn(binPath, ["version"], {
+		const child = spawn(binPath, argv, {
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		let out = "";
@@ -182,7 +186,7 @@ async function checkReportsVersion(
 	log(`reports ${wanted}: ${reported.split("\n")[0]}`);
 }
 
-const CHECKS = {
+export const CHECKS = {
 	"trace-agent": checkTraceAgent,
 	"datadog-agent": checkCoreAgent,
 	// Started for real would need CAP_SYS_ADMIN and an object matching the runner's kernel on Linux, a
@@ -350,9 +354,17 @@ async function main() {
 	process.exit(0);
 }
 
-main().catch((error) => {
-	console.error(
-		`smoke-test: unexpected failure: ${error.stack || error.message}`
-	);
-	process.exit(1);
-});
+// Guarded so a test can import CHECKS and versionArgv without the script running a build it has no
+// binaries for. The argv this builds went untested until CI proved it: checkReportsVersion took an
+// extraArgs parameter, both call sites passed one, and the spawn ignored it, so security-agent was
+// asked bare on every platform and answered with the config it could not find.
+const invokedDirectly =
+	process.argv[1] &&
+	resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly)
+	main().catch((error) => {
+		console.error(
+			`smoke-test: unexpected failure: ${error.stack || error.message}`
+		);
+		process.exit(1);
+	});
