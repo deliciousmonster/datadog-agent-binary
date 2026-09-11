@@ -167,3 +167,57 @@ test("the main package publishes only after every platform package did", () => {
 		"the main package is published before the platform packages it depends on"
 	);
 });
+
+// npm assigns `latest` only on a package's first publish, and every release here goes out under `next`.
+// On 2026-09-11 all ten packages served 7.82.1-next.9 under `next` and 7.82.1-next.6 under `latest`,
+// three releases behind, which is the version npmjs.com displays and a bare `npm install` resolves.
+test("the release moves latest to the version it just published", () => {
+	const step = scriptBodies(WORKFLOW).find((body) =>
+		body.includes("npm dist-tag add")
+	);
+	assert.ok(step, "nothing in the release moves the latest dist-tag");
+	assert.match(
+		step,
+		/npm dist-tag add "\$name@\$version" latest/,
+		"the tag is moved to something other than the published version"
+	);
+	// Every package, not just the main one: a main package on latest whose platform packages are not
+	// resolves to optionalDependencies nobody can install.
+	assert.match(
+		step,
+		/for platform_dir in npm\/\*\//,
+		"only the main package's latest is moved"
+	);
+});
+
+// A re-run of an older tag must not walk latest backwards onto a version it already passed.
+test("NEGATIVE: latest only ever moves forward", () => {
+	const step = scriptBodies(WORKFLOW).find((body) =>
+		body.includes("npm dist-tag add")
+	);
+	assert.match(
+		step,
+		/sort -rV/,
+		"nothing compares the published version against the current latest"
+	);
+	assert.match(
+		step,
+		/Leaving \$name at latest=/,
+		"a newer latest is not left alone"
+	);
+});
+
+// Publishing succeeded and the tag move did not is a real state, and it has to be visible: the step
+// prints the exact commands rather than leaving latest silently stale for another release.
+test("a failed tag move fails the step and names the commands to run", () => {
+	const step = scriptBodies(WORKFLOW).find((body) =>
+		body.includes("npm dist-tag add")
+	);
+	assert.match(step, /failed\+=\("\$name"\)/, "failures are not collected");
+	assert.match(step, /exit 1/, "a failed tag move does not fail the step");
+	assert.match(
+		step,
+		/echo " {2}npm dist-tag add \$name@\$version latest"/,
+		"the failure does not print the command to run by hand"
+	);
+});
