@@ -1,8 +1,5 @@
-// The verdict this run reported for twelve hours, `traces-unconfirmed`, said the trace hop was unknown
-// while it was provable. trace_writer publishes zeros on 7.82.1 even while the writer delivers, and a
-// stock datadog/agent:7.82.1 container reproduces that with traces accepted and no send failures, so the
-// counter is not evidence. The writer's own failure lines are, and on the 2026-09-08 run every one of
-// them fell inside a wrong-key window while eight hours of steady state produced none.
+// The verdict this run reported for twelve hours, `traces-unconfirmed`, said the trace hop was unknown while it
+// was provable.
 
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

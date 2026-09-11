@@ -1,12 +1,6 @@
 #!/usr/bin/env node
-// One row per statistic, not per check: the current reading, the change since the reading before it, and
-// the mean over everything recorded so far. Two histories feed it and they are kept apart rather than
-// averaged together: the node's own minute-by-minute status.tsv, and checks.tsv, which is what a Datadog
-// page showed when somebody looked. A heading band says which history the rows under it came from.
-//
-//   node test/soak/checktable.mjs <soak-dir> --hosts 1 --apm-rps 31.7 --apm-err 0 \
-//     --logs 10.6K --procs 5 --ram 1.9/2.6 --swap 0/316 --note "..."     # append a check, then render
-//   node test/soak/checktable.mjs <soak-dir>                             # render what is already there
+// One row per statistic, not per check: the current reading, the change since the reading before it, and the
+// mean over everything recorded so far.
 
 import {
 	appendFileSync,
@@ -83,9 +77,8 @@ function readTsv(path) {
 		.split("\n")
 		.filter((l) => l.trim());
 	const head = lines.shift().split("\t");
-	// A run restarted into the same directory appends its own header. Read as data it becomes a row whose
-	// every field is a column name, and the parse of "p95ms" put a 95,000,000 ms high in the table on
-	// 2026-09-09. A row that repeats the first column's name is a header, not a sample.
+	// A run restarted into the same directory appends its own header. Read as data it becomes a row whose every
+	// field is a column name, and the parse of "p95ms" put a 95,000,000 ms high in the table on 2026-09-09.
 	return lines
 		.filter((line) => !line.startsWith(`${head[0]}\t`))
 		.map((line) =>
@@ -270,10 +263,8 @@ for (const stat of STATS) {
 		cells: [
 			fmt(current, stat.dp, stat.unit),
 			delta,
-			// No high or low. A 48-hour run's extremes are its chaos rounds and its startup, which is what
-			// they reported: a 15,005 ms p95 from one wedged minute and a 0.00 GB container from the second
-			// before it booted. Both stayed in the table for every check afterwards, so the two columns said
-			// the same thing at hour 3 and at hour 72 and nothing about either.
+			// No high or low. A 48-hour run's extremes are its chaos rounds and its startup, which is what they
+			// reported: a 15,005 ms p95 from one wedged minute and a 0.00 GB container from the second before it booted.
 			fmt(
 				values.reduce((a, b) => a + b, 0) / values.length,
 				stat.dp,
@@ -283,9 +274,7 @@ for (const stat of STATS) {
 	});
 }
 
-// Ruled rather than space-aligned. Columns held apart by two spaces read as a table until one cell runs
-// long, and then the eye has nothing to follow across the row; a soak table is read at a glance by someone
-// checking whether a number moved.
+// Ruled rather than space-aligned.
 const HEAD = ["statistic", "current", "delta", "mean"];
 const widths = HEAD.map((h, i) =>
 	Math.max(

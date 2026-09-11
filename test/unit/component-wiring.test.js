@@ -1,6 +1,5 @@
 // A component can load, run, and supervise nothing. `jsResource` compiles resources.js and hands it no Scope;
-// `pluginModule` is what does, and only for a component the node's root config names. Both halves are
-// invisible at runtime until the 60s deadline fires, so they are asserted here instead.
+// `pluginModule` is what does, and only for a component the node's root config names.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -42,10 +41,7 @@ test("NEGATIVE: config.yaml carries pluginModule, without which the plugin is ne
 });
 
 /**
- * Every local file reachable from `entries` by import, as repo-relative posix paths. Matches a static
- * `from "..."` specifier and a dynamic `import("...")` call, in both cases only a literal relative path:
- * runtime/datadog.js's `import(platformPackage)` names an external optional dependency built from a
- * variable, so it resolves to no local file and correctly falls outside this walk rather than being missed by it.
+ * Every local file reachable from `entries` by import, as repo-relative posix paths.
  */
 function importedFrom(...entries) {
 	const seen = new Set();
@@ -79,14 +75,10 @@ test("every file the component reads at runtime is in the published package", ()
 			`${file} is read at runtime and would not be in the tarball`
 		);
 	}
-	// Walked rather than listed from the one shipped entry: a helper added under runtime/ is covered by the
-	// directory entry, one added beside resources.js is not, and an import of dist/ reaches build output the
-	// tarball no longer carries. A list of known names catches none of the three.
+	// Walked rather than listed: a helper under runtime/ is covered by the directory entry and one beside
+	// resources.js is not, which a list of known names catches neither of.
 	const imported = importedFrom("resources.js");
-	// The named files the walk must reach, so a broken walk cannot pass by reaching nothing. Everything about
-	// supervising a process moved to the guard; what is left is what Datadog is (datadog.js) with the files it
-	// writes (render.js), and the three things this component does with a running node - prove it (verify.js),
-	// read back what reached Datadog (delivery.js), measure what it costs (series.js) - joined by component.js.
+	// The named files the walk must reach, so a broken walk cannot pass by reaching nothing.
 	assert.deepEqual(
 		imported.sort(),
 		[
@@ -145,9 +137,6 @@ test("NEGATIVE: the platform package the component resolves is derived from this
 });
 
 // `npm ci` refuses a lockfile that disagrees with the manifest, and every CI leg starts with `npm ci`.
-// `npm version` rewrites the lock's version but not a renamed package or re-pinned optional
-// dependencies, so a rename that ran the tests and never an install passed locally and killed
-// every leg of the first release run.
 test("NEGATIVE: package-lock.json agrees with package.json on what npm ci will check", () => {
 	const locked = JSON.parse(read("package-lock.json")).packages[""];
 	for (const field of [
@@ -164,9 +153,8 @@ test("NEGATIVE: package-lock.json agrees with package.json on what npm ci will c
 	}
 });
 
-// The package is versioned as the Datadog release it pins, with a prerelease identifier of its own,
-// so the numeric core and the pin have to be one number. The build clones Datadog's repo at the pin,
-// never at the package version: a tag of 7.82.1-next.0 once asked Datadog's repo for that branch.
+// The package is versioned as the Datadog release it pins, with a prerelease identifier of its own, so the
+// numeric core and the pin have to be one number.
 test("NEGATIVE: the package version's core is the pinned Datadog version", () => {
 	const pinned = read(".datadog-agent-version").trim();
 	const core = manifest.version.split("-")[0];
@@ -178,9 +166,7 @@ test("NEGATIVE: the package version's core is the pinned Datadog version", () =>
 });
 
 test("the sampler keeps more traces a second than the default, which was discarding most of a demo", async () => {
-	// apm_config.target_tps defaults to 10 in the agent. Measured on the 2026-09-08 soak: 24 traces a
-	// second against that default put ratebyservice at 0.4167, so 58% of the spans a demo exists to show
-	// never left the node, and nothing in the status said so.
+	// apm_config.target_tps defaults to 10 in the agent.
 	const { prepareRuntime } = await loadComponent();
 	await withTempDir("dd-tps-", async (root) => {
 		const runtime = await withEnvs({ ROOTPATH: root }, () => prepareRuntime());
@@ -221,10 +207,8 @@ test("the runtime tree comes from Harper, not from a variable this package inven
 			source.includes(JSON.stringify(path.join(root, "log", "*.log"))),
 			`the log source does not cover <root>/log/*.log: ${source}`
 		);
-		// The agents' own logs ride along under their own service names: the first thing to read when
-		// the node stops reporting is what the agent said, and that file is on the node, not in Datadog.
-		// system-probe's and security-agent's are named whether or not either runs: the logs agent picks a
-		// file up when it appears, so a node that turns one on later needs no config change to see its log.
+		// The agents' own logs ride along under their own service names: the first thing to read when the node stops
+		// reporting is what the agent said, and that file is on the node, not in Datadog.
 		const agentLogs = [
 			"agent.log",
 			"trace-agent.log",

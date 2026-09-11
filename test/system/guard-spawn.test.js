@@ -193,9 +193,8 @@ test("NEGATIVE: a trace-agent answering as another pid does not verify", async (
 });
 
 test("NEGATIVE: an agent the guard could not start is not verified off whatever answers its port", async () => {
-	// Four guard paths end with started:false and no pid (the guard's src/supervise.js:172-231), and
-	// the guard's src/index.js:230 verifies those states anyway. Both stubs answer throughout this test, so a
-	// poll that runs at all reports a stub as the agent this node started.
+	// Four guard paths end with started:false and no pid (the guard's src/supervise.js:172-231), and the guard's
+	// src/index.js:230 verifies those states anyway.
 	await withGuardStarted(
 		({ status }) => {
 			const core = status.processes.find((state) => state.kind === "core");
@@ -266,11 +265,7 @@ test("the status endpoint reports each agent as it is now, not as it was at boot
 });
 
 test("a verdict taken before a restart is not reported as the verdict on what is running now", async () => {
-	// The other half of the same object. Each supervisor verifies once, after the first spawn, and its
-	// restart path rewrites pid and restarts without retaking the verdict, so `verified: true` can end up
-	// published beside a pid this node killed and replaced.
-	// Not withGuardStarted: that hands the real binaries back before its callback runs, so the replacement
-	// the guard starts here would be a real 139MB agent against ports these stubs already hold.
+	// The other half of the same object.
 	let pidDir;
 	const lockedTrace = () => (pidDir ? lockedPid(pidDir, TRACE_AGENT) : 0);
 	await withAgentsAnswering(
@@ -309,9 +304,8 @@ test("a verdict taken before a restart is not reported as the verdict on what is
 						restarted,
 						`the guard never restarted the trace-agent; it still reports pid ${bootPid}`
 					);
-					// The verdict may be true again, but only on a proof taken against the process now
-					// running: the endpoint retakes a stale verdict rather than publishing the dead one's.
-					// What must never happen is `verified: true` resting on the killed pid's proof.
+					// The verdict may be true again, but only on a proof taken against the process now running: the endpoint
+					// retakes a stale verdict rather than publishing the dead one's.
 					assert.ok(
 						!String(restarted.verifyDetail).includes(`pid ${bootPid}`) ||
 							/taken against pid/.test(restarted.verifyDetail),
@@ -395,9 +389,8 @@ test("both supervisors report the same agents, started, under the same names", a
 	);
 });
 /**
- * A guard lock naming a live process under a fingerprint this node cannot reproduce, which is what a
- * rotated DD_API_KEY leaves behind. `sleep` rather than a shell-script stub because the interpreter takes
- * over a shebang script's command line, and the command line is the whole identification.
+ * A guard lock naming a live process under a fingerprint this node cannot reproduce, which is what a rotated
+ * DD_API_KEY leaves behind.
  */
 function plantOrphanLock(pidDir, name, pid) {
 	fs.mkdirSync(pidDir, { recursive: true });
@@ -424,11 +417,8 @@ test("an agent still running under a configuration this node no longer has is st
 			try {
 				({ status } = await withBuiltBinaries(() => start({}), STAYS_UP));
 
-				// The whole point of folding the credentials into the fingerprint: left running, the old agent
-				// keeps posting under the old key and holds the ports its replacement needs, and once the lock
-				// names the replacement instead, not even the reaper can find it again.
-				// Polled, not read once: the guard sends SIGTERM and returns without waiting on it
-				// (the guard's src/lock.js:247), so the death lands after start() has already resolved.
+				// Why the credentials are in the fingerprint: left running, the old agent posts under the old key and
+				// holds the ports its replacement needs, and once the lock moves nothing can find it again.
 				assert.equal(
 					await until(() => (alive(orphan.pid) ? null : "gone")),
 					"gone",

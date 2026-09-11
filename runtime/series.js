@@ -1,22 +1,5 @@
-// What the processes cost, as a named series something can alert on.
-//
-// `system.processes.*` is the Python `process` integration and this build ships no Python; Live Processes is
-// Go and running, but it publishes to the Processes intake rather than the metrics intake, so nothing in it
-// is queryable or alertable. Measured on the shipped binary: no `process.*` or `system.*` metric name is
-// compiled in at all. This is the series that is.
-//
-// It publishes under `system.processes.*`, the namespace the Python check uses, because a series under a
-// private name is one nobody's existing dashboard or monitor finds. It was `harper.processes.*` first, on the
-// argument that Datadog does not reserve the namespace so a counterfeit would be accepted and two sources
-// would merge. That risk is real; it is answered rather than avoided. This build has no interpreter, so the
-// `process` check cannot run in the agent this component spawns, and a live `conf.d/process.d/conf.yaml` makes
-// this stand down. `DD_HARPER_PROCESS_METRICS_PREFIX` restores the private namespace for a node that wants the
-// separation.
-//
-// What is filled is a subset. `process.py` also emits cpu.pct, mem.vms, open_file_descriptors, the io counters
-// and the page-fault rates, all of which need /proc reads this does not do. A dashboard that charts those
-// beside mem.rss shows one series populated and the rest empty, which is the cost of sharing the namespace and
-// is stated on the status endpoint rather than left to be discovered.
+// What the processes cost, as a series something can alert on: Live Processes publishes to the Processes
+// intake, so nothing it collects is queryable.
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -32,18 +15,8 @@ import {
 import { LABEL } from "./datadog.js";
 
 /**
- * What this node sends, and how often.
- *
- * A boolean, not the presence of a config file. Datadog gates an *integration* on a `conf.d/<check>.d/`
- * file because the agent cannot know what you want monitored; `process.py` refuses an instance without a
- * `search_string`, `pid` or `pid_file` for exactly that reason. This is not an integration. It measures the
- * processes this component spawned, so it knows its own subject, which puts it in the same class as
- * `apm_config.enabled` and `process_config.process_collection.enabled` -- both of which this package already
- * renders as booleans. Installing the plugin is the operator asking for the data.
- *
- * On by default, because the series is small: six gauges per group, tagged by env, host and group. The cost
- * knobs are the ones an operator already knows from the check this replaces, with Datadog's own semantics:
- * `min_collection_interval` for cadence and `metric_patterns` where exclude beats include on overlap.
+ * What this node sends and how often. A boolean, not a config file: this is not an integration, it measures
+ * the processes this component spawned. On by default, six gauges a group, with Datadog's own cost knobs.
  *
  * @param {NodeJS.ProcessEnv} [env]
  */
@@ -74,20 +47,8 @@ export function seriesSettings(env = process.env) {
 }
 
 /**
- * The namespace the Python `process` check publishes, which is the one a stock dashboard queries.
- *
- * Publishing here was the wrong call the first time. The argument against it was that Datadog does not
- * reserve the namespace server-side, so a counterfeit would be accepted and two sources would merge
- * silently. That risk is real and it is not this package's: this build excludes Python, so the `process`
- * check cannot run in the agent this component spawns, and `standDownFor` below covers the case where an
- * operator has arranged for something else to fill the namespace.
- *
- * What the argument missed is who pays. A series under a private name is one nobody's existing dashboard or
- * monitor finds, so "the data is there under a different name" costs the operator the work of rewriting
- * every query, which is the opposite of what shipping it was for.
- *
- * The metric names underneath were already Datadog's: `number`, `threads`, `mem.rss`, and `.avg`/`.max`/
- * `.min` are read straight off `ATTR_TO_METRIC` in `process.py`. Only the prefix and the tag key differed.
+ * The namespace the Python check publishes, which is what a stock dashboard queries. Two sources merging is
+ * a real risk and not this one's: no interpreter ships here, and standDownFor covers the operator who adds one.
  */
 export const DEFAULT_PREFIX = "system.processes";
 
@@ -95,16 +56,8 @@ export const DEFAULT_PREFIX = "system.processes";
 export const PRIVATE_PREFIX = "harper.processes";
 
 /**
- * Whether something else on this node is already filling `system.processes.*`, so this should stand down.
- *
- * The signal is a live `conf.d/process.d/conf.yaml`. That is how the agent is told to run the Python
- * `process` check, and Datadog ships only a `conf.yaml.example`, so a real one is an operator's deliberate
- * act. This build cannot run that check today, having no interpreter, but the file still says what the
- * operator intends and standing down on it is what keeps a later change from producing two sources.
- *
- * Not detectable from here: a second, separate Datadog agent on the same host with the check configured.
- * Nothing this process can read distinguishes that from no agent at all, so an operator in that position
- * sets DD_HARPER_PROCESS_METRICS_PREFIX and the detail line on the status endpoint says so.
+ * Whether something else already fills `system.processes.*`. The signal is a live conf.d/process.d/conf.yaml,
+ * which Datadog ships only as an example, so a real one is deliberate. A second agent is not detectable here.
  *
  * @param {string | undefined} confdDir @param {(p: string) => unknown} [stat]
  */
@@ -145,10 +98,8 @@ export function applyPatterns(metrics, { include = [], exclude = [] } = {}) {
 export const DEFAULT_INTERVAL_SECONDS = 15;
 
 /**
- * The aggregation the Python check publishes, over whatever this node could read.
- *
- * `number` counts what was found, not what was asked for: a supervised process the platform cannot measure
- * is absent from the series rather than present as a zero, so a monitor sees no data instead of a false floor.
+ * The aggregation the Python check publishes, over what this node could read. `number` counts what was
+ * found, so an unmeasurable process is absent rather than a zero and a monitor sees no data, not a floor.
  *
  * @param {readonly ({ rssBytes: number, threads: number } | null)[]} samples
  */
@@ -209,10 +160,8 @@ export function processSeries(members, options) {
 		metrics,
 		measured: samples.filter((s) => s !== null).length,
 		asked: members.length,
-		// `process_name` is what process.py tags with (`tags.extend(['process_name:{}'.format(self.name)...`)
-		// and therefore what a stock dashboard groups by, so sharing the namespace without it would put the
-		// data somewhere no existing query looks. `process_group` stays beside it: it is the same value under
-		// the name this component's own status uses, and dropping it would break anything already built here.
+		// `process_name` is what process.py tags with and what a stock dashboard groups by. `process_group` is
+		// the same value under this component's own name, kept so nothing already built here breaks.
 		lines: dogstatsdLines(prefix, metrics, {
 			...tags,
 			process_name: group,
@@ -221,15 +170,13 @@ export function processSeries(members, options) {
 	};
 }
 
-// Which thread sends, arbitrated by the guard beside its own locks, so one directory holds everything this
-// node decides. Harper loads this component into every worker thread and an ungated timer would emit the same
-// gauges once per thread, multiplying `number` and `mem.rss` by the thread count.
+// Which thread sends, arbitrated beside the guard's own locks. An ungated timer emits these gauges once per
+// worker thread, multiplying `number` and `mem.rss` by the thread count.
 export const CLAIM_FILE = "process-metrics.claim";
 
 /**
- * Send one reading. UDP, because that is what DogStatsD listens on and what every tracer's runtime metrics
- * already use; a dropped packet costs one interval of one gauge and nothing retries it, which is the right
- * trade for a level that is resent 15 seconds later.
+ * Send one reading over UDP, which is what DogStatsD listens on. A dropped packet costs one interval of one
+ * gauge, which is the right trade for a level resent 15 seconds later.
  *
  * @param {readonly string[]} lines
  * @param {{ port: number, host?: string, socket?: { send: Function, close: Function } }} options
@@ -256,11 +203,8 @@ export async function sendDogstatsd(
 }
 
 /**
- * The cadence. One timer per thread, gated by the claim above, so the node emits one series however many
- * threads Harper runs.
- *
- * `members()` is called per tick rather than captured: the pids it reports change under chaos, and a captured
- * list would keep measuring a process the guard has already replaced.
+ * The cadence: one timer per thread gated by the claim, so the node emits one series. `members()` is called
+ * per tick, since a captured list keeps measuring a process the guard has already replaced.
  *
  * @param {object} options
  * @param {() => {name: string, pid?: number, self?: boolean}[]} options.members
@@ -340,11 +284,8 @@ export function startProcessSeries({
 }
 
 /**
- * Start this thread's own series timer and describe what it will do, for the status endpoint.
- *
- * Members are read per tick rather than captured, so a pid the guard replaced under chaos is measured as
- * the process the node runs now rather than the one it started. Only the claim holder sends; every other
- * thread's timer costs a file read.
+ * Start this thread's timer and describe what it will do, for the status endpoint. Only the claim holder
+ * sends; every other thread's timer costs a file read.
  *
  * @param {object} options
  * @param {string} options.pidDir
@@ -376,9 +317,8 @@ export function scheduleSeries({
 			},
 		};
 	}
-	// Sharing `system.processes.*` is only safe while nothing else fills it. A live conf.d/process.d/ is
-	// the operator saying they intend the real check to, so this stands down rather than becoming a second
-	// source.
+	// Sharing the namespace is safe only while nothing else fills it, and a live conf.d/process.d/ is the
+	// operator saying they intend the real check to.
 	if (resolved.prefix === DEFAULT_PREFIX && standDownFor(confd)) {
 		previous?.stop();
 		return {

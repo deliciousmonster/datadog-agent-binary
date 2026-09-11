@@ -1,6 +1,5 @@
-// guardSupervisor's catch, exercised for real: no config in this repo makes guard() reject, so the only
-// way to reach the branch is to hand it a spawn shaped so the guard's own attempt() throws past every try/catch
-// it already has. A mock of the catch itself would prove nothing about what real callers can trigger.
+// guardSupervisor's catch for real: no config here makes guard() reject, so the branch is reached by handing
+// it a spawn shaped so the guard's own attempt() throws past every try/catch it has.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -13,13 +12,8 @@ import { withTempDir } from "../support/sandbox.js";
 const NO_NATIVE_SUPERVISION = {};
 
 /**
- * A spawn that "succeeds" (throws nothing, passes preflight already happened) but returns a value that
- * is not an EventEmitter. The guard's attempt() calls child.on('error', ...) immediately after a
- * successful spawn with no try/catch around it, so this is what a spawn shaped unlike node's real
- * child_process.spawn actually does to guard() - reject the whole call, not just the one agent whose
- * binary was involved. The thrown TypeError carries an ENOENT code, the same shape a real fs failure
- * would, so a test against the fix can tell "translated per agent's own binary" from "raw and shared":
- * describeSpawnFailure only engages its per-code template when `error.code` matches one of its keys.
+ * A spawn that "succeeds" (throws nothing, passes preflight already happened) but returns a value that is not
+ * an EventEmitter.
  */
 const spawnThatThrowsACodedError = () => ({
 	on() {
@@ -102,9 +96,8 @@ test("NEGATIVE: a guard() rejection reports both agents with the same untranslat
 			"one guard() rejection must produce one report line, not one per agent"
 		);
 
-		// describeSpawnFailure's ENOENT template embeds the binary path ("${path} does not exist (ENOENT)...");
-		// since the two agents' commands differ, that template would print two DIFFERENT strings here. The
-		// fix reports the error's own raw message instead, which names neither binary.
+		// describeSpawnFailure's ENOENT template embeds the binary path ("${path} does not exist (ENOENT)..."); since
+		// the two agents' commands differ, that template would print two DIFFERENT strings here.
 		assert.doesNotMatch(
 			result.processes[0].error,
 			/does not exist \(ENOENT\)|platform package resolved/,
@@ -116,9 +109,8 @@ test("NEGATIVE: a guard() rejection reports both agents with the same untranslat
 			`expected the untranslated TypeError from the guard's attempt(); got: ${result.processes[0].error}`
 		);
 
-		// guard() starts the agents in order and rejects out of the one it was on, so an agent ahead of it in
-		// the list is already running under a committed lock. Reporting both unstarted and saying nothing
-		// else leaves an operator with no reason to look for it.
+		// guard() starts the agents in order and rejects out of the one it was on, so an agent ahead of it in the
+		// list is already running under a committed lock.
 		assert.match(
 			result.processes[0].error,
 			/running unsupervised/,

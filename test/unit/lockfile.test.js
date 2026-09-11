@@ -1,11 +1,5 @@
-// The lock file has to agree with the manifest, because `npm ci` is the first thing every CI leg runs.
-//
-// This is not a theoretical tidiness check. On 2026-09-10 all four build legs failed at `npm ci` with
-// EUSAGE, and the reason was four entries reading `{"optional": true}` and nothing else: no version, no
-// integrity. npm cannot confirm an entry with no version satisfies a range, so it refuses the whole
-// install. The lock was written when those packages did not yet exist on the registry, which is the
-// ordinary state during the run that first publishes them, and it stayed that way through every commit
-// after. Nothing failed until a runner's npm grew strict about it, and then everything failed at once.
+// The lock file has to agree with the manifest, because `npm ci` is the first thing every CI leg runs. This is
+// not a theoretical tidiness check.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

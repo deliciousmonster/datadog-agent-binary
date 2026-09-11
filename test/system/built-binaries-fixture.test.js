@@ -1,7 +1,5 @@
-// withBuiltBinaries writes stubs at build/<platform>/bin, the same paths `npm run build-agent` puts the
-// real agents at, so what it does with what was already there decides whether running this suite destroys
-// a developer's build. hideFiles alone is driven against a temp directory; the last test drives the real
-// paths, with a real build renamed out of the way under a name no part of the fixture knows.
+// withBuiltBinaries writes stubs at the same paths `npm run build-agent` puts the real agents, so what it
+// does with what was there decides whether running this suite destroys a developer's build.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -115,9 +113,8 @@ test("NEGATIVE: a run killed holding its stub does not cost the build stashed be
 
 test("NEGATIVE: a run killed holding a broken stand-in costs no more than one holding a stub", () =>
 	withTempDir("hide-files-", async (dir) => {
-		// supervisor-start.test.js overwrites a planted stub to make a spawn fail, so the body left at the
-		// real path is not one stub() produced. Unstamped it reads as a build made since, and the hide below
-		// moves it over the real one.
+		// supervisor-start.test.js overwrites a planted stub to make a spawn fail, so the body left at the real path
+		// is not one stub() produced.
 		const file = path.join(dir, "agent");
 		writeExecutable(
 			`${file}${HIDDEN}`,
@@ -156,9 +153,7 @@ test("NEGATIVE: hideFiles does not promote a leftover copy over a file that is a
 	}));
 
 /**
- * Everything the fixture reads at `files` renamed out of the two names it knows, and the put-back. A rename,
- * not a copy or a hardlink: a link shares the inode, so any in-place write at the real path reaches the
- * saved copy too, and a 139MB build costs nothing to move either way.
+ * Everything the fixture reads at `files` renamed out of the two names it knows, and the put-back.
  */
 function saveAside(files) {
 	const owned = files.flatMap((file) => [file, `${file}${HIDDEN}`]);
@@ -175,9 +170,8 @@ function saveAside(files) {
 }
 
 test("the built-binaries fixture puts back what it found at build/<platform>/bin", async () => {
-	// The one test that can catch the fixture losing its hide-and-restore, so it runs on a checkout that has
-	// a build as well as one that has not: saveAside takes the real agents out of reach first, and the
-	// stand-ins planted in their place are what the stubs would destroy.
+	// The one test that catches the fixture losing its hide-and-restore, on a checkout with a build and one
+	// without: saveAside moves the real agents out of reach, and the stand-ins are what the stubs would destroy.
 	const { binDir, files } = builtBinaryPaths();
 	fs.mkdirSync(binDir, { recursive: true });
 	// Held across the staging too, not just the fixture call: these are the paths resolveBinary reads, and

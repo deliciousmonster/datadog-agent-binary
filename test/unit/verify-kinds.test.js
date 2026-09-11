@@ -1,9 +1,5 @@
-// Each agent kind is verified by the check that proves it is that agent, and an unknown kind is refused.
-//
-// The failure being guarded is a fallback. Routing an unrecognised kind to the core agent's verifier gives
-// it a verdict about expvar it never serves, which reads to an operator as a broken agent rather than as a
-// verifier nobody wrote. Two of the four kinds here are new, so the fallback would have been the cheap way
-// to add them and would have made both of them permanently unhealthy.
+// Each agent kind is verified by the check that proves it is that agent, and an unknown kind is refused. The
+// failure being guarded is a fallback.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

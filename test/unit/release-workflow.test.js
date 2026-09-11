@@ -1,11 +1,4 @@
-// Whether the release workflow builds is a runner's answer, not this file's. What is checkable here is the
-// shape: one step per job rather than a Unix and a pwsh copy, no untrusted input reaching a script body, and
-// a publish this repo no longer writes.
-//
-// The assertions about publishing itself left with the shell that did it. Attempting every package before
-// failing, deriving the dist-tag from the version, moving `latest` forward only and reading the registry
-// back are the kit's now, and its own suite holds them: `harper-binary-kit/test/unit/publish.test.js`.
-// Re-asserting them here against a workflow that only calls the kit would be checking a string.
+// Whether the release workflow builds is a runner's answer, not this file's.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -75,9 +68,7 @@ test("version extraction and the build are each written once, not once per runne
 	assert.equal(matches(/shell: pwsh$/gm), 0);
 });
 
-// The tag's version is the package version and reaches only the publish job. The build reads
-// .datadog-agent-version unless a dispatch names a Datadog version outright: the two numbers share a core
-// and nothing else, and a tag of 7.82.1-next.0 once asked Datadog's repository for that branch.
+// The tag's version is the package version and reaches only the publish job.
 test("publish consumes prepare's version; the build never sees it", () => {
 	const build = WORKFLOW.slice(
 		WORKFLOW.indexOf("- name: Build ${{ matrix.platform }}"),
@@ -92,10 +83,8 @@ test("publish consumes prepare's version; the build never sees it", () => {
 	);
 });
 
-// The org refuses a workflow that names an action by tag, and the refusal lands at job setup, so every leg
-// dies before it runs anything. A tag is also mutable; a SHA is what was reviewed. A reusable workflow is
-// the exception the rule cannot cover: `uses:` on a job takes a ref into a repository, not an action, and
-// there is no digest form for one.
+// The org refuses a workflow that names an action by tag, and the refusal lands at job setup, so every leg dies
+// before it runs anything. A tag is also mutable; a SHA is what was reviewed.
 test("every action is pinned to a commit SHA", () => {
 	const unpinned = [];
 	for (const file of readdirSync(WORKFLOW_DIR)) {

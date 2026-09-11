@@ -1,13 +1,6 @@
 // @ts-check
-// What this package publishes, declared once.
-//
-// Read by `harper-binary-kit stage`, `verify`, `floor`, `deps`, `names`, `publish` and `latest`, which is the
-// point: the package list, the CI matrix, the optionalDependencies and the symbol floors used to be four
-// statements of one fact in four files, and a target that silently failed to build was a package that was
-// silently not published.
-//
-// What is NOT here is how to build. That is agent-build/, because only this repo knows that half: two of the
-// five binaries are compiled from Datadog's source and three are lifted out of Datadog's signed .deb.
+// What this package publishes, declared once and read by every kit command: the package list, the CI matrix,
+// the optionalDependencies and the floors were four statements of one fact. How to build is agent-build/.
 
 import {
 	BINARIES,
@@ -25,12 +18,8 @@ import {
 export const SCOPE = "@deliciousmonster/datadog-agent-binary";
 
 /**
- * Whether the binary a target ships was built with a tag its `--build-exclude` is there to drop.
- *
- * Go writes the tag set it linked with into the binary's own build info as one comma-separated line, so the
- * exclusion is read off the artifact instead of trusted from the flag the build was asked to use. A binary
- * with no record at all is refused rather than passed: unreadable is not the same as clean, and passing it
- * would approve every artifact whose build info the gate failed to find.
+ * Whether a shipped binary carries a tag its `--build-exclude` should have dropped, read off the artifact
+ * rather than trusted from the flag. No record at all is refused: unreadable is not the same as clean.
  *
  * @param {Buffer} contents @param {{ shipsAs: string }} binary
  * @returns {string | undefined}
@@ -57,11 +46,8 @@ const listing = (/** @type {readonly string[]} */ names) =>
 		: `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 
 /**
- * Which binaries were compiled here and which were lifted, naming the release each came from.
- *
- * Anyone who installs this runs these binaries on their own machines, so how each one got here is theirs to
- * know. A build and an extraction have different things that can go wrong with them, and a reader who cannot
- * tell which is which cannot reason about either.
+ * Which binaries were compiled here and which lifted, naming the release. Whoever installs this runs them on
+ * their own machines, and a build and an extraction fail in different ways.
  *
  * @param {any} pkg
  */
@@ -105,9 +91,8 @@ function provenance(pkg) {
 }
 
 /**
- * One line for the manifest. The probe package is named from what it carries rather than from a fixed pair:
- * macOS has no security-agent worth shipping, and a description listing one is a package claiming a binary it
- * does not have.
+ * One line for the manifest, the probe package named from what it carries: macOS ships no security-agent,
+ * and a description listing one claims a binary the package does not have.
  *
  * @param {any} pkg
  */
@@ -126,9 +111,8 @@ export default {
 	variants: [
 		{ suffix: "" },
 		{
-			// Deliberately not an optionalDependency. npm installs one on every host whose os and cpu match,
-			// which would charge every install 145 MB for binaries that are privileged and inert until a host
-			// is configured for them. An operator who wants them installs this by name.
+			// Not an optionalDependency: npm installs one on every matching host, charging 145 MB for binaries
+			// that are inert until a host is configured for them.
 			suffix: "-probe",
 			optional: true,
 			carries:
@@ -159,9 +143,8 @@ export default {
 		symbol: binary.requiredSymbol,
 		check: excludedTagIsAbsent,
 	})),
-	// The Harper Pro runtime image is Debian 12: glibc 2.36 from libc.so.6, GLIBCXX_3.4.30 from GCC 12. Two
-	// separate libraries with two separate floors, and a binary over either fails to load at exec time on a
-	// customer's node while every test on the runner that built it passes.
+	// The Harper Pro image is Debian 12: glibc 2.36, GLIBCXX 3.4.30 from GCC 12. Two libraries, two floors, and
+	// a binary over either fails at exec time on a customer's node.
 	floors: {
 		"linux-x86_64": { GLIBC: "2.36", GLIBCXX: "3.4.30" },
 		"linux-arm64": { GLIBC: "2.36", GLIBCXX: "3.4.30" },

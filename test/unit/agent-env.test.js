@@ -1,10 +1,5 @@
 // The core agent logged `handleServiceDiscoveryRequestError` once a minute for a day, 1,216 lines on the
-// 2026-09-08 run. Live Processes turns on the workloadmeta process collector, that collector asks
-// system-probe for service discovery, and this package ships no system-probe. It is ours twice over: the
-// build dropped system-probe as collateral, and the rendered config turns process collection on. The gate is
-// `discovery.enabled`, which lives in the system-probe config a component cannot write, so the agent's own
-// environment is the only route to it. Setting it on the container ended the error; setting it per-agent
-// ends it for every consumer without an operator knowing to.
+// 2026-09-08 run.
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -80,9 +75,6 @@ describe("the environment each agent is spawned with", () => {
 
 	it("NEGATIVE: no agent ships with a hard-coded env, because that would outrank the operator", () => {
 		// The mechanism exists for a setting an agent genuinely needs and an operator has no reason to change.
-		// It was briefly used to set DD_DISCOVERY_ENABLED=false, which was wrong twice over: it turns a Datadog
-		// capability off, and because the agent's own value is spread last it beat an operator who set it on.
-		// Nothing this package ships may silence a feature; a missing capability gets shipped, not muted.
 		for (const a of AGENTS)
 			assert.equal(a.env, undefined, `${a.name} declares a hard-coded env`);
 	});

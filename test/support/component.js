@@ -39,10 +39,7 @@ const STUB_MARKER = "written-by-withBuiltBinaries";
 export const stub = (command) => `#!/bin/sh\n# ${STUB_MARKER}\n${command}\n`;
 
 /**
- * A planted binary a spawn cannot run, for a test that needs one. The shebang names a missing interpreter,
- * so execve answers ENOENT: a body with no `#!` gives ENOEXEC instead, which glibc retries under /bin/sh,
- * and the spawn then succeeds on Linux while failing on darwin. Stamped, so a run killed holding it does
- * not read as a build made since.
+ * A planted binary a spawn cannot run, for a test that needs one.
  */
 export const UNEXECUTABLE = `#!/nonexistent/interpreter\n# ${STUB_MARKER}\n`;
 
@@ -50,20 +47,12 @@ export const UNEXECUTABLE = `#!/nonexistent/interpreter\n# ${STUB_MARKER}\n`;
 const EXITS_AT_ONCE = "exit 0";
 
 /**
- * A binary that stays up. Minutes, not seconds: this is spawned for real and stopped only by its own
- * caller's teardown (SIGTERM), so a lifetime long enough to outlast a slow, loaded machine is what keeps a
- * suite's own wall-clock from being able to race it.
+ * A binary that stays up.
  */
 export const STAYS_UP = "exec sleep 300";
 
 // runtime/datadog.js's resolveBinary reads two fixed, shared locations, in order: the installed platform
-// package under node_modules/, then build/<platform>/bin. Both paths are derived from resolveBinary's own
-// file location, not from anything a caller here can redirect, so neither can be given a copy unique per
-// call the way a temp-dir fixture would be. test/unit/harper-component.test.js plants a fake platform
-// package for its own file's duration; withBuiltBinaries plants build/<platform>/bin for one call's
-// duration. Either one, present when it should not be, changes what a concurrent resolveBinary() call
-// anywhere in the process tree resolves - so the one real fix is making sure only one user of these paths,
-// across every file, is ever active at a time.
+// package under node_modules/, then build/<platform>/bin.
 const RESOLVE_BINARY_LOCK = path.join(
 	REPO_ROOT,
 	"build",
@@ -73,12 +62,7 @@ const LOCK_POLL_MS = 10;
 const LOCK_TIMEOUT_MS = 30_000;
 
 /**
- * Exclusive use of the paths resolveBinary() reads. `mkdirSync` without `recursive` fails EEXIST when
- * another holder already made the directory, which is what turns "wait your turn" into a real mutex
- * instead of a best-effort delay: a writer (withBuiltBinaries, or harper-component.test.js's fake platform
- * package) and a reader relying on those paths' absence or content can never observe each other mid-way,
- * in this process or another. Returns a `release` function rather than taking a callback, so a caller whose
- * hold must outlive one function - a whole test file's before()/after(), say - can still use it.
+ * Exclusive use of the paths resolveBinary() reads.
  */
 export async function acquireResolveBinaryLock() {
 	fs.mkdirSync(path.dirname(RESOLVE_BINARY_LOCK), { recursive: true });
@@ -135,18 +119,13 @@ export function builtBinaryPaths() {
 }
 
 /**
- * Whatever sits at `files` moved aside, and the restore that puts it back. A rename, so a 139MB agent
- * costs the same as an empty file and the mode rides along with the inode; copying the bytes back would
- * drop the exec bit and leave an agent nothing can spawn. Takes its paths so a test can drive it against
- * a temp dir rather than having to stage an interrupted run over a developer's real build.
+ * Whatever sits at `files` moved aside, and the restore that puts it back.
  */
 export function hideFiles(files) {
 	const hidden = files.map((file) => `${file}.hidden-by-fixture`);
 	files.forEach((file, index) => {
-		// A run killed after writing its stub left that stub at the real path and the build at the hidden
-		// copy; hiding the stub over it is what loses the build, and discarding it leaves the build where
-		// the restore below finds it. A run killed before writing one needs nothing: that restore recovers
-		// the hidden copy whether or not anything was hidden this time.
+		// A run killed after writing its stub leaves that stub at the real path and the build at the hidden copy.
+		// Hiding the stub over it loses the build; discarding it leaves the build for the restore to find.
 		if (fs.existsSync(hidden[index]) && isFixtureStub(file)) fs.rmSync(file);
 		else if (fs.existsSync(file)) fs.renameSync(file, hidden[index]);
 	});
@@ -159,8 +138,7 @@ export function hideFiles(files) {
 
 /**
  * The same binaries inside an installed platform package, which resolveBinary consults BEFORE
- * build/<platform>/bin. Empty unless the optional dependency for this platform is installed, which a
- * clean `npm install` does: a fixture that hides only the build output is shadowed by these.
+ * build/<platform>/bin.
  */
 function installedPlatformBinaries() {
 	const target = currentTarget();
@@ -180,9 +158,7 @@ export const hideBuiltBinaries = () =>
 	hideFiles([...installedPlatformBinaries(), ...builtBinaryPaths().files]);
 
 /**
- * Both agent binaries where resources.js looks for a dev checkout's build output, for the duration of
- * `run`. The installed platform package predates the trace-agent and answers every request with the core
- * agent, so without these nothing that needs a trace-agent path can be driven at all.
+ * Both agent binaries where resources.js looks for a dev checkout's build output, for the duration of `run`.
  */
 export async function withBuiltBinaries(run, command = EXITS_AT_ONCE) {
 	return withResolveBinaryLock(() => plantBuiltBinaries(run, command));
@@ -190,8 +166,7 @@ export async function withBuiltBinaries(run, command = EXITS_AT_ONCE) {
 
 /**
  * {@link withBuiltBinaries} without the lock, for the one caller that has to hold it across more than this
- * call: test/unit/built-binaries-fixture.test.js stages the paths this plants at, and that staging is
- * as visible to a concurrent resolveBinary() as the stubs are.
+ * call: test/unit/built-binaries-fixture.test.js stages the paths this plants at, and that staging is as
  */
 export async function plantBuiltBinaries(run, command = EXITS_AT_ONCE) {
 	const { binDir, files } = builtBinaryPaths();
@@ -213,10 +188,8 @@ export async function plantBuiltBinaries(run, command = EXITS_AT_ONCE) {
 }
 
 /**
- * The real agent binaries already at build/<platform>/bin, under the same exclusive lock
- * withBuiltBinaries takes. Unlike that fixture, nothing here writes them: the trace-agent and the core
- * agent are different bytes, so one `body` could never stand in for both, and `npm run build-agent`
- * is what has to have put them there first.
+ * The real agent binaries already at build/<platform>/bin, under the same exclusive lock withBuiltBinaries
+ * takes.
  */
 export async function withRealBinaries(run) {
 	return withResolveBinaryLock(async () => {
@@ -299,12 +272,8 @@ export async function waitForLocksCleared(pidDir, names) {
 }
 
 /**
- * Harper's native supervision, for real: unlike recordingScope's fabricated pid, this spawns
- * descriptor.command for real, writes descriptor.configFiles for real, and calls descriptor.verify
- * against the real child, so a real trace-agent/core-agent binary really has to bind its real port.
- * Every child lands on `.children` so a caller's teardown can stop them all. `logDir` is where each
- * child's stdout/stderr goes, since nothing here reads those streams and an unread pipe can stall a
- * chatty binary's own write() - the same gap test/live/harness.js's own real-spawn site closes.
+ * Harper's native supervision, for real: unlike recordingScope's fabricated pid, this spawns descriptor.command
+ * for real, writes descriptor.configFiles for real, and calls descriptor.verify against the real child, so a
  */
 export function nativeScope({ logDir }) {
 	const children = [];

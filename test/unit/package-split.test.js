@@ -1,11 +1,5 @@
-// How the binaries are divided between the base package and the opt-in probe package.
-//
-// The split is a declaration in binary-kit.config.js now, read by staging, the publish gate and the
-// optionalDependencies writer. What these assert is that the declaration says something coherent: every
-// binary lands in exactly one package, the base package stays what npm installs everywhere, and the probe
-// package stays out of optionalDependencies. A probe package that drifted into that list would install
-// 145 MB on every matching host in silence, which is the failure the split exists to prevent and which
-// nothing at install time would report.
+// How the binaries divide between the base package and the opt-in probe package, declared once in
+// binary-kit.config.js and read by the staging, the publish gate and the optionalDependencies writer.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -62,9 +56,7 @@ test("the base package carries only what is not opt-in", () => {
 	}
 });
 
-// The probe package is opt-in whatever the binaries in it were built from. A Windows system-probe is built
-// rather than lifted and still belongs here, because what makes it opt-in is that it is privileged and
-// inert until a host is configured for it.
+// The probe package is opt-in whatever the binaries in it were built from.
 test("the probe package carries only opt-in binaries, and is not an optionalDependency", () => {
 	const pinned = optionalDependencies(config, KIT_TARGETS, "0.0.0");
 	const probes = allPackages(config, KIT_TARGETS).filter(
@@ -85,9 +77,7 @@ test("the probe package carries only opt-in binaries, and is not an optionalDepe
 	}
 });
 
-// The npm name and the staging directory are two statements of one fact. When they drift, the packaging step
-// writes to one path and the publish gate reads another, and the gate reports a package that was never
-// created rather than the rename that caused it.
+// The npm name and the staging directory are two statements of one fact.
 test("each package's directory name is its npm name without the scope", () => {
 	for (const pkg of allPackages(config, KIT_TARGETS))
 		assert.equal(pkg.name, `${SCOPE}-${pkg.dirName}`);
@@ -106,9 +96,7 @@ test("every target publishes a probe package, because system-probe exists on eve
 	]);
 });
 
-// The objects are Linux eBPF. macOS captures packets and Windows uses kernel drivers, so a probe package for
-// either that carried them would ship 42 MB neither can load, and staging one would refuse a build that has
-// no objects to stage.
+// The objects are Linux eBPF.
 test("only the Linux probe packages carry the eBPF objects", () => {
 	for (const pkg of allPackages(config, KIT_TARGETS)) {
 		const lifted = binariesFor(findTarget(pkg.target.name)).some(

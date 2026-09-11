@@ -1,24 +1,12 @@
-// Every file the agents read, rendered.
-//
-// The datadog.yaml both agents read, the system-probe config all three read, security-agent's own, the log
-// sources, and the core-check configs without which the core agent runs, reports healthy and collects
-// nothing.
-//
-// Pure string production over its arguments. Nothing here resolves a path, reads an environment variable or
-// polls anything, so a renderer cannot become a config file that depends on a running agent. Where a value
-// is not derivable from the arguments - the reaper's service name, the ports - it arrives as one.
+// Every file the agents read, as pure string production over its arguments: nothing here resolves a path,
+// reads the environment or polls, so a renderer cannot become a config that depends on a running agent.
 
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 /**
- * Where the objects actually sit under the directory the probe package reports.
- *
- * The package ships `share/system-probe/`, and upstream's own default is
- * `${install_path}/embedded/share/system-probe/ebpf` (`pkg/config/setup/system_probe.go:128` at 7.82.1), so
- * `bpf_dir` names the `ebpf` child rather than its parent. Measured on a live container 2026-09-10: pointed
- * at the parent, system-probe finds no CO-RE object, falls through to runtime compilation, and fails with
- * `unable to find kernel headers`. It is a one-segment error that reads as a missing toolchain.
+ * Where the objects sit under what the probe package reports: `bpf_dir` names the `ebpf` child, matching
+ * upstream's default. One segment out, system-probe fails with `unable to find kernel headers`.
  */
 const objectDir = (ebpfDir) => `${ebpfDir}/ebpf`;
 
@@ -26,21 +14,8 @@ const objectDir = (ebpfDir) => `${ebpfDir}/ebpf`;
 const btfBundle = (ebpfDir) => `${objectDir(ebpfDir)}/co-re/btf`;
 
 /**
- * The system-probe.yaml every agent on this node reads.
- *
- * Written whether or not system-probe runs. Off, it is the file that stops the core agent asking a socket
- * nothing serves; on, it is where the socket, the log and the precompiled eBPF objects are named. One file
- * either way, because two would let the running config and the silencing config disagree.
- *
- * `bpf_dir` is the part that cannot be defaulted. The objects ship in the probe platform package rather than
- * at /opt/datadog-agent, so system-probe has to be told where they landed or it starts, answers `version`,
- * and loads not one program.
- *
- * `allow_prebuilt_fallback` has to be set for the same reason, and its default is the trap. Upstream
- * defaults it to false (`system_probe.go:138`), so a kernel that cannot do CO-RE loads nothing and the
- * prebuilt objects this package went to the trouble of extracting, verifying and shipping are dead weight
- * on disk. Shipping 42 MB that can never be read is worse than not shipping it, because the size says the
- * capability is there.
+ * The system-probe.yaml all three agents read, written whether or not it runs: off it stops the core agent
+ * polling a socket nothing serves.
  */
 export function renderSystemProbeYaml(paths, resolved, ebpfDir) {
 	const yes = (value) => (value ? "true" : "false");
@@ -95,11 +70,8 @@ export function renderSystemProbeYaml(paths, resolved, ebpfDir) {
 }
 
 /**
- * The security-agent's own config file.
- *
- * Separate from datadog.yaml because security-agent's `-c` takes its own list and a node that runs it wants
- * its log somewhere other than the core agent's. Everything else it needs it reads from the system-probe
- * config it is pointed at.
+ * The security-agent's own config: its `-c` takes its own list, and a node running it wants its log
+ * somewhere other than the core agent's. Everything else comes from the system-probe config.
  */
 export function renderSecurityAgentYaml(paths, resolved) {
 	const quote = (value) => JSON.stringify(String(value));
@@ -207,13 +179,8 @@ const TARGET_TPS = 200;
 export const HARPER_LOG_CHECK = "harper.d";
 
 /**
- * Log sources for what runs on this node: every log Harper writes under its log directory (`logging.root`
- * is `log` under the root path unless a node moved it; the HTTP request log `http.logging` enables lands
- * there too, under its own name), and the two agents' and the reaper's, which are the first thing an
- * operator wants when the node stops reporting. Tailed only while logs are enabled (DD_LOGS_ENABLED=true).
- *
- * `reaperName` arrives rather than being imported: it is the name a component chose for its own reaper lock,
- * and a renderer that reached back for it would be the one import making this file depend on its caller.
+ * Every log this node writes: Harper's own directory, each agent's, and the reaper's, which is the first
+ * thing wanted when a node stops reporting. `reaperName` arrives rather than being imported from the caller.
  */
 export function renderLogSources(harperLog, paths, reaperName) {
 	const source = (path, service, source) => [

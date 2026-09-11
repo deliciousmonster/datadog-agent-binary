@@ -1,6 +1,5 @@
-// Real delivery through a real trace-agent: the key that makes it count payloads, the spans a child
-// process sends it, and the poll that reads the count back. Shared by test/binaries/supervision-equivalence.test.js,
-// test/live/harness.js and test/binaries/smoke.js, which differ only in span naming, not in the mechanism.
+// Real delivery through a real trace-agent: the key that makes it count payloads, the spans a child process
+// sends it, and the poll that reads the count back.
 
 import { execFileSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
@@ -52,12 +51,8 @@ export function driveTraffic(
 const DELIVERY_POLL_MS = 500;
 
 /**
- * Polls `readSignal` until the real receiver has reported exactly `count` traces and the verdict has
- * left "idle", or the deadline passes. The two are latched apart: the receiver snapshot shows the burst
- * within seconds and is reset by the agent, while the verdict waits on the first stats bucket, some
- * twenty seconds behind (measured 24s on a real node), and the snapshot can be gone by then. Demanding
- * both in one read passed or failed on that ordering. Returns the read that carried the count, with the
- * verdict from the read that moved; `undefined` only if `readSignal` never produced one.
+ * Polls `readSignal` until the real receiver has reported exactly `count` traces and the verdict has left
+ * "idle", or the deadline passes.
  */
 export async function waitForDeliveredCount(readSignal, count, deadlineMs) {
 	const deadline = Date.now() + deadlineMs;

@@ -1,10 +1,5 @@
-// Whether anything reached Datadog.
-//
-// Three hops, read apart, because proving one proves nothing about the next. Every counter here is a
-// one-minute window the agent resets, so nothing is cumulative and nothing diffs.
-//
-// Nothing here starts or supervises anything. It reads, which is why the status endpoint can call it on a
-// thread that started nothing and why a long run can poll it from outside the node.
+// Whether anything reached Datadog: three hops read apart, because proving one proves nothing about the
+// next. Every counter is a one-minute window the agent resets, and nothing here starts or supervises.
 
 import { debugVarsUrl } from "./datadog.js";
 import {
@@ -19,13 +14,8 @@ import {
 const DELIVERY_SIGNAL_VERSION = 3;
 
 /**
- * How long an accepted stats payload keeps vouching for the hop after its window has reset.
- *
- * Measured against 7.82.1 on 2026-09-09: `stats_writer` resets every 60 seconds and the writer flushes one
- * payload per 10, so `Payloads` reads zero for the first ten seconds of every window. A caller polling on a
- * 60-second period phase-locks into that band and reads zero minute after minute until its clock drifts out,
- * which is how a node with 2,483 spans arriving published `not-delivering`. Three windows is wide enough that
- * only a hop that has genuinely stopped falls out of it.
+ * How long an accepted stats payload vouches for the hop after its window resets. The window is 60s and the
+ * writer flushes per 10, so a 60s poller phase-locks into the empty band and reads zero minute after minute.
  */
 export const STATS_RECALL_MS = 180_000;
 
@@ -68,11 +58,8 @@ export function deliveryVerdict(vars, source, traceHop = null, history = null) {
 	};
 
 	const arriving = receiver.tracesReceived > 0 || receiver.spansReceived > 0;
-	// An empty stats window is not a failed hop. The counter resets on the minute and the read can land in the
-	// ten seconds before the first flush, so what separates a stopped hop from that phase is how long it has
-	// been since a window did accept something, which only a caller that remembers its last read can say.
-	// A number and nothing else: `Number(null)` is zero, which would let a caller with no memory at all vouch
-	// for every window it reads.
+	// An empty window is not a failed hop, so what separates the two is how long since one accepted. A number
+	// and nothing else: `Number(null)` is zero, which would let a caller with no memory vouch for everything.
 	const recalled = history?.statsAcceptedMsAgo;
 	const acceptedMsAgo =
 		typeof recalled === "number" && Number.isFinite(recalled) && recalled >= 0
@@ -105,9 +92,8 @@ export function deliveryVerdict(vars, source, traceHop = null, history = null) {
 		},
 	};
 
-	// The trace hop, read from the writer's own failure lines when a log was given. Positive proof is not
-	// available on this agent build; absence of a refusal inside the window is, and it is worth more than
-	// the nothing this reported before.
+	// The trace hop from the writer's own failure lines. Positive proof is unavailable on this build; the
+	// absence of a refusal inside the window is not.
 	if (acceptedMsAgo !== undefined) signal.statsAcceptedMsAgo = acceptedMsAgo;
 	if (traceHop)
 		signal.traceHop = { refused: traceHop.refused, lines: traceHop.lines };
@@ -180,18 +166,8 @@ export function deliveryVerdict(vars, source, traceHop = null, history = null) {
 }
 
 /**
- * Whether the trace hop was refused inside the window, read from the trace-agent's own log.
- *
- * The counter this module would rather use is dead: `trace_writer` publishes zeros on 7.82.1 even while
- * the writer delivers, and a stock `datadog/agent:7.82.1` container reproduces that with traces accepted
- * and no send failures, so it is not this build. Measured on the 2026-09-08 run: 14.3k spans reached
- * Datadog in fifteen minutes at exactly the configured sample rate while `trace_writer.Payloads` never
- * left zero. What the writer does report is failure. Every one of the 742 retries, 500 drops and 230
- * `Received unexpected status code` lines in twelve hours fell inside a wrong-key window, and the eight
- * hours of steady state produced none.
- *
- * So this is negative evidence, and it is only ever used to separate "refused" from "not refused". It
- * never claims a payload landed.
+ * Whether the trace hop was refused inside the window, from the trace-agent's log: `trace_writer` publishes
+ * zeros on 7.82.1 even while delivering. Negative evidence only, and it never claims a payload landed.
  *
  * @param {string | undefined} logFile @param {number} windowMs @param {number} [maxBytes]
  * @returns {{ refused: boolean, lines: number } | null} null when the log cannot be read at all.
@@ -222,12 +198,8 @@ const REFUSAL =
 	/Trace Payload dropped|Dropping Payload after|Retried payload|Received unexpected status code/;
 
 /**
- * When the intake was last seen to accept an APM stats payload, per source.
- *
- * The verdict is a pure read of one window, and one window cannot tell a stopped hop from a read that landed
- * before the flush. This is the whole of the state this module holds, keyed by source so two ports on one node
- * do not vouch for each other, and shared across the node's threads because Harper answers a status read on
- * whichever thread is free.
+ * When the intake last accepted a stats payload, per source. The whole of this module's state, keyed so two
+ * ports cannot vouch for each other and shared, because a status read lands on whichever thread is free.
  *
  * @param {string | undefined} dir
  */
@@ -243,10 +215,8 @@ export const forgetStatsHistory = () => {
 };
 
 /**
- * How long ago this source last accepted a stats payload, recording this read as it answers.
- *
- * Read and write are one call because the order is the whole correctness of it: answer from what the previous
- * read left, then record, so a window that accepts is never its own corroboration.
+ * How long ago this source last accepted, recording this read as it answers. One call because the order is
+ * the correctness: answer from the previous read, then record, so a window is never its own corroboration.
  */
 export function recallStatsWindow(
 	source,

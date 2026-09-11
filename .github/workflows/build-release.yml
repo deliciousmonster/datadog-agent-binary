@@ -14,11 +14,7 @@ on:
         required: false
 
 env:
-  # Only the toolchain that RUNS the build tasks. Which Go compiles the agent is decided by the agent's
-  # own .go-version, which agent-build/compile.js reads out of the fetched source and passes as GOTOOLCHAIN,
-  # so this
-  # number cannot drift from the pinned release the way it did: it read 1.23 against a source asking for
-  # 1.26.5, and passed only because go.mod made Go fetch a newer toolchain on its own.
+  # Only the toolchain that RUNS the build tasks.
   GO_VERSION: "1.23"
 
 jobs:
@@ -48,41 +44,24 @@ jobs:
     # No leg below sets `experimental`, so this is always false: a real failure fails the job
     # outright, taking release/publish down with it.
     continue-on-error: false
-    # Cap each leg so a runner that never gets scheduled (e.g. a retired runner
-    # image) can't stall the whole build — and therefore the publish — for the
-    # default 6h. A real agent build finishes well within this.
+    # Cap each leg so a runner that never gets scheduled (e.g. a retired runner image) can't stall the whole
+    # build — and therefore the publish — for the default 6h. A real agent build finishes well within this.
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux builds
-          #
-          # glibc floor: the agent binary links against whatever glibc the
-          # build runner ships, and glibc is backward-compatible only upward
-          # (a binary built on an older glibc runs on newer ones, not vice
-          # versa). The Harper Pro runtime image is Debian 12 (glibc 2.36), so
-          # we must build on a runner whose glibc is <= 2.36 or the binary
-          # won't load there (it would reference GLIBC_2.38/2.39 symbols that
-          # don't exist on the image). ubuntu-latest is now Ubuntu 24.04
-          # (glibc 2.39), so we pin to ubuntu-22.04 (glibc 2.35). The agent
-          # does not actually require any newer glibc feature; upstream
-          # Datadog builds against an even older glibc for portability.
+          # glibc is compatible only upward and the Harper Pro image is Debian 12 (2.36), so these are pinned
+          # to ubuntu-22.04 (2.35). The floor step below fails the build if either limit is exceeded.
           - os: ubuntu-22.04
             platform: linux-x86_64
-          # GitHub-hosted arm64 runner on Ubuntu 22.04 (glibc 2.35), the arm
-          # counterpart of the x86_64 pin above. If hosted arm runners aren't
-          # available, swap this for any arm runner whose glibc is <= 2.36;
-          # the "Verify glibc floor" step below will fail the build if it
-          # isn't.
+          # GitHub-hosted arm64 runner on Ubuntu 22.04 (glibc 2.35), the arm counterpart of the x86_64 pin
+          # above.
           - os: ubuntu-22.04-arm
             platform: linux-arm64
 
-          # macOS builds
-          # macOS x86_64 (Intel) is omitted: GitHub has retired the macos-13
-          # Intel runner, so it can't be built on hosted runners. Re-add it with
-          # a self-hosted or cross-compiling runner if Intel-mac support is
-          # needed again.
+          # macOS x86_64 is omitted: GitHub retired the macos-13 Intel runner, so it needs a self-hosted or
+          # cross-compiling one.
           - os: macos-latest
             platform: macos-arm64
 
@@ -134,12 +113,7 @@ jobs:
 
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
-        # libsystemd-dev is the journald half. `mandatoryArgs` excludes python and nothing else, on the
-        # grounds that systemd rode in on that flag with no measurement behind it, so the agent now compiles
-        # `coreos/go-systemd/sdjournal` and needs `systemd/sd-journal.h`. Without it every Linux leg dies
-        # with `fatal error: systemd/sd-journal.h: No such file or directory`, which reads as a missing
-        # header rather than as a capability this package decided to keep. The alternative is excluding
-        # systemd again, which costs the journald log source and the systemd integration.
+        # libsystemd-dev is the journald half.
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake build-essential libsystemd-dev
@@ -162,9 +136,8 @@ jobs:
         env:
           DEBUG: true
           DD_AGENT_BUILD_ARGS: ${{ github.event.inputs.agent_build_args }}
-          # The dispatch input reaches bash as an environment value, never as source. Spliced through
-          # ${{ }} it is shell text, and `7.0.0 ; touch pwned ; #` executes on the runner. Absent, the
-          # build reads .datadog-agent-version; the tag's version is never a Datadog ref.
+          # The dispatch input reaches bash as an environment value, never as source. Spliced through ${{ }} it
+          # is shell text, and `7.0.0 ; touch pwned ; #` executes on the runner.
           DATADOG_VERSION: ${{ github.event.inputs.datadog_version }}
         run: |
           args=()
@@ -172,10 +145,8 @@ jobs:
           node agent-build/cli.js build "${args[@]}"
           ls -l "build/${{ matrix.platform }}/bin/"
 
-      # The agent build starts a Bazel server (the config-schema step does, whatever the rtloader flags
-      # say) and that server outlives the build holding the source tree open. On Windows a held handle
-      # makes renaming the tree EBUSY, which is what the smoke test was working around for ten seconds
-      # and then giving up on. Shutting the daemon down is the build's job, not the next step's problem.
+      # The agent build starts a Bazel server (the config-schema step does, whatever the rtloader flags say) and
+      # that server outlives the build holding the source tree open.
       - name: Stop the Bazel daemon the build started
         if: always()
         shell: bash
@@ -189,15 +160,8 @@ jobs:
         shell: bash
         run: node test/binaries/smoke.js "build/${{ matrix.platform }}/bin"
 
-      # MOD-16's equivalence property (harperSupervisor and guardSupervisor deliver the same trace
-      # count for the same input) against these same real binaries, on every leg this matrix builds -
-      # not just wherever a developer happens to have the locally-patched Harper test/live/ needs.
-      #
-      # Windows runs the same directory through the gate, which subtracts what windows-gate-checks.mjs
-      # names and refuses a run that executed nothing. The step limit is for a runner a leaked agent
-      # keeps alive: a hang here once cost the leg its whole 60-minute job. One file at a time: both
-      # suites take the same lock on build/, and the equivalence suite holds it longer than the other
-      # waits, so in parallel the second one times out on the lock whenever it starts second.
+      # The equivalence property - both supervisors deliver the same trace count for the same input - against
+      # these real binaries, on every leg, not only where a developer has the Harper test/live/ needs.
       - name: Supervision equivalence test (native vs guard, real binaries)
         shell: bash
         timeout-minutes: 15
@@ -208,17 +172,8 @@ jobs:
             node --test --test-concurrency=1 --test-timeout=120000 "test/binaries/**/*.test.js"
           fi
 
-      # Guard against the symbol floor creeping back up. The Harper Pro runtime
-      # image (Debian 12) provides glibc 2.36 (libc.so.6) AND libstdc++
-      # GLIBCXX_3.4.30 (from GCC 12). These are two SEPARATE libraries: the
-      # glibc floor is set by the runner's Ubuntu version, the GLIBCXX floor by
-      # its GCC version. The agent binary must not reference a symbol newer than
-      # either, or it fails to load on the image with "version `GLIBC_2.xx' not
-      # found" or "version `GLIBCXX_3.4.xx' not found" — the latter is the exact
-      # error the Macy's deploy hit on rocksdb-js. Building on ubuntu-22.04
-      # (glibc 2.35, GCC 11 -> GLIBCXX_3.4.29) keeps both under the limit. This
-      # step fails the build loudly if either floor is exceeded, so we catch it
-      # in CI instead of on a customer's instance.
+      # Guard against the symbol floor creeping back up. The Harper Pro runtime image (Debian 12) provides glibc
+      # 2.36 (libc.so.6) AND libstdc++ GLIBCXX_3.4.30 (from GCC 12).
       - name: Verify glibc / libstdc++ floor (Linux)
         if: runner.os == 'Linux'
         shell: bash
@@ -261,9 +216,7 @@ jobs:
           retention-days: 90
 
       # Its own artifact, not folded into bin-*, because the release job treats every bin-* directory as one
-      # platform's binary set and would package 42MB of eBPF objects as if they were binaries. Ignored where
-      # there are none: only the Linux legs extract anything, and system-probe is the only binary these
-      # belong to.
+      # platform's binary set and would package 42MB of eBPF objects as if they were binaries.
       - name: Upload ${{ matrix.platform }} eBPF objects
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -292,11 +245,8 @@ jobs:
           pattern: bin-*
           path: artifacts/
 
-      # Git permits ; $() ` && and | in a tag name, so ref_name spliced into a run body is shell
-      # source. It arrives as a value, like every other untrusted input in this workflow.
-      #
-      # Driven off the downloaded bin-* directory names instead of a hardcoded arch list, so a matrix change
-      # needs no edit here.
+      # Git permits ; $() ` && and | in a tag name, so ref_name spliced into a run body is shell source. It
+      # arrives as a value, like every other untrusted input in this workflow.
       - name: Prepare release assets
         id: prepare_assets
         env:
@@ -359,31 +309,23 @@ jobs:
 
             Pre-compiled Datadog Agent binaries for all supported platforms.
 
-            ## Supported Platforms
+            # # Supported Platforms
 
             ${{ steps.prepare_assets.outputs.platforms }}
 
-            ## NPM Package
+            # # NPM Package
 
             ```bash
             npm install @deliciousmonster/datadog-agent-binary
             ```
 
-            ## Verification
+            # # Verification
 
             ```bash
             sha256sum -c checksums.txt
             ```
 
-  # Staging, the symbol floors, the gate, the publish and the dist-tag move, none of it written here any
-  # more. What used to sit in this job was a glob over `npm/*/` to decide what to publish, 25 lines of
-  # `strings | grep | sort -V` for the floor, and a loop reconstructing `build/<target>/bin` from artifact
-  # names, each rediscovering the package set from the filesystem and each having to agree with a
-  # declaration nothing checked it against.
-  #
-  # The kit reads binary-kit.config.js for all of it, so the package list, the CI matrix above and the
-  # optionalDependencies cannot disagree. `targets` is the one thing still passed, and it is passed from the
-  # same config the kit reads, so the matrix legs and the published names stay one statement.
+  # Staging, the symbol floors, the gate, the publish and the dist-tag move, none of it written here any more.
   publish:
     needs: [build, prepare]
     if: startsWith(github.ref, 'refs/tags/')
@@ -393,6 +335,5 @@ jobs:
       targets: '["linux-x86_64", "linux-arm64", "macos-arm64", "windows-x86_64"]'
     secrets:
       # `dist-tag add` is the one step OIDC has not covered in practice: a job that had just published ten
-      # packages was answered E401 for every tag write. Publishing itself still authenticates by the job's
-      # own OIDC identity through a trusted publisher on each package.
+      # packages was answered E401 for every tag write.
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

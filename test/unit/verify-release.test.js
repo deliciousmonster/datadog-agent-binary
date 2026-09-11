@@ -1,7 +1,5 @@
 // Three of the four binaries are lifted from Datadog's own release rather than built here, so what stands
-// between a mirror and this package's registry entry is the chain in src/verify-release.ts. A pin alone
-// only says a file has not changed since somebody wrote a line down; it never says that line was right.
-// These assert the chain refuses, because a verifier that cannot fail is not a verifier.
+// between a mirror and this package's registry entry is the chain in src/verify-release.ts.
 
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -61,9 +59,7 @@ describe("reading a signed Release", () => {
 	});
 
 	it("NEGATIVE: a path only a later section names has no SHA256, and is not given one", () => {
-		// This is what the section bound is for. Returning on the first match already handles a path that
-		// appears in both, because SHA256 precedes SHA512; the case that needs the bound is a path the
-		// SHA256 section does not carry at all, where the scan would otherwise run on into the next one.
+		// This is what the section bound is for.
 		const decoy = "f".repeat(64);
 		const trailing = `${RELEASE}SHA512:\n ${decoy} 980 7/binary-riscv64/Packages\n`;
 		assert.equal(

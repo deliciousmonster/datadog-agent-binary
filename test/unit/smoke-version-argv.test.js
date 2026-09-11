@@ -1,9 +1,4 @@
 // The smoke test asks each binary for its version, and two of them need a config to answer at all.
-//
-// CI on 2026-09-11 failed three legs on `security-agent: unable to load Datadog config file`, and the
-// cause was not the flag. checkReportsVersion took an extraArgs parameter, both call sites passed one,
-// and the spawn built `["version"]` and threw the parameter away. process-agent hid it by answering
-// bare. Nothing tested the script, so the only thing that could catch it was a full build.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

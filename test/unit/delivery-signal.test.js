@@ -1,6 +1,4 @@
-// The counters are read asymmetrically and the suite is built around that. `trace_writer` reads zero on a
-// healthy node, because two writers register into the one expvar slot and the last reporter goroutine to start
-// owns it, so every case below states whether a zero is allowed to reach a verdict.
+// The counters are read asymmetrically and the suite is built around that.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

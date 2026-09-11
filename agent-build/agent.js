@@ -51,9 +51,8 @@ export async function buildAgents(request) {
 	const lifted = await extractRelease({
 		target,
 		outputDir: tree.bin,
-		// Beside `bin/`, not inside it, and at the same relative path the platform package uses. The build
-		// tree and the package it is copied into are then the same shape, so the packaging step copies
-		// rather than rearranges.
+		// Beside `bin/` at the same relative path the package uses, so the build tree and the package are one
+		// shape and the staging copies rather than rearranges.
 		ebpfDir: join(tree.root, EBPF_SHIP_DIR),
 		workDir: tree.extract,
 	});

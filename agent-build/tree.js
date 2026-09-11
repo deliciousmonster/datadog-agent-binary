@@ -1,11 +1,6 @@
 // @ts-check
-// One target's build tree, which is the kit's `build/<target>` plus what compiling Datadog's agent needs
-// under it.
-//
-// The kit owns `root` and `bin` because four processes on separate runners meet at those two paths and the
-// staging reads them. The other three are this repo's own scratch and nothing outside it has any business
-// knowing them: the clone, the GOPATH the clone is symlinked into so the Go toolchain resolves the agent by
-// import path, and a directory for the .deb an extraction unpacks.
+// The kit's `build/<target>` plus what compiling the agent needs under it. The kit owns root and bin, where
+// four processes meet; the clone, its GOPATH symlink and the extraction scratch are this repo's alone.
 
 import { join } from "node:path";
 
@@ -20,7 +15,10 @@ import { buildTree as kitTree } from "@deliciousmonster/harper-binary-kit/layout
  * @property {string} extract Scratch for the extraction: the downloaded .deb and its unpacked payload.
  */
 
-/** The tree at an already-resolved directory, for a caller holding the path and not the target. @param {string} root @returns {BuildTree} */
+/**
+ * The tree at an already-resolved directory, for a caller holding the path and not the target. @param {string}
+ * root @returns {BuildTree}
+ */
 export function treeAt(root) {
 	return {
 		root,

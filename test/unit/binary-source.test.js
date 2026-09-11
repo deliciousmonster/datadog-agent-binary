@@ -14,10 +14,8 @@ import { TARGETS } from "../../agent-build/toolchain.js";
 
 describe("where each binary comes from", () => {
 	it("only the core agent and the trace-agent are built here", () => {
-		// The core agent because it is the one that links libdatadog-agent-rtloader, so it is the only one
-		// that has to be compiled to come out Python-free. The trace-agent because stripped it lands within
-		// 49 KB of Datadog's, so lifting it would trade provenance on the binary this package exists to fix
-		// for nothing.
+		// The core agent because it is the one that links libdatadog-agent-rtloader, so it is the only one that has
+		// to be compiled to come out Python-free.
 		assert.deepEqual(
 			BINARIES.filter((b) => b.from === "build").map((b) => b.shipsAs),
 			["datadog-agent", "trace-agent"]
@@ -64,9 +62,8 @@ describe("where each binary comes from", () => {
 		}
 	});
 
-	// Linux system-probe is the one that could not be built on a runner: the eBPF objects need a kernel-
-	// header tree matched to every kernel an operator might run, which is why Datadog precompiles 26 of
-	// them. Off Linux there are no objects to compile, so the same binary is an ordinary Go build.
+	// Linux system-probe is the one that could not be built on a runner: the eBPF objects need a kernel- header
+	// tree matched to every kernel an operator might run, which is why Datadog precompiles 26 of them.
 	it("system-probe is lifted on Linux and built everywhere else", () => {
 		const named = (fn, os) =>
 			fn(TARGETS.find((t) => t.os === os)).map((b) => b.shipsAs);

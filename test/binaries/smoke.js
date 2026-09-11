@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 
-// Proves a platform's built binaries are real before CI uploads them: the trace-agent must bind its
-// receiver and count a real span, the core agent must start, identify itself, and stay up.
-//
-// Under test/binaries/ because it is what that tier is: real binaries from build/<target>/bin, driven for
-// real. It reaches for runtime/verify.js rather than writing a second, weaker idea of what a working agent
-// looks like, and the release workflow runs it on every leg before anything is uploaded.
+// Proves a platform's built binaries are real before CI uploads them: the trace-agent must bind its receiver
+// and count a real span, the core agent must start, identify itself, and stay up.
 
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, renameSync, rmSync } from "node:fs";
@@ -40,9 +36,8 @@ const LIVENESS_HOLD_MS = 3_000;
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 const log = (message) => console.log(`smoke-test: ${message}`);
 
-// The mechanism is support/traffic.js's, shared with the equivalence suite and the live tier; only the
-// span naming is this file's own. It carried its own copy of the script before, under a comment saying it
-// was the same shape as the one it could have imported.
+// The mechanism is support/traffic.js's, shared with the equivalence suite and the live tier; only the span
+// naming is this file's own.
 const SPAN_SCRIPT = {
 	envVar: "SMOKE_SPAN_COUNT",
 	spanName: "smoke-test.span",
@@ -146,13 +141,6 @@ async function checkCoreAgent(binPath, ports, paths, _resources, spawned) {
 // fails loudly rather than being checked by the wrong function.
 /**
  * What can be proven about a binary that needs privileges this runner does not have.
- *
- * system-probe loads eBPF programs or opens kernel drivers, and security-agent talks to system-probe
- * over a socket; neither can start usefully on a CI runner, and pretending otherwise would make this
- * check pass on a binary that cannot run at all. What `version` proves is real and is what would have
- * caught the one that mattered: a macOS system-probe built with the wrong Go toolchain panicked before
- * main with `strcase.UnicodeVersion "15.0.0" != unicode.Version "17.0.0"`, and it packaged, and it
- * passed the publish gate's symbol check. A binary that dies at init cannot print its version.
  */
 export const versionArgv = (extraArgs = []) => ["version", ...extraArgs];
 
@@ -194,10 +182,8 @@ export const CHECKS = {
 	// Started for real would need CAP_SYS_ADMIN and an object matching the runner's kernel on Linux, a
 	// /dev/bpf device on macOS, and two kernel drivers on Windows. None of those is a runner.
 	"system-probe": checkReportsVersion,
-	// security-agent loads a config even to print its version, where system-probe does not: without one
-	// it answers `unable to load Datadog config file: Config File Not Found` and never reaches the
-	// version. --cfgpath takes the directory, which is the form both it and process-agent accept and the
-	// one the supervisor already passes them; `-c <file>` works too and is the flag CI saw fail.
+	// security-agent loads a config even to print its version, where system-probe does not: without one it answers
+	// `unable to load Datadog config file: Config File Not Found` and never reaches the version.
 	"security-agent": (binPath, ports, paths, resources, spawned) =>
 		checkReportsVersion(binPath, ports, paths, resources, spawned, [
 			"--cfgpath",
@@ -211,11 +197,8 @@ export const CHECKS = {
 		]),
 };
 
-// Windows answers a rename with EBUSY while anything holds a handle inside the tree. On the CI runner
-// the build's tree stays busy for the whole ten seconds this waits, and nothing here can see by what.
-// Returns whether the rename happened: on Windows a tree still busy after the retries is reported
-// and left in place, so the binaries are still proven to bind and serve there and only their
-// independence from the tree goes untested on that one platform. Anywhere else it is a failure.
+// Windows answers a rename with EBUSY while anything holds a handle inside the tree. On the CI runner the
+// build's tree stays busy for the whole ten seconds this waits, and nothing here can see by what.
 const RENAME_ATTEMPTS = 10;
 const RENAME_RETRY_MS = 1000;
 async function rename(from, to) {
@@ -304,9 +287,8 @@ async function main() {
 		const runtime = resources.prepareRuntime();
 		writeConfigFiles(runtime.configFiles, console);
 
-		// binariesFor, not BINARIES: system-probe and security-agent are not on every platform, and macOS
-		// builds no security-agent at all. Asking for one that was never built fails the smoke test for a
-		// binary this platform is not supposed to have.
+		// binariesFor, not BINARIES: system-probe and security-agent are not on every platform, and macOS builds no
+		// security-agent at all.
 		for (const binary of binariesFor(currentTarget())) {
 			const binPath = join(binDir, binaryFilename(binary, currentTarget()));
 			const check = CHECKS[binary.shipsAs];
@@ -357,10 +339,8 @@ async function main() {
 	process.exit(0);
 }
 
-// Guarded so a test can import CHECKS and versionArgv without the script running a build it has no
-// binaries for. The argv this builds went untested until CI proved it: checkReportsVersion took an
-// extraArgs parameter, both call sites passed one, and the spawn ignored it, so security-agent was
-// asked bare on every platform and answered with the config it could not find.
+// Guarded so a test can import CHECKS and versionArgv without the script running a build it has no binaries
+// for.
 const invokedDirectly =
 	process.argv[1] &&
 	resolve(process.argv[1]) === fileURLToPath(import.meta.url);

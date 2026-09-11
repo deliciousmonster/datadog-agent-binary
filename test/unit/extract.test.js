@@ -1,8 +1,5 @@
-// The extraction step: reading a .deb's container, and refusing to write when the chain does not hold.
-//
-// The negative assertions are the ones that matter. "It extracted the binary" passes just as well on an
-// extractor that never verified anything, so the tests that carry weight are the ones that hand it a
-// failing chain and assert nothing reached the output directory.
+// The extraction step: reading a .deb's container, and refusing to write when the chain does not hold. The
+// negative assertions are the ones that matter.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -105,9 +102,7 @@ test("NEGATIVE: an archive with no data member names what it did hold", () => {
 	assert.throws(() => findDataMember(members), /control\.tar\.xz/);
 });
 
-// The payload is identified by name, not by looking data-ish. A looser match takes the first member whose
-// name happens to begin with "data", hands its bytes to tar, and reports a corrupt archive rather than the
-// package having a shape this does not understand.
+// The payload is identified by name, not by looking data-ish.
 test("NEGATIVE: a member that merely starts with data is not taken for the payload", () => {
 	const members = readArMembers(
 		arArchive([
@@ -188,9 +183,7 @@ function failingInputs() {
 	};
 }
 
-// The load-bearing assertion of the whole file. An extractor that unpacks first and verifies second is an
-// extractor with no verification in it, and the only way to tell the two apart is to hand it a failing
-// chain and look at the disk.
+// The load-bearing assertion of the whole file.
 test("NEGATIVE: a chain that does not hold writes nothing to the output directory", async () => {
 	const dir = scratch();
 	const outputDir = join(dir, "bin");
@@ -264,9 +257,8 @@ test("NEGATIVE: a good signature from a key that is not Datadog's is refused", a
 	}
 });
 
-// Windows security-agent is built rather than lifted, because the extraction source is a Debian package
-// and cannot carry a Windows binary. A Windows leg that reached the download would refuse the whole build
-// for an artefact it has no use for.
+// Windows security-agent is built rather than lifted, because the extraction source is a Debian package and
+// cannot carry a Windows binary.
 test("Windows extracts nothing, because its one lifted binary is built there instead", async () => {
 	const dir = scratch();
 	try {
@@ -288,9 +280,7 @@ test("Windows extracts nothing, because its one lifted binary is built there ins
 	}
 });
 
-// The invariant that catches the next one. `from: "release"` on a target with no pinned .deb is a build
-// that downloads nothing, refuses, and takes the whole platform down with it, and the only place the two
-// facts meet is here.
+// The invariant that catches the next one.
 test("every target that lifts a binary has a release pinned for it", () => {
 	for (const target of TARGETS) {
 		if (extractedFor(target).length === 0) continue;

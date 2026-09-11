@@ -1,9 +1,4 @@
 // The oracle the publish gate's table has never had.
-//
-// The kit's own suite writes both sides of every fixture it checks, so it proves the gate's branches and
-// cannot say whether the values those branches read discriminate a real build. A requiredSymbol absent from
-// every correctly-built binary would refuse every release; a forbiddenBuildTag present in every one of them
-// would too. Only a real binary answers that, so this runs where they are (`npm run test:binaries`).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -13,9 +8,8 @@ import { pathToFileURL } from "node:url";
 
 import { REPO_ROOT, withRealBinaries } from "../support/component.js";
 
-// The gate's own reader, not a copy of it: a parser that drifted from the one verify-package.js runs
-// would let this pass while the release still refuses.
-// A URL, not a path: import() refuses a bare `D:\...` on Windows (ERR_UNSUPPORTED_ESM_URL_SCHEME).
+// The gate's own reader, not a copy of it: a parser that drifted from the one verify-package.js runs would let
+// this pass while the release still refuses.
 const { binariesFor, recordedBuildTags } = await import(
 	pathToFileURL(path.join(REPO_ROOT, "agent-build", "binaries.js")).href
 );

@@ -46,18 +46,15 @@ const stubBinaryPath = path.join(platformPkgDir, "bin", binaryName);
 const STUB_MARKER = "STUB_DATADOG_AGENT_OK";
 // Marks the package dir as our throwaway fixture so we never delete a real one.
 const SENTINEL = path.join(platformPkgDir, ".harper-test-fixture");
-// Where a real (npm-installed) platform package is moved while the fixture is
-// in place. Once the package is published, `npm ci` installs the matching
-// platform package into node_modules, so the fixture must coexist with it.
+// Where a real (npm-installed) platform package is moved while the fixture is in place.
 const BACKUP = `${platformPkgDir}.real-backup`;
 
 function safeRemoveFixture() {
 	try {
 		fs.rmSync(platformPkgDir, { recursive: true, force: true });
 	} catch {
-		// Some filesystems (e.g. certain CI/sandbox mounts) disallow unlink.
-		// Leaving the fixture behind is harmless: node_modules is ephemeral and
-		// createFakePlatformPackage() is idempotent on re-run.
+		// Some filesystems (e.g. certain CI/sandbox mounts) disallow unlink. Leaving the fixture behind is harmless:
+		// node_modules is ephemeral and createFakePlatformPackage() is idempotent on re-run.
 	}
 	// Restore the real package we moved aside (if any).
 	if (fs.existsSync(BACKUP)) {
@@ -78,13 +75,8 @@ function safeRemoveFixture() {
 }
 
 /**
- * Write a fake platform sub-package identical in shape to the output of
- * the kit's staging: a package.json, an index.js exposing
- * getBinaryPath(), and bin/<binaryName>. The "binary" is a tiny script that
- * echoes a marker plus its args so we can prove it was actually executed.
- *
- * Idempotent: if our own fixture is already present it is overwritten; a real
- * installed package (no sentinel) is never touched.
+ * Write a fake platform sub-package identical in shape to the output of the kit's staging: a package.json, an
+ * index.js exposing getBinaryPath(), and bin/<binaryName>.
  */
 function createFakePlatformPackage() {
 	if (fs.existsSync(platformPkgDir) && !fs.existsSync(SENTINEL)) {
@@ -117,9 +109,8 @@ function createFakePlatformPackage() {
 		`const path = require('path');\nmodule.exports = {\n  getBinaryPath() {\n    return path.join(__dirname, 'bin', ${JSON.stringify(binaryName)});\n  }\n};\n`
 	);
 
-	// Stub "agent" binary. A shebang'd Node script works as an executable on
-	// Unix; on Windows we still create the file (resolution is tested) but skip
-	// the execution assertions below.
+	// Stub "agent" binary. A shebang'd Node script works as an executable on Unix; on Windows we still create the
+	// file (resolution is tested) but skip the execution assertions below.
 	const stub = `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(
 		STUB_MARKER
 	)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\nprocess.exit(0);\n`;
@@ -127,10 +118,8 @@ function createFakePlatformPackage() {
 	fs.chmodSync(stubBinaryPath, 0o755);
 }
 
-// Held for the whole file, not just one test: the fixture below is a shared, mutable path
-// (node_modules/@deliciousmonster/datadog-agent-binary-<platform>) that resolveBinary() also reads from any
-// other concurrently-running file, for as long as this fixture is on disk - not only while a given test
-// here happens to be running.
+// Held for the whole file: the fixture below is a shared, mutable path under node_modules that every
+// concurrently-running suite's resolveBinary() reads for as long as it is on disk.
 let releaseResolveBinaryLock;
 let restoreBuiltBinaries;
 
@@ -163,12 +152,8 @@ test("the installed platform package is preferred over a local build (no network
 });
 
 test("a binary that resolves to the wrong agent is refused rather than started twice", async () => {
-	// The published platform packages predate the trace-agent and answer every request with the core agent.
-	// That path exists, so an unchecked resolve starts two core agents and no receiver at all.
-	//
-	// This depends on build/<platform>/bin holding no trace-agent, which before() establishes two ways: the
-	// resolve-binary lock keeps a concurrent file's fixture out, and hideBuiltBinaries moves aside whatever
-	// a real `npm run build-agent` left there, which no lock can make absent.
+	// The published platform packages predate the trace-agent and answer every request with the core agent. That
+	// path exists, so an unchecked resolve starts two core agents and no receiver at all.
 	const receiver = await findFreePort();
 	const expvarPort = await findFreePort();
 	await withTempDir("dd-runtime-", async (root) => {

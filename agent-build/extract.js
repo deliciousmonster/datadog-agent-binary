@@ -1,14 +1,6 @@
 // @ts-check
-// Lifts the binaries this package does not build out of Datadog's own signed package.
-//
-// Nothing here trusts the download. `verifyRelease` walks the whole chain first, and this refuses to write
-// a single byte until it passes, because an extractor that runs before the verifier is a verifier that does
-// not exist. The failure mode being guarded is a mirror serving a different .deb, which looks exactly like
-// a good one to anything that only checks the file arrived.
-//
-// A .deb is an `ar` archive holding `data.tar.<zst|xz|gz>`, and the payload paths are `./opt/datadog-agent/…`.
-// Reading `ar` here rather than shelling out to `dpkg` keeps this working on the macOS and Windows runners,
-// which have no dpkg, and `tar` is asked only for the members that are wanted.
+// Lifts what this package does not build out of Datadog's signed .deb, writing no byte until verifyRelease
+// passes. `ar` is read here rather than shelling to `dpkg`, which the macOS and Windows runners do not have.
 
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -42,10 +34,8 @@ const exec = promisify(execFile);
 const PAYLOAD_ROOT = "opt/datadog-agent";
 
 /**
- * Members of `data.tar` an `ar` archive holds, in the order the format allows them.
- *
- * The compression suffix moves between Debian releases (`gz` gave way to `xz`, and `zst` is current on
- * some), so the member is found by prefix rather than assumed.
+ * The `data.tar` member an `ar` archive holds. The compression suffix moves between Debian releases, so it
+ * is found by prefix rather than assumed.
  */
 const DATA_MEMBER = /^data\.tar(\.(zst|xz|gz|bz2))?$/;
 
@@ -57,12 +47,8 @@ const DATA_MEMBER = /^data\.tar(\.(zst|xz|gz|bz2))?$/;
  */
 
 /**
- * Parse an `ar` archive header table.
- *
- * The format is a magic line then, per member, a 60-byte header whose fields are space-padded ASCII, and
- * the data padded to an even offset. GNU long names via `//` are not handled: no Datadog .deb uses them,
- * and a silent wrong answer is worse than a refusal, so an unrecognised name is returned as-is for the
- * caller to fail on rather than guessed at.
+ * Parse an `ar` header table: a magic line, then 60-byte space-padded headers with data at even offsets.
+ * GNU long names are not handled, and an unrecognised name comes back as-is for the caller to refuse.
  */
 /** @param {Uint8Array} bytes @returns {ArArchiveMember[]} */
 export function readArMembers(bytes) {
@@ -163,17 +149,8 @@ const asText = (/** @type {Uint8Array} */ bytes) =>
 	new TextDecoder().decode(bytes);
 
 /**
- * Verify Datadog's signature over the Release file, using the caller's gpg.
- *
- * The key is imported into a throwaway home so this never touches whatever keyring the runner has, and so
- * a machine that already trusts some other Datadog key cannot make this pass for the wrong reason.
- *
- * That home goes under the system temp directory rather than beside the download, and the reason is a
- * length limit rather than tidiness. gpg 2 talks to gpg-agent over a unix socket inside GNUPGHOME, and a
- * unix socket path is capped at 104 bytes on macOS and 108 on Linux. A build tree nested deep enough puts
- * `<workDir>/gnupg/S.gpg-agent` past that, and what gpg then reports is `can't connect to the gpg-agent:
- * File name too long`, which reads as a broken gpg installation rather than as a path that is too long.
- * Measured here on 2026-09-10 under a session scratch directory, at 104 characters.
+ * Verify Datadog's signature using the caller's gpg, with the key in a throwaway home so a runner that
+ * trusts another Datadog key cannot pass this. Under the system temp: the agent socket is capped at 104 bytes.
  */
 /** @type {SignatureCheck} */
 export async function checkSignature(release, signature, key, workDir) {
@@ -227,10 +204,8 @@ export async function checkSignature(release, signature, key, workDir) {
  */
 
 /**
- * Put every `from: "release"` binary for one target into `outputDir`, or refuse and write nothing.
- *
- * Returns the paths written, matching what the build step returns, so the packaging step does not care
- * which half a binary came from.
+ * Put every `from: "release"` binary into `outputDir`, or refuse and write nothing. Returns what the build
+ * step returns, so the staging does not care which half a binary came from.
  */
 /** @param {ExtractOptions} options @returns {Promise<string[]>} */
 export async function extractRelease({

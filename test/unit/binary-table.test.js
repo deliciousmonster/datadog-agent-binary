@@ -1,9 +1,5 @@
-// The binary table: what this package ships, where each one comes from, and how each is built.
-//
-// The packaging half of this file left when the kit took over staging. What stayed is the half only this
-// repo can answer: a descriptor names a Datadog binary, an invoke task, the flags that task must always be
-// given, and the platforms the binary exists on at all. Those four are what a build reads, and every one of
-// them was got wrong at least once.
+// The binary table: what this package ships, where each one comes from, and how each is built. The packaging
+// half of this file left when the kit took over staging.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -15,10 +11,8 @@ import { buildArgs } from "../../agent-build/compile.js";
 import { pinnedVersion } from "../../agent-build/download.js";
 import { TARGETS, findTarget } from "../../agent-build/toolchain.js";
 
-// Python is excluded and settled: not because it cannot be shipped, which was disproven, but because
-// runtime/series.js produces the one metric family a Harper node wants and nothing else in
-// integrations-core is worth 634 MB a platform. systemd left this flag, because it rode in on python's
-// coat-tails with no measurement recorded for it.
+// Python is excluded and settled, not because it cannot ship, which was disproven, but because series.js
+// produces the one metric family a Harper node wants for none of the 634 MB.
 test("the override adds flags and cannot drop the python exclusion", () => {
 	const core = BINARIES.find((binary) => binary.shipsAs === "datadog-agent");
 	assert.ok(core.mandatoryArgs.includes("--build-exclude=python"));
@@ -103,10 +97,7 @@ test("the agent version is pinned in the repo, not resolved from the network", a
 	);
 });
 
-// system-probe and security-agent were absent for reasons that never survived contact. system-probe was
-// deleted as collateral in `0c52271`, a commit replacing a hand-written build with upstream's; its cost is
-// service discovery, NPM, USM and the ebpf checks, and the core agent logs a socket it cannot reach once a
-// minute because of it. security-agent was never in the table at all, and its cost is CWS and CSPM.
+// system-probe and security-agent were absent for reasons that never survived contact.
 test("the table ships the five binaries the agent is, not the two it was", () => {
 	assert.deepEqual(
 		BINARIES.map((binary) => binary.shipsAs).sort(),
@@ -123,8 +114,7 @@ test("the table ships the five binaries the agent is, not the two it was", () =>
 
 test("a binary that is not cross-platform says so, and the filter honours it", () => {
 	// system-probe exists on all three, by three mechanisms: eBPF on Linux, packet capture on macOS
-	// (tracer_darwin.go), kernel drivers on Windows (ddnpm, ddprocmon). It carried onlyOn: ["linux"] once,
-	// on an inference from a skipped build_object_files that is true only where the probes are eBPF.
+	// (tracer_darwin.go), kernel drivers on Windows (ddnpm, ddprocmon).
 	const probe = BINARIES.find((binary) => binary.shipsAs === "system-probe");
 	assert.equal(probe.onlyOn, undefined, "system-probe exists on every target");
 

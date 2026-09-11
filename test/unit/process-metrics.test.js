@@ -1,7 +1,4 @@
-// `system.processes.*` is the Python `process` integration and this build ships no Python. Live Processes is
-// Go and running (83 processes on the soak node), but it publishes to the Processes intake: no `process.*` or
-// `system.*` metric name is compiled into the shipped binary, so nothing it collects is queryable or
-// alertable. This module makes a named series that is.
+// `system.processes.*` is the Python `process` integration and this build ships no Python.
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -127,10 +124,7 @@ describe("a series for one supervised group", () => {
 });
 
 describe("whether it sends at all", () => {
-	// A boolean, not the presence of a config file. Datadog gates an integration on conf.d/<check>.d/ because
-	// the agent cannot know what to monitor; this measures processes the component spawned, so it knows its
-	// own subject. That puts it with apm_config.enabled and process_config.process_collection.enabled, both
-	// of which this package already renders as booleans.
+	// A boolean, not the presence of a config file.
 	it("is on when nothing says otherwise, because installing the plugin is the ask", () => {
 		assert.equal(seriesSettings({}).enabled, true);
 	});
@@ -211,11 +205,8 @@ describe("metric_patterns, with Datadog's semantics", () => {
 });
 
 describe("where the settings are visible", () => {
-	// Four patterns exist in this package: env rendered into datadog.yaml (the ports), env deliberately not
-	// rendered (DD_API_KEY, DD_SITE), yaml-only values the plugin decides (target_traces_per_second), and
-	// these, which only the plugin reads. The agent never sees them, so datadog.yaml would be the wrong
-	// place: its header says it is the agent's generated config, and a key the agent ignores reads as a
-	// setting that silently does nothing. The plugin's own endpoint is where the plugin reports itself.
+	// Four patterns here: env rendered into datadog.yaml, env deliberately not rendered, yaml-only values the
+	// plugin decides, and these, which only the plugin reads.
 	it("the status endpoint carries what this component resolved", async () => {
 		const { DatadogStatus } = await loadComponent();
 		const status = await DatadogStatus.get();
@@ -390,8 +381,7 @@ describe("the cadence", () => {
 
 describe("which namespace it publishes under", () => {
 	// A series under a private name is one nobody's dashboard or monitor finds, so it publishes under the
-	// namespace the Python `process` check owns. The metric names underneath were already Datadog's: `number`,
-	// `threads`, `mem.rss` and the avg/max/min suffixes come straight off ATTR_TO_METRIC in process.py.
+	// namespace the Python `process` check owns.
 	it("defaults to the namespace a stock dashboard queries", () => {
 		assert.equal(seriesSettings({}).prefix, "system.processes");
 		assert.equal(DEFAULT_PREFIX, "system.processes");
@@ -445,13 +435,7 @@ describe("which namespace it publishes under", () => {
 });
 
 describe("standing down when something else owns the namespace", () => {
-	// Sharing system.processes.* is only safe while nothing else fills it. A live conf.d/process.d/conf.yaml
-	// is how the agent is told to run the real check, and Datadog ships only conf.yaml.example, so a real one
-	// is a deliberate act. This build has no interpreter so that check cannot run here today; the file still
-	// says what the operator intends, and standing down is what keeps a later change from doubling the series.
-	// standDownFor asks the filesystem with a joined path, so the file names here are joined too.
-	// Spelling them with forward slashes passed on darwin and failed on Windows, where join writes
-	// separators the literal does not have and every lookup missed.
+	// Sharing system.processes.* is only safe while nothing else fills it.
 	const conf = (...parts) => join("/c", ...parts);
 	const fake = (present) => (p) => present.includes(p);
 
@@ -489,10 +473,8 @@ describe("standing down when something else owns the namespace", () => {
 		assert.equal(standDownFor(""), false);
 	});
 
-	// Every case above hands in its own `stat`, and that is what let the default one ship broken: it read a
-	// bare `existsSync` this module never imported, so the only caller that matters - scheduleSeries, which
-	// passes no stat - threw ReferenceError on every start under the default prefix and took startup with it.
-	// A fake filesystem cannot see that. This one asks the real one.
+	// Every case above hands in its own `stat`, which is what let the default one ship reading an `existsSync`
+	// the module never imported. scheduleSeries passes none, so every default-prefix start threw.
 	it("reads the real filesystem when no stat is handed in", async () => {
 		await withTempDir("standdown-", async (dir) => {
 			assert.equal(

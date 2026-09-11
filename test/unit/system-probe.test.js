@@ -1,11 +1,5 @@
-// system-probe and security-agent: what turns them on, what stands in the way, and the config that is
-// written whether or not either runs.
-//
-// The assertion that carries the most weight here is the one about the file written when both are off. The
-// core agent reads `discovery.enabled` out of the system-probe config rather than its own, and that key
-// defaults on, so a node with no system-probe polls a socket nothing serves and logs it about once a
-// minute. A test that only checked the enabled path would pass on a build that had stopped writing the file
-// at all, and the log noise would come back with nothing failing.
+// system-probe and security-agent: what turns them on, what stands in the way, and the config that is written
+// whether or not either runs.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -106,14 +100,8 @@ test("NEGATIVE: with everything off, nothing in the config claims to be enabled"
 	);
 });
 
-// Without bpf_dir system-probe looks under /opt/datadog-agent, which is not where an npm package puts
-// anything, so it starts, answers `version`, and loads not one program. Present and inert is the worst
-// outcome available here, because everything downstream reports healthy.
-// Measured on a live container 2026-09-10, and it cost a deploy to find. The probe package reports
-// `share/system-probe`, and upstream's own default is `.../share/system-probe/ebpf`
-// (pkg/config/setup/system_probe.go:128 at 7.82.1), so bpf_dir names the child. One segment out,
-// system-probe finds no CO-RE object, falls through to runtime compilation, and fails with `unable to find
-// kernel headers`, which reads as a missing toolchain rather than as a wrong path.
+// Without bpf_dir system-probe looks under /opt/datadog-agent, which is not where an npm package puts anything,
+// so it starts, answers `version`, and loads not one program.
 test("bpf_dir names the ebpf directory, not the directory holding it", () => {
 	const yaml = renderSystemProbeYaml(
 		PATHS,
@@ -127,9 +115,7 @@ test("bpf_dir names the ebpf directory, not the directory holding it", () => {
 	);
 });
 
-// The other half of the same deploy. `allow_prebuilt_fallback` defaults to false upstream
-// (system_probe.go:138), so without it the prebuilt objects are never read whatever bpf_dir says, and the
-// 42 MB this package extracts, verifies and ships is dead weight that makes the capability look present.
+// The other half of the same deploy.
 test("the prebuilt objects are allowed to load, or shipping them buys nothing", () => {
 	const yaml = renderSystemProbeYaml(
 		PATHS,
@@ -216,10 +202,8 @@ test("NEGATIVE: an unprivileged process is refused and told what to add", () => 
 	assert.match(verdict.why, /0x400/);
 });
 
-// Unknown is not permission. A container that publishes no CapEff line must not read as capable, because
-// the reply an operator gets would then be "nothing is wrong" from a node that cannot start the process.
-// Three platforms, three mechanisms, and reporting the wrong one sends an operator to fix something that
-// was never the problem. macOS uses no eBPF at all, so a capability message there is nonsense.
+// Unknown is not permission. A container that publishes no CapEff line must not read as capable, because the
+// reply an operator gets would then be "nothing is wrong" from a node that cannot start the process.
 test("macOS is judged on a BPF device, not on capabilities it does not use", () => {
 	const able = probePrivilege({
 		platform: "darwin",

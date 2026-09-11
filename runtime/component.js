@@ -1,15 +1,5 @@
-// The Harper component: what it starts, what it watches, and what it says about itself.
-//
-// Everything Datadog declares is in runtime/datadog.js and arrives here as an import. The three things this
-// file does with a running node are each their own module, because each has a caller besides the start path:
-// runtime/verify.js proves a process is the agent this node needs, runtime/delivery.js reads back whether
-// anything reached Datadog, runtime/series.js measures what the processes cost. What is left here is the
-// lifecycle that joins them: start the processes that file describes, hold one start per node, and answer one
-// REST resource with all of it.
-//
-// `spawn` and Harper's compartment globals arrive as arguments to datadog() at the bottom, because resources.js
-// is the only file Harper compiles and so the only place they can be read. A module that imports `spawn`
-// itself gets the unconstrained one, which is the whole reason the constrained one exists.
+// The lifecycle joining verify.js, delivery.js and series.js: start what datadog.js describes, hold one start
+// per node, answer one REST resource.
 
 import { createRequire } from "node:module";
 import { basename, dirname, join } from "node:path";
@@ -51,9 +41,7 @@ import { verifyLaunch } from "./verify.js";
 const COMPONENT_DIR = dirname(import.meta.dirname);
 
 // -- This thread's own state ------------------------------------------------------------------------------
-//
-// Per instance, never per module. resources.js is re-evaluated with a cache-busting query string in tests,
-// and state at module scope would leak the first evaluation's pids and verifiers into every later one.
+// Per instance: resources.js is re-evaluated in tests, and module scope would leak the first run's state.
 
 /**
  * @typedef {object} ComponentState
@@ -82,10 +70,7 @@ export function createState() {
 }
 
 // -- Keeping the probes out of the host's APM -------------------------------------------------------------
-//
-// This component polls the agents before they bind, when polls fail, and on the line this replaces those
-// failures became errored client spans on the customer's own service. The polling itself is the guard's; what
-// only a Datadog consumer can say is how to make dd-trace ignore it.
+// Polling before they bind turned every failed connect into an errored client span on the customer's service.
 
 // The store dd-trace keeps its OWN agent traffic out of the customer's APM with, applied to these probes for
 // the same reason. Private path, so a miss falls back to untraceAgentProbes, which is the public half of this.
@@ -105,8 +90,7 @@ const untraced = (() => {
 // time: a poll issued before the wiring ran would be the one span this exists to prevent.
 untraceWith(untraced);
 
-// A process-global setting, so the next `tracer.use('http', ...)` from anywhere replaces it: dd-trace's
-// configurePlugin overwrites a plugin's config rather than merging into it. Kept only as a fallback for
+// Process-global, so the next `tracer.use('http', ...)` from anywhere replaces it outright. A fallback for
 // releases where the private store above has moved; it cannot stand alone.
 /** @param {any} tracer @param {readonly string[]} blocklist */
 export function untraceAgentProbes(tracer, blocklist) {
@@ -114,12 +98,8 @@ export function untraceAgentProbes(tracer, blocklist) {
 }
 
 /**
- * Keep this component's own polling out of the host application's APM.
- *
- * dd-trace is resolved rather than imported: it belongs to the host application and this package does not
- * ship it. A process with no tracer has nothing to keep the probes out of, which is the silent path. A
- * tracer that answers `use()` with a shape untraceAgentProbes did not expect is different: the probes stay
- * traced and start appearing as spans, so that one gets a line.
+ * Keep this component's polling out of the host's APM. dd-trace is resolved rather than imported, since it
+ * is the host's; no tracer is the silent path, and one whose `use()` refuses gets a line.
  *
  * @param {readonly string[]} urls Every endpoint this component polls.
  * @param {import('@deliciousmonster/harper-process-guard').Log} log
@@ -144,9 +124,7 @@ export function suppressAgentProbes(urls, log, require = undefined) {
 	}
 }
 // -- Who holds them up ------------------------------------------------------------------------------------
-//
-// The guard's supervisor with three things named: what this component calls itself in a log line, what its
-// reaper's lock is called, and that its config files have to exist before anything spawns.
+// The guard's supervisor, with this component's log label, its reaper's lock name, and its config files.
 
 /**
  * @param {any} scope Harper's application scope.
@@ -158,9 +136,8 @@ export const supervisorFor = (scope, { log, spawn }) =>
 		spawn,
 		label: LABEL,
 		reaperName: REAPER_NAME,
-		// `supervision` is a field /DatadogStatus/ has published since this component shipped. The guard's
-		// own word for the native path is "host"; changing what an operator reads is not a side effect a
-		// refactor gets to have.
+		// /DatadogStatus/ has published this string since the component shipped. The guard's own word is
+		// "host", and changing what an operator reads is not a refactor's to do.
 		nativeKind: "harper",
 		// Harper's own start() writes these behind its sweep; on the guard's path nothing else will, and
 		// every agent reads them.
@@ -168,7 +145,6 @@ export const supervisorFor = (scope, { log, spawn }) =>
 	});
 
 // -- What this node says about itself ---------------------------------------------------------------------
-//
 // One REST resource. Everything it reports fails silently by default, which is why it gets an endpoint at all.
 
 /** Never the value itself, so the status endpoint cannot become a second place the key leaks. */
@@ -183,15 +159,8 @@ export function baseStatus(ports) {
 	return {
 		receiverPort: ports.receiver,
 		apiKey: apiKeyStatus(),
-		// Settings this component resolved for itself, reported here rather than rendered into
-		// datadog.yaml. That file's header says it is the agent's generated config, and the agent has no
-		// idea these keys exist; writing them there would look like an agent setting that silently does
-		// nothing. The ports above are in both because the agent genuinely reads those. This is the
-		// plugin's own surface, so this is where the plugin says what it resolved.
-		//
-		// `emitting` is separate from `enabled` on purpose. It is what this thread's timer is actually
-		// doing, so a thread that has not started yet, or one whose settings turned the series off, cannot
-		// report a feature that sends nothing as if it were sending.
+		// This component's own settings, reported here rather than written into the agent's config, which has
+		// no idea these keys exist. `emitting` is separate from `enabled`: it is what this thread's timer does.
 		processMetrics: {
 			...seriesSettings(),
 			emitting: false,
@@ -273,9 +242,7 @@ export function createStatusResource({
 }
 
 // -- Starting them ----------------------------------------------------------------------------------------
-//
-// Resolve every declared binary, fingerprint what would make a running one stale, hand the set to the
-// supervisor, and report what happened.
+// Resolve every binary, fingerprint what would make a running one stale, hand the set over, report back.
 
 /**
  * @param {object} options
@@ -328,9 +295,8 @@ export function createStart({
 				probes: probeStatus(runtime.probes, ebpfDir, { log }),
 			});
 
-			// Only what this node asked for. An optional process nobody enabled is not declared at all, so
-			// it cannot be resolved, cannot fail to resolve, and cannot appear in the status as a thing
-			// that broke.
+			// Only what this node asked for: an optional process nobody enabled is not declared, so it cannot
+			// fail to resolve or appear in the status as something broken.
 			const wanted = agents.filter(
 				(agent) => !agent.optional || agent.enabled(runtime.probes)
 			);
@@ -342,9 +308,8 @@ export function createStart({
 				wanted.map((agent, index) =>
 					resolveBinary(agent).catch((error) => {
 						failures[index] = error.message;
-						// An optional process this node asked for and cannot find is the operator's own
-						// misconfiguration to fix, not a defect: they set the flag and did not install the
-						// package. It is still a refusal to run something requested, so it is logged.
+						// An opt-in process asked for and not found is the operator's to fix, having set the
+						// flag without installing the package. Still a refusal, so still logged.
 						log.error(
 							`${LABEL}: could not resolve the ${agent.title} binary: ${error.message}`
 						);
@@ -430,10 +395,7 @@ export function createStart({
 }
 
 // -- Wiring -----------------------------------------------------------------------------------------------
-//
-// A factory rather than a module of constants, and it has to be: resources.js is re-evaluated with a
-// cache-busting query string in tests and the ports come from the environment, so state at module scope would
-// be shared across evaluations and a port test would bind the first run's numbers forever.
+// A factory: resources.js is re-evaluated in tests, so module scope would bind the first run's ports forever.
 
 /**
  * Wire this component up.
@@ -450,9 +412,8 @@ export function datadog({ spawn, logger, Resource, processes }) {
 	const agents = agentsFor(processes, ports);
 	const state = createState();
 
-	// Keep this component's own polling out of the host application's APM. Every probe already runs inside
-	// dd-trace's own suppression store (see untraceWith above); this is the public half, and it holds only
-	// until some other caller reconfigures the same plugins.
+	// Every probe already runs inside dd-trace's suppression store (untraceWith above). This is the public
+	// half, and it holds only until another caller reconfigures the same plugins.
 	suppressAgentProbes(
 		[
 			receiverInfoUrl(ports.receiver),

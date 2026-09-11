@@ -1,6 +1,4 @@
 // What GET /DatadogStatus/ publishes about processes it did not start, and about a reaper it did not run.
-// Both supervisors feed one array and one object, so a consumer indexing either has to get the same answers
-// out of whichever path produced the entry.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

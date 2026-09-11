@@ -1,6 +1,4 @@
-// The Windows gate decides what a windows-latest leg covers. A gate that selected nothing, or that counted
-// a run of zero tests as a pass, would report green while covering nothing - so both decisions are asserted
-// here, on every platform, rather than only observed on a Windows runner.
+// The Windows gate decides what a windows-latest leg covers.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

@@ -1,6 +1,5 @@
 // Harper declares every method on its Logger optional (harper/dist/components/Logger.d.ts), and the bundled
-// guard calls ctx.log.info unguarded once it has spawned an agent and committed its lock. So the shape Harper
-// is allowed to hand this component decides whether the reaper ever launches.
+// guard calls ctx.log.info unguarded once it has spawned an agent and committed its lock.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -31,9 +30,7 @@ async function withCompartmentLogger(logger, run) {
 }
 
 test("a Harper logger with no .info still gets both agents started and a reaper launched", async () => {
-	// Exactly the shape Logger.d.ts permits. Handed to the guard undefended it throws a TypeError out of
-	// guard() at supervise.js:263 - after the spawn and the lock commit, before launchReaper - which leaves
-	// the agents running under committed locks with nothing watching them.
+	// Exactly the shape Logger.d.ts permits.
 	const lines = [];
 	const partial = {
 		warn: (message) => lines.push(`warn ${message}`),
@@ -62,9 +59,8 @@ test("a Harper logger with no .info still gets both agents started and a reaper 
 					)
 			);
 
-			// The subject is the logger, so the assertion is that the guard got through its spawn loop, not
-			// that the process is still up. Nothing listens on any of these ports, so an agent can verify
-			// false and exit before this runs; asserting `started` read that exit as a failure to spawn.
+			// The subject is the logger, so the assertion is that the guard got through its spawn loop, not that the
+			// process is still up.
 			for (const name of BOTH_AGENTS) {
 				const state = status.processes.find((entry) => entry.name === name);
 				assert.equal(

@@ -1,9 +1,4 @@
-// The soak published `not-delivering` and `idle` on a node with 2,483 spans arriving and nothing wrong. Every
-// counter the trace-agent publishes is a window it resets, and measured against 7.82.1 on 2026-09-09 the
-// stats_writer window resets every 60 seconds while the writer flushes one payload per 10, so `Payloads` reads
-// zero for the first ten seconds of each window. A reader polling on a 60-second period phase-locks into that
-// band and reads zero minute after minute until its clock drifts out. What separates a stopped hop from that
-// phase is the time since a window did accept something, so the reader keeps it.
+// The soak published `not-delivering` and `idle` on a node with 2,483 spans arriving and nothing wrong.
 
 import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -192,11 +187,7 @@ describe("what the reader remembers", () => {
 });
 
 describe("a mark every thread on the node shares", () => {
-	// The first version of this kept the mark in module memory, which is per worker thread. Harper answers a
-	// status read on whichever thread is free, so measured against a live node under steady load on 2026-09-09,
-	// 6 of 20 reads four seconds apart came back with no mark and the rest scattered from 4 to 61 seconds. The
-	// window is 60 seconds wide, so a thread that answers once a minute cannot track it and the verdict went
-	// back to reading `idle` on a cold thread.
+	// The first version of this kept the mark in module memory, which is per worker thread.
 	let dir;
 	const SRC = "https://127.0.0.1:5012/debug/vars";
 

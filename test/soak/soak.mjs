@@ -1,14 +1,6 @@
 #!/usr/bin/env node
-// A long run against a real Harper container: steady load on the shop, chaos on a randomly staggered
-// schedule, and one status row a minute from the agents' own intake counters and the container's
-// resource use. Everything it reads is real; nothing is mocked. Runs detached for as long as it is
-// told and stops on SIGTERM.
-//
-//   node test/soak/soak.mjs            # 48 hours, 20 req/s, chaos every 10 to 30 minutes
-//   SOAK_HOURS=0.1 SOAK_GAP_MIN=1,2 SOAK_SKIP=wrong-api-key-10min node test/soak/soak.mjs   # a six-minute smoke
-//
-// The Datadog API key is read from ~/.config/datadog/API_KEY at the moment a container is created and
-// never logged; the break-the-intake action replaces it with zeros across a recreate, then restores it.
+// A long run against a real Harper container: steady load on the shop, chaos on a randomly staggered schedule,
+// and one status row a minute from the agents' own intake counters and the container's resource use.
 
 import { execFile, execFileSync } from "node:child_process";
 import {
@@ -167,10 +159,7 @@ async function containerStats() {
 }
 async function rss(pids) {
 	try {
-		// One token per pid, whatever happens to it. The first version fell back with `printf "- "`, which
-		// dash reads as an option ("printf: Illegal option -"), so a pid that had gone emitted an error
-		// instead of a placeholder and every column after it shifted left by one. `${v:--}` fills the gap
-		// and `printf %s` never sees the dash as a flag.
+		// One token per pid, whatever happens to it.
 		const out = await sh(
 			`for pid in ${pids.map((pid) => Number(pid) || 0).join(" ")}; do ` +
 				`v=$(awk '/VmRSS/{printf "%d", $2/1024}' /proc/$pid/status 2>/dev/null); ` +
@@ -198,10 +187,7 @@ const chaos = {
 const pidOf = (s, kind) => s?.processes?.find((p) => p.kind === kind)?.pid;
 
 /**
- * The pid of a running agent, waited for rather than read once. A status read that lands while the node is
- * restarting answers null, and `kill -9 undefined` is what that used to become: chaos #37 on 2026-09-09 was
- * recorded as "could not be applied" and that round killed nothing. Undefined here means the agent is not
- * running to be killed, which is a skip rather than a failure.
+ * The pid of a running agent, waited for rather than read once.
  *
  * @param {"trace"|"core"} kind
  * @returns {Promise<number|undefined>}
@@ -324,16 +310,6 @@ const realApiKey = () =>
 
 /**
  * The `docker run` that would recreate the container as it actually is, read off the container itself.
- *
- * This used to be a hardcoded argument list, which is a second copy of the container's configuration and
- * went stale the moment the container gained anything. On 2026-09-10 the node was reconfigured with ten
- * added capabilities, two bind mounts, `--user root` and four DD_ variables so system-probe could load its
- * programs; the next `wrong-api-key-10min` recreated a container with none of that, and would have run the
- * rest of the soak against a three-agent node while reporting nothing was wrong. It happened to fail
- * outright on a name conflict instead, which is the luckier of the two outcomes.
- *
- * Captured once at startup rather than read at each recreate, because by the time a recreate needs it the
- * container may already be gone.
  */
 async function captureContainerSpec() {
 	// promisify(execFile) resolves {stdout, stderr}; every other docker() caller here ignores the value,
@@ -368,16 +344,6 @@ let containerSpec = null;
 
 /**
  * Remove the container and wait for its name to be free.
- *
- * `docker rm -f` returning is not the name being available: the daemon releases it asynchronously, and the
- * `docker run` that followed lost that race on 2026-09-10 and reported a name conflict. The failure was
- * swallowed by a bare catch on the removal, so the log said only that `docker run` failed.
- *
- * The removal is reissued every round rather than once, because a single rm can fail in a way a second one
- * will not. On 2026-09-11 the daemon answered `tried to kill container, but did not receive an exit event`,
- * the container settled into Exited(137) still holding its name, and this polled a state that nothing was
- * going to change. A container the daemon could not reap while Running is removable once it has exited, so
- * asking again is the whole fix; asking once and watching is what lost the run.
  */
 const REMOVE_ROUNDS = 60;
 const REMOVE_ROUND_MS = 1_000;
@@ -409,11 +375,6 @@ async function removeContainer() {
 
 /**
  * Put the container back if a chaos action left it down.
- *
- * A failed action used to end the story: `wrong-api-key-10min` threw inside its recreate on 2026-09-11 and
- * the run spent four minutes driving load at nothing, reporting 1,180 failed requests a minute, with every
- * agent column blank. The load generator cannot tell "the thing under test is broken" from "there is no
- * thing under test", and only the second one is the harness's own fault to repair.
  */
 async function restoreContainerIfDown(after) {
 	const running = await docker(
@@ -575,13 +536,8 @@ const row = (/** @type {Record<string, any>} */ values) =>
 	}).join(" ");
 let rows = 0;
 /**
- * When this run's clock started, which is not when this process started.
- *
- * A restart to load a fix is part of the test, not the end of it, so the clock has to survive one. The
- * anchor lives in `started` under the output directory and is written once: a run that finds the file
- * adopts the time in it and keeps counting, and only a run into an empty directory writes a new one. It was
- * written unconditionally before, so each of this run's three restarts overwrote the origin and `up`
- * counted from zero again, which lost 26 hours of elapsed time from every line that reports it.
+ * When this run's clock started, which is not when this process started. A restart to load a fix is part of
+ * the test, not the end of it, so the clock has to survive one.
  */
 function anchorStart(dir) {
 	const file = join(dir, "started");
@@ -663,9 +619,7 @@ async function statusRow() {
 		traces: d.receiver?.tracesReceived ?? "-",
 		spans: d.receiver?.spansReceived ?? "-",
 		statsOK: d.statsWriter?.payloads ?? "-",
-		// errors/retries, because the verdict reads both and a retry is what a wrong key produces first. Every
-		// `rejected` row on the 2026-09-08 run showed statsErr=0 beside it: the intake 403s, the writer retries,
-		// and Errors stays zero until it gives up, so the table carried no reason for its own verdict.
+		// errors/retries, because the verdict reads both and a retry is what a wrong key produces first.
 		statsErr: refusals(d.statsWriter),
 		traceOK: d.traceWriter?.payloads ?? "-",
 		traceErr: refusals(d.traceWriter),

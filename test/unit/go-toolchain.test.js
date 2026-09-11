@@ -1,11 +1,5 @@
-// Which Go compiles the agent, which is not a number this repo gets to choose.
-//
-// A toolchain newer than the pin is the dangerous case, and it is the one `go.mod` does not object to.
-// Measured on 2026-09-10: Go 1.27.0 against a source pinning 1.26.5 produced a macOS system-probe that
-// panicked before main with `strcase.UnicodeVersion "15.0.0" != unicode.Version "17.0.0"`, because 1.27
-// moved the Unicode tables and `charlievieth/strcase` asserts its own match the runtime's. That binary
-// packages, passes the publish gate's symbol check, and never runs. Nothing downstream can catch it, so
-// the pin has to be read from the release rather than configured beside it.
+// Which Go compiles the agent, which is not a number this repo gets to choose. A toolchain newer than the pin
+// is the dangerous case, and it is the one `go.mod` does not object to.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -75,9 +69,7 @@ test("NEGATIVE: a pin with surrounding whitespace still pins", async () => {
 	});
 });
 
-// The drift this replaced. The workflow's GO_VERSION is the toolchain that runs the build tasks, and it
-// must not be read as the one that compiles the agent: it said 1.23 against a source asking 1.26.5 and
-// passed anyway, because go.mod makes Go fetch what it needs. A number nothing enforces is decorative.
+// The drift this replaced.
 test("the workflow's GO_VERSION does not decide what compiles the agent", async () => {
 	const { readFile } = await import("node:fs/promises");
 	const workflow = await readFile(

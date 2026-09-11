@@ -1,9 +1,6 @@
 #!/usr/bin/env node
-// Turns a soak run's status.tsv and chaos.log into one self-contained HTML report: the load it drove,
-// what it cost the node, and where the chaos landed. Re-runnable at any point in a run, and again at
-// the end; nothing here talks to Datadog or to the container, so it works on a finished run's files.
-//
-//   node test/soak/report.mjs [soak-dir] [--out report.html]
+// Turns a soak run's status.tsv and chaos.log into one self-contained HTML report: the load it drove, what it
+// cost the node, and where the chaos landed.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -603,9 +600,8 @@ for (const host of document.querySelectorAll("[data-chart]")) {
 })();
 
 render();
-// The first paint can land before the frame has its final width, which drew every chart into a
-// third of the panel until something resized it. The observer redraws once layout settles, and
-// again whenever the frame changes; the timer covers the web font arriving after that.
+// The first paint can land before the frame has its final width, which drew every chart into a third of the
+// panel until something resized it.
 let resizeTimer;
 const redraw = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 90); };
 new ResizeObserver(redraw).observe(document.querySelector("[data-chart]").parentElement);

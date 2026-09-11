@@ -1,10 +1,5 @@
-// Proving each process does its job: what separates "the process is up" from "the process is the agent
-// this node needs". A live process of the wrong kind, or a stray socket on the port, passes every cheaper
-// check and is reported healthy.
-//
-// Called from two places, which is why it is its own file. The start path verifies once after each spawn,
-// and scripts that drive a real binary on a CI runner reach for the same verdicts rather than writing a
-// second, weaker idea of what a working agent looks like.
+// What separates "the process is up" from "the process is the agent this node needs": a live process of the
+// wrong kind passes every cheaper check. Its own file because the start path and the CI smoke test both call it.
 
 import {
 	describeExit,
@@ -157,11 +152,8 @@ async function verifyCoreAgent(state, { paths, ports }) {
 }
 
 /**
- * Prove system-probe is serving its socket, which is the only thing that makes it useful to anything else.
- *
- * A unix socket, not a port, so this is a connect rather than an HTTP poll of a loopback address. The core
- * agent and security-agent both reach it the same way, so a socket nothing accepts on is precisely the state
- * where system-probe is running and no consumer can tell.
+ * Prove system-probe serves its socket, which is what makes it useful to anything else. A connect, not an
+ * HTTP poll: a socket nothing accepts on is the state where it runs and no consumer can tell.
  */
 async function verifySystemProbe(state, { paths }) {
 	const socket = paths.sysprobeSocket;
@@ -207,12 +199,8 @@ async function verifySecurityAgent(state, { paths }) {
 }
 
 /**
- * Prove process-agent is doing the one thing it was shipped for: shipping what system-probe collects.
- *
- * Not "is it up". The core agent already runs the `process` and `rtprocess` checks, so a process-agent
- * that starts and ships nothing extra is indistinguishable from not having it, and that is precisely the
- * state this package was in before: `network_tracer` loaded, `Connections Queue length: 0`. The evidence
- * is its expvar, which carries the enabled check list.
+ * Prove process-agent ships what system-probe collects, not that it is up: one that starts and ships nothing
+ * extra is indistinguishable from not having it. The evidence is its expvar's enabled check list.
  */
 async function verifyProcessAgent(state, { paths, ports }) {
 	const url = expvarUrl(ports.processExpvar);
@@ -225,10 +213,8 @@ async function verifyProcessAgent(state, { paths, ports }) {
 				`connections system-probe collects.${exitDetail(state)} Read ${paths.processLog}`,
 		};
 	}
-	// The whole reason it is here. `connections` absent means eBPF programs collecting into nothing.
-	// Nested under `process_agent`, not at the top level: read from the root it comes back empty on a
-	// process-agent that is shipping perfectly well, which is a verifier that fails an agent for the
-	// thing it is doing.
+	// `connections` absent means eBPF programs collecting into nothing. Nested under `process_agent`: from the
+	// root it reads empty on an agent that is shipping perfectly well.
 	const checks = JSON.stringify(vars.process_agent?.enabled_checks ?? "");
 	if (!checks.includes("connections")) {
 		return {

@@ -1,7 +1,5 @@
-// The mechanism a "Live node" row runs through: generate a throwaway fixture app, npm-install a
-// real "harper" beside this repo, boot it for real, drive real dd-trace spans into its real
-// receiver, and read delivery back over real HTTP. Nothing here is stubbed; every export talks to
-// an actual process this module spawned.
+// What a "Live node" row runs through: a throwaway fixture app with a real harper installed beside this repo,
+// booted for real, driven real spans, and read back over real HTTP. Nothing here is stubbed.
 
 import { execFileSync, spawn } from "node:child_process";
 import {
@@ -36,9 +34,8 @@ const { BINARIES } = await import(
 	join(REPO_ROOT, "agent-build", "binaries.js")
 );
 
-// The version this tree says it is, which is the one a tag of this tree publishes. The registry row
-// boots that artifact, so it applies only once it exists; before the tag it is skipped, not failed.
-// DD_LIVE_REGISTRY_VERSION names a published version outright, for the window between bump and tag.
+// The version this tree says it is, which is the one a tag of this tree publishes. The registry row boots that
+// artifact, so it applies only once it exists; before the tag it is skipped, not failed.
 const MANIFEST_VERSION = JSON.parse(
 	readFileSync(join(REPO_ROOT, "package.json"), "utf8")
 ).version;
@@ -66,13 +63,7 @@ const ADMIN_PASS = "live-tier-2026";
 const NATIVE_WORKTREE = process.env.DD_LIVE_HARPER_NATIVE;
 
 /**
- * One row per Harper line (and, later, per platform) this tier boots against. `moduleLoader` is
- * per-row because it is tied to a live defect, not a fixed choice: harper-process-guard used to
- * statically import `execFileSync` from `node:child_process` and spawn without Harper's required
- * `name` option, both of which only failed under Harper's real `vm-current-context` compartment
- * — its constrained child_process stub omits `execFileSync`, and its constrained spawn throws
- * without a name. Both are fixed upstream now, so this row runs under Harper's actual shipped
- * default rather than the "native" escape hatch that used to be the only way around them.
+ * One row per Harper line (and, later, per platform) this tier boots against.
  */
 export const DIMENSIONS = [
 	{
@@ -82,9 +73,8 @@ export const DIMENSIONS = [
 		expectedSupervision: "guard",
 	},
 	{
-		// The customer's path: not this checkout but the published tarball, installed by npm the way
-		// Harper installs a component, with the guard and the platform binaries arriving from the
-		// registry as dependencies. Nothing this repo builds is on the node.
+		// The customer's path: not this checkout but the published tarball, installed by npm the way Harper installs
+		// a component, with the guard and the platform binaries arriving from the registry as dependencies.
 		name: `harper@5.2.9 / ${REGISTRY_SPEC} installed from the registry`,
 		harperLine: "5.2.9",
 		moduleLoader: "vm-current-context",
@@ -127,10 +117,7 @@ function killTree(pid) {
 }
 
 /**
- * Real Harper config yaml. Harper validates the parsed doc against its own schema and does not
- * merge in defaultConfig.yaml for a key this file omits (confirmed live: a config carrying only the
- * keys this component touches fails validation on unrelated required siblings), so this is
- * defaultConfig.yaml's own shape with the fixture's free ports and this row's `moduleLoader` in.
+ * Real Harper config yaml.
  */
 function renderRootConfig({ hdbRoot, ports, moduleLoader, allowedBinaries }) {
 	return `---
@@ -253,12 +240,8 @@ async function fetchJson(url, authHeader) {
 }
 
 /**
- * Polls the real status endpoint until the real trace-agent reports `verified: true`, or the
- * deadline passes. Only the trace-agent gates readiness: it is the one this tier drives traffic
- * through. The core agent binds DogStatsD (8125) and its GUI (5002) on fixed ports of its own that
- * this harness does not namespace, so a second live Datadog agent already on the host — another
- * `test:live` run, an operator's own install — can make it lose those binds and exit; that failure
- * is real and is surfaced in the returned status, not hidden, but it does not fail the boot.
+ * Polls the real status endpoint until the real trace-agent reports `verified: true`, or the deadline passes.
+ * Only the trace-agent gates readiness: it is the one this tier drives traffic through.
  */
 async function waitForTraceAgentVerified(
 	statusUrl,
@@ -288,15 +271,13 @@ async function waitForTraceAgentVerified(
 }
 
 /**
- * Generates a throwaway fixture app, npm-installs a real Harper plus this repo into it, resolves
- * the real agent binaries, writes the fixture's own root config, and boots `harper run` as a
- * detached child. Returns once the real trace-agent has verified over real HTTP.
+ * Generates a throwaway fixture app, npm-installs a real Harper plus this repo into it, resolves the real
+ * agent binaries, writes the fixture's own root config, and boots `harper run` as a detached child.
  */
 export async function bootHarper(row) {
 	const realHome = process.env.HOME;
-	// Canonical from the start: on macOS tmpdir() is /var/..., a symlink to /private/var/..., and the
-	// component resolves its binaries through the platform package at the real path. Harper's spawn
-	// allowlist compares strings, so an allowed /var/... path never matches a spawn of /private/var/....
+	// Canonical from the start: on macOS tmpdir() is /var/..., a symlink to /private/var/..., and the component
+	// resolves its binaries through the platform package at the real path.
 	const workDir = realpathSync(mkdtempSync(join(tmpdir(), "dd-live-")));
 	// Reassigned once spawned, so a failure between spawn and readiness still kills the real child
 	// this function started rather than leaking it.
@@ -364,9 +345,8 @@ async function bootHarperInto(workDir, row, realHome, onSpawn) {
 		expvar: await findFreePort(),
 		debug: await findFreePort(),
 	};
-	// What Harper is allowed to spawn: the registry row's binaries live in the platform package npm
-	// installed beside the component (only the host's own installs; npm skips the others by os/cpu),
-	// the repo row's in this checkout's build output.
+	// What Harper may spawn: the registry row's binaries come from the platform package npm installed beside the
+	// component, the repo row's from this checkout's build output.
 	const componentDir = row.fromRegistry
 		? join(appDir, "node_modules", ...PACKAGE_NAME.split("/"))
 		: REPO_ROOT;
@@ -378,9 +358,8 @@ async function bootHarperInto(workDir, row, realHome, onSpawn) {
 				)
 			);
 
-	// Confirmed against this repo's own runtime/datadog.js: HOME is what os.homedir() (and so
-	// getPropsFilePath) resolves from, so this is what keeps `install` off the operator's real
-	// ~/.harperdb/hdb_boot_properties.file.
+	// Confirmed against this repo's own runtime/datadog.js: HOME is what os.homedir() (and so getPropsFilePath)
+	// resolves from, so this is what keeps `install` off the operator's real ~/.harperdb/hdb_boot_properties.file.
 	console.log(`[live] HOME for this boot: ${home} (real HOME: ${realHome})`);
 	const harperEnv = { ...process.env, HOME: home };
 
@@ -406,9 +385,8 @@ async function bootHarperInto(workDir, row, realHome, onSpawn) {
 	);
 	mkdirSync(join(hdbRoot, "components"), { recursive: true });
 	symlinkSync(componentDir, join(hdbRoot, "components", COMPONENT_NAME));
-	// installApplications() re-installs any `package:`-named entry whose lock record does not match
-	// the live config; this pre-populated record is what tells it the symlinked directory above is
-	// already the install, so it never tries to npm-install PACKAGE_NAME from the real registry.
+	// installApplications() re-installs any `package:` entry whose lock record does not match the live config.
+	// This record tells it the symlink above is already the install, so it never reaches the real registry.
 	writeFileSync(
 		join(hdbRoot, "harper-application-lock.json"),
 		JSON.stringify({
@@ -483,8 +461,6 @@ export async function readDelivery(handle) {
 
 /**
  * Polls DatadogStatus until the real receiver reports `count` traces delivered, or the deadline passes.
- * Returns the last status read, which is `undefined` only if DatadogStatus never answered at all; a read
- * that fails mid-poll keeps the previous status rather than discarding what the run already saw.
  */
 export async function waitForDelivery(handle, count, deadlineMs) {
 	let status;

@@ -18,13 +18,8 @@ import { logger } from "./log.js";
  */
 
 /**
- * Long enough for a cold Go build on the slowest runner, which is macOS.
- *
- * Measured rather than guessed, after guessing wrong: at 20 minutes the macos-arm64 leg was killed by
- * SIGTERM 1,200,762 ms into the core agent build, with the tree still compiling. A killed build reports a
- * null exit code and a signal, the same shape as an OOM kill or a cancelled job, so the only thing that
- * told the three apart was the elapsed time this error already prints. 45 minutes sits under the job's own
- * 60-minute limit, so a genuine hang still ends as a build failure rather than a job timeout.
+ * Long enough for a cold Go build on macOS, the slowest: at 20 minutes that leg was killed 1,200,762 ms in,
+ * still compiling. Under the job's own 60-minute limit, so a hang fails the build rather than the job.
  */
 const BUILD_TIMEOUT_MS = 2_700_000;
 
@@ -110,19 +105,8 @@ const PYTHON_PROBE =
  */
 
 /**
- * The Go toolchain the pinned agent release was written against, from its own `.go-version`.
- *
- * Read from the source rather than configured beside it, for the same reason the Node version is read out
- * of package.json: a second copy of a version number drifts, and this one had. The workflow carried
- * `GO_VERSION: "1.23"` against a source tree asking for 1.26.5, and it passed only because `go.mod` says
- * `go 1.26.0` and Go downloads a newer toolchain on its own to satisfy that. So the number in the workflow
- * was decorative, and the toolchain in use was whatever `go.mod` happened to resolve.
- *
- * Where it bites is a toolchain NEWER than the pin, which go.mod does not object to. Measured here on
- * 2026-09-10: Go 1.27.0 built a macOS system-probe that panicked before main with
- * `strcase.UnicodeVersion "15.0.0" != unicode.Version "17.0.0"`, because 1.27 moved the Unicode tables and
- * `charlievieth/strcase v0.0.5` asserts its own match the runtime's. A binary that dies at init is the
- * worst kind to ship: it packages, it passes a symbol check, and it never runs.
+ * The Go toolchain from the release's own `.go-version`, since a second copy drifts and this one had. A
+ * toolchain NEWER than the pin built a system-probe that panicked before main and still packaged cleanly.
  */
 /** @param {string} sourceDir @returns {Promise<string>} */
 export async function goPin(sourceDir) {
@@ -333,22 +317,8 @@ export async function build({ target, sourceDir, outputDir }) {
 }
 
 /**
- * Drop the debug symbols the build leaves behind, which Datadog's own release does not ship.
- *
- * Measured 2026-09-10 on linux-arm64. Unstripped, this package's core agent is 148,670,000 bytes against
- * Datadog's 111,967,416 and its trace-agent 32,110,328 against 23,017,272, which reads as though we build
- * something much larger. Stripped, the same two binaries are 110,485,040 and 23,066,288: the core agent
- * comes out 1.5 MB *smaller* than Datadog's, which is the Python exclusion showing up, and the trace-agent
- * lands within 49 KB, 0.2%. So the 45.8 MB per platform was never a difference in what was built. It was
- * DWARF nobody ships and nobody reads.
- *
- * Safe against the CI assertion, which is the thing that would break: `verify-package.js` greps the packed
- * binary for a package path, and Go keeps those in pclntab, which `strip` does not touch. The trace-agent
- * carries 58 hits stripped against 106 unstripped, and the check asserts presence rather than a count.
- * Datadog's own stripped trace-agent carries the same 58. Both stripped binaries still report `7.82.1`.
- *
- * A missing `strip` is not a build failure. The binary is correct either way and the cost is disk, so a
- * toolchain without binutils ships a larger package rather than no package.
+ * Drop the DWARF Datadog's own release does not ship: 45.8 MB a platform, after which the core agent is
+ * smaller than theirs. Safe for the symbol gate, which greps pclntab, and a missing `strip` is not fatal.
  */
 /** @param {string} file @param {Target} target @param {NodeJS.ProcessEnv} env */
 async function stripBinary(file, target, env) {

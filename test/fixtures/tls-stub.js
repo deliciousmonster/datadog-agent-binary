@@ -1,14 +1,9 @@
-// The one thing a plaintext stub cannot stand in for: the trace-agent serves its expvar under a self-signed
-// IPC certificate, and every probe that reads it goes over https. The poller itself is the guard's and its own
-// suite owns the TLS edges, including the stalled response that got as far as a release; what this covers is a
-// fixture standing in for the real trace-agent while this component reads a delivery signal off it.
+// The one thing a plaintext stub cannot stand in for: the trace-agent serves its expvar under a self-signed IPC
+// certificate, and every probe that reads it goes over https.
 
 import https from "node:https";
 
-// Self-signed, for 127.0.0.1, valid for a century. It secures nothing and protects nothing: the only thing
-// that ever presents it is a stub in this repo's own tests, and every probe that reads one sets
-// rejectUnauthorized: false. Committed rather than generated per run so the suite needs no openssl on any
-// of the three operating systems CI runs it on.
+// Self-signed, for 127.0.0.1, valid for a century.
 const TEST_ONLY_KEY = `-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgarF6Z1XpxwYrKQuH
 DgtiUrbspwokWGSdFIO6M+5mrFOhRANCAATzNHyopkFHrXBcaMtiUDJOqYAIWFac
@@ -33,8 +28,7 @@ const CREDENTIALS = { key: TEST_ONLY_KEY, cert: TEST_ONLY_CERT };
 
 /**
  * An unstarted https server answering `answers` with `body` at 200, and 404 everywhere else, the way
- * loopback.js's plaintext stub does. `body` may be a function, so a stub can answer with something known
- * only once the component has run - the pid that ended up on the lock, say.
+ * loopback.js's plaintext stub does.
  */
 export function createTlsStub({ body = {}, answers = "/debug/vars" } = {}) {
 	return https.createServer(CREDENTIALS, (request, response) => {

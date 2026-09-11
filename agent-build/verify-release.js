@@ -1,14 +1,6 @@
 // @ts-check
-// Proves a downloaded Datadog artefact is the one this package pinned, before anything is extracted from it.
-//
-// The pin alone is not enough. A SHA256 in this repository says "the file has not changed since somebody
-// wrote this line down"; it does not say that line was ever right. The signature chain is what makes it
-// right: Datadog signs the Release file, Release hashes the Packages index, and Packages hashes the .deb.
-// Walking all three means a compromised mirror cannot substitute a binary, and a mistyped pin is caught
-// against the repository rather than shipped.
-//
-// Everything here is pure over its inputs. `fetch` and the gpg runner come from the caller so the chain can
-// be tested against fixtures without the network, which is the only way its refusals get covered.
+// Proves a downloaded artefact is the one pinned, before anything is extracted. A pin alone says the file
+// has not changed, never that the line was right; the signature chain is what makes it right.
 
 import { createHash } from "node:crypto";
 
@@ -48,12 +40,8 @@ export const artifactUrl = (artifact, base = DATADOG_APT_BASE) =>
 	`${base}/${artifact.path}`;
 
 /**
- * The SHA256 a signed Release file gives for one path under it.
- *
- * The file carries MD5Sum, SHA1 and SHA256 sections and the same paths appear in each, so a grep for the
- * path alone reads whichever came first. That is an MD5 in this file, which is 32 hex characters and would
- * never match; the failure mode is a confusing mismatch rather than a wrong accept, but the fix is to scope
- * the read to the section rather than to hope.
+ * The SHA256 a signed Release gives for one path. The same paths appear under MD5Sum, SHA1 and SHA256, so a
+ * grep for the path alone takes whichever comes first, which is the MD5.
  */
 /** @param {string} release @param {string} path @returns {string | undefined} */
 export function hashFromRelease(release, path) {
@@ -73,10 +61,8 @@ export function hashFromRelease(release, path) {
 }
 
 /**
- * The SHA256 a Packages index gives for one pool path.
- *
- * Stanzas are blank-line separated and `Filename:` is the pool path, so the stanza carrying our filename is
- * the one whose SHA256 applies. Reading the first SHA256 in the file would take some other package's.
+ * The SHA256 a Packages index gives for one pool path, from the stanza whose `Filename:` names it. The
+ * first SHA256 in the file belongs to some other package.
  */
 /** @param {string} packages @param {string} poolPath @returns {string | undefined} */
 export function hashFromPackages(packages, poolPath) {
@@ -113,10 +99,8 @@ const escapeRe = (/** @type {string} */ s) =>
  */
 
 /**
- * Walk the chain and report every step that failed, rather than the first.
- *
- * All four have to hold. A caller that publishes on a partial pass has no chain at all, so `ok` is the
- * conjunction and the failures are for whoever has to fix it.
+ * Walk the chain and report every step that failed, not the first. All four have to hold, so `ok` is the
+ * conjunction and the failures are for whoever fixes it.
  */
 /** @param {VerifyInputs} inputs @returns {ReleaseCheck} */
 export function verifyRelease({
@@ -186,10 +170,8 @@ const normaliseFingerprint = (/** @type {string | undefined} */ value) =>
 	(value ?? "").replace(/\s+/g, "").toUpperCase();
 
 /**
- * What a `gpg --status-fd` run said about a detached signature.
- *
- * VALIDSIG carries the full fingerprint and GOODSIG only the long key id, so the fingerprint comes from
- * VALIDSIG and the good/bad verdict from either. A run that printed neither is not a pass.
+ * What a `gpg --status-fd` run said. VALIDSIG carries the full fingerprint and GOODSIG only the key id, so
+ * one gives the fingerprint and either gives the verdict; neither is not a pass.
  */
 /** @param {string} status @returns {{ good: boolean, fingerprint?: string }} */
 export function readGpgStatus(status) {

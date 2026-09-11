@@ -1,22 +1,6 @@
 // @ts-check
-// The Datadog release this package lifts binaries from, and the chain that proves what was lifted.
-//
-// Three of the four binaries need no build. Measured on 2026-09-10 against
-// `datadog-agent_7.82.1-1_arm64.deb`: only the core `agent` links `libdatadog-agent-rtloader`, which is why
-// it is built here with Python excluded. `trace-agent`, `system-probe` and `security-agent` link neither
-// rtloader nor libpython, and each one runs relocated to a bare path in a container that never built it,
-// reporting `7.82.1`. The release also carries 26 precompiled eBPF objects, which is the part that cannot
-// sensibly be reproduced: they have to match the kernels an operator runs, and reproducing them needs a
-// kernel-header tree per target. Datadog already solved that and ships the result.
-//
-// The chain, in the order `verifyRelease` walks it:
-//   1. `Release` is signed by Datadog's APT key; `Release.gpg` is the detached signature.
-//   2. `Release` carries the SHA256 of the per-architecture `Packages` index.
-//   3. `Packages` carries the SHA256 of the .deb itself.
-//   4. The .deb's own SHA256 is pinned below, so a rebuild is refused rather than silently following the
-//      repository if upstream ever republishes this version.
-// Verified end to end on 2026-09-10: GOODSIG from `Datadog, Inc. APT key (2023-04-20)`, and both Packages
-// indexes hashing to what the signed Release names.
+// The release this package lifts from, and the pins verifyRelease checks it against: Datadog's key signs
+// Release, Release hashes Packages, Packages hashes the .deb, and the .deb's own SHA256 is below.
 
 /** Fingerprint of the key that must have signed the Release file. A different signer fails the build. */
 export const DATADOG_APT_FINGERPRINT =
@@ -32,11 +16,8 @@ export const DATADOG_APT_SUITE = "stable";
 export const DATADOG_APT_COMPONENT = "7";
 
 /**
- * One artefact per target that ships an extracted binary.
- *
- * `sha256` and `size` were read out of the signed `Packages` index on 2026-09-10 rather than computed from
- * a download, so the pin and the repository agreed before either was written down. Bumping the agent
- * version means replacing both, and `verifyRelease` is what refuses a mismatch.
+ * One artefact per target that ships an extracted binary. The pins were read out of the signed `Packages`
+ * index rather than computed from a download, so the pin and the repository agreed before either was written.
  */
 /**
  * @typedef {object} ReleaseArtifact
@@ -73,10 +54,8 @@ export const RELEASE_PATHS = {
 };
 
 /**
- * The compiled eBPF objects system-probe loads, shipped beside it.
- *
- * Without these the binary starts, answers `version`, and cannot load a single program, which is the
- * shape of a feature that is present and does nothing. 26 objects, 42 MB, under this directory.
+ * The compiled eBPF objects system-probe loads: 26 of them, 42 MB. Without these it starts, answers
+ * `version`, and loads not one program.
  */
 export const EBPF_SOURCE_DIR = "embedded/share/system-probe";
 
@@ -87,7 +66,5 @@ export const EBPF_SHIP_DIR = "share/system-probe";
 /** @param {string} targetName @returns {boolean} */
 export const hasRelease = (targetName) => targetName in RELEASE_ARTIFACTS;
 
-// There is deliberately no second list of which binaries come from a release. `binaries.ts` carries that in
-// each descriptor's `from` field, and `extractedFor(target)` reads it. A helper here would be a second
-// answer to the same question, and it was already wrong once: it named the trace-agent, which measurement
-// moved back to a build after this file was written.
+// No second list of which binaries come from a release: binaries.js's `from` field carries that. One here
+// was wrong once already, naming the trace-agent that measurement moved back to a build.

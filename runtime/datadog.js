@@ -1,12 +1,5 @@
-// What Datadog is on this node: the binaries, the processes that run them, the ports they agree on, and the
-// runtime tree every file is written into. One file, because there is one answer to "what did this node tell
-// the agents" and splitting it put the port a probe reads three modules away from the config line that
-// pinned it.
-//
-// The files themselves are rendered in runtime/render.js, which is pure over its arguments and which this
-// file is the only caller of. Nothing here reads anything back. That is runtime/component.js, which imports
-// what it needs from this file and nothing the other way: a renderer that polled would be a config file that
-// depends on a running agent.
+// What Datadog is on this node: the binaries, the processes, the ports they agree on, the runtime tree. One
+// file, because splitting it put the port a probe reads three modules from the config line that pinned it.
 
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -46,9 +39,8 @@ import {
  */
 
 /**
- * Every path this node writes or reads under the runtime tree. One object, because the core agent takes the
- * directory holding a file and system-probe takes the file, so both spellings of one path are stated rather
- * than rebuilt per call site.
+ * Every path under the runtime tree. One object, because the core agent takes the directory holding a file
+ * and system-probe takes the file, so both spellings are stated rather than rebuilt per call site.
  *
  * @typedef {Record<string, string>} RuntimePaths
  */
@@ -91,10 +83,8 @@ export const REAPER_NAME = "datadog-agent-reaper";
 // resolves a platform package that does not exist.
 export const PACKAGE_NAME = "@deliciousmonster/datadog-agent-binary";
 
-// The base package is an optionalDependency and is there on every install. The probe package is not: it
-// carries system-probe, security-agent and 42 MB of eBPF objects, and an operator installs it by name when
-// they want them. Both are asked for every binary rather than routed by name, so a binary that moves between
-// the two does not need this file changed.
+// The base package installs everywhere; the probe package is installed by name. Both are asked for every
+// binary rather than routed, so one moving between them needs no change here.
 const BASE = { suffix: "", optional: false };
 const PROBE = {
 	suffix: "-probe",
@@ -110,9 +100,8 @@ const resolver = createBinaryResolver({
 	packageRoot: `${import.meta.dirname}/..`,
 	variants: [BASE, PROBE],
 	buildCommand: "npm run build-agent",
-	// Written here rather than inside the kit: a bare specifier resolves against the file the `import` is
-	// written in, so a resolver importing from the kit's own directory would look for these packages beside
-	// the kit. A flat node_modules hides that; a symlinked or nested install does not.
+	// Written here, not in the kit: a bare specifier resolves against the file the `import` is in, so the kit
+	// would look for these packages beside itself.
 	load: (name) => import(name),
 });
 
@@ -120,14 +109,8 @@ const resolver = createBinaryResolver({
 export const resolveBinary = (agent) => resolver.resolveBinary(agent);
 
 /**
- * Where the probe package put Datadog's precompiled eBPF objects, or null when it is not installed.
- *
- * The package states its own layout through its own accessor rather than this file computing it, because the
- * path is that package's business and a computed one goes stale the moment the layout changes. Null is an
- * ordinary answer: system-probe is opt-in, so most nodes have no probe package at all.
- *
- * The name is derived from the directory by one rule - `share/system-probe` gives `getShareSystemProbeDir` -
- * so a consumer can write the call without reading the staged package first.
+ * Where the probe package put the eBPF objects, or null when it is not installed. Asked rather than
+ * computed; the accessor name comes from the directory by one rule, so it is predictable without reading it.
  */
 export const resolveEbpfDir = () =>
 	resolver.resolveDir(PROBE, "getShareSystemProbeDir");
@@ -158,11 +141,7 @@ export function resolvePorts(log) {
 }
 
 // -- The processes -----------------------------------------------------------------------------------------
-//
-// The key is `shipsAs`, and it is a file on disk rather than a label: the resolver above builds
-// `<shipsAs><.exe on win32>`, asks each platform package this host installs for exactly that name, and
-// checks the basename of what comes back. Everything else in a row here is a fact about Datadog that an
-// operator never chooses, which is why resources.js names the processes and this file describes them.
+// The key is `shipsAs`, a file on disk rather than a label.
 
 /** Harper's spawn name, which is also the PID-lock filename. Stated once: a second spelling is a second lock. */
 const lockName = (shipsAs) =>
@@ -183,9 +162,8 @@ const table = (ports) => ({
 	"datadog-agent": {
 		kind: "core",
 		title: "core agent",
-		// --sysprobecfgpath takes the DIRECTORY holding system-probe.yaml, where -c takes the directory
-		// holding datadog.yaml; both are the runtime tree. Passed whether or not system-probe runs, because
-		// the file it names is what tells this agent to stop polling a socket nothing serves.
+		// --sysprobecfgpath takes the directory holding system-probe.yaml, passed whether or not it runs: that
+		// file is what stops this agent polling a socket nothing serves.
 		args: (paths) => [
 			"run",
 			"-c",
@@ -210,13 +188,8 @@ const table = (ports) => ({
 		kind: "process",
 		title: "process-agent",
 		optional: true,
-		// Follows system-probe rather than taking a flag of its own, and this is the line most likely to be
-		// "corrected" by someone reading it cold. There is no probes.processAgent, deliberately: process-agent
-		// exists here to ship what system-probe collects, and on a node with no system-probe it would run the
-		// same `process` and `rtprocess` checks the core agent already runs, twice. It is also the only
-		// Datadog flavor whose ConnectionsCheck.IsEnabled() returns true, so it is what actually delivers
-		// connection data off the box; turning it on without system-probe gives duplicate checks and no
-		// connections.
+		// No flag of its own, deliberately: it ships what system-probe collects, and without one it would run
+		// the core agent's `process` checks twice and deliver no connections.
 		enabled: (probes) => probes.systemProbe,
 		args: (paths) => [
 			"--cfgpath",
@@ -251,12 +224,8 @@ const table = (ports) => ({
 export const KNOWN = Object.keys(table({ receiver: 0 }));
 
 /**
- * The declared processes, in the order given, which is start order: the trace-agent comes first because it
- * owns the socket dd-trace is dialing.
- *
- * An unknown name throws here rather than resolving to nothing. A list is the whole declaration, so a typo
- * in it is a binary that silently never starts, and that is the failure mode this entire package exists to
- * remove.
+ * The declared processes in start order, the trace-agent first because it owns the socket dd-trace dials.
+ * An unknown name throws: a typo in the whole declaration is a binary that silently never starts.
  *
  * @param {readonly string[]} names
  * @param {{ receiver: number }} ports
@@ -278,37 +247,15 @@ export function agentsFor(names, ports) {
 }
 
 // -- system-probe and security-agent -----------------------------------------------------------------------
-//
-// These two are the opt-in half of this package. Their binaries live in a separate platform package an
-// operator installs by name, and system-probe wants privileges a Harper container does not have by default,
-// so nothing here starts unless it was asked for. What this section refuses to do is fail quietly: a node
-// that turned system-probe on and cannot run it says so at WARN with the reason, rather than restarting a
-// process that exits every time.
-//
-// The config file matters even when neither agent runs. The core agent's workloadmeta process collector
-// reads `discovery.enabled` out of the *system-probe* config, not its own
-// (`comp/core/workloadmeta/collectors/internal/process/process_collector.go:191` at 7.82.1, via
-// `serviceDiscoveryEnabled(systemProbeConfig)`), and that key defaults on. With no system-probe running,
-// the collector polls a socket nothing serves and logs it about once a minute, which is the one steady-state
-// ERROR this node reports. Writing a system-probe.yaml that says `discovery.enabled: false` stops it, and
-// this component can write one because the core agent takes `--sysprobecfgpath` and reads it from wherever
-// it is told rather than only from /etc/datadog-agent.
+// The opt-in half: privileged, installed by name, and loud about why it cannot start where it cannot.
 
 /** Whether a `DD_`-style flag reads as on. Absent is off here, unlike the process series: these cost privileges. */
 const on = (value) =>
 	["true", "1", "yes", "on"].includes(String(value ?? "").toLowerCase());
 
 /**
- * What an operator asked for, in Datadog's own spelling.
- *
- * `DD_SYSTEM_PROBE_ENABLED` and `DD_RUNTIME_SECURITY_CONFIG_ENABLED` are the agent's own environment names
- * for these, so an operator's existing knowledge and any existing deployment config carry over unchanged.
- * Inventing `DD_HARPER_SYSTEM_PROBE_*` would have made this package the only place those names mean
- * anything.
- *
- * The modules are separate flags because they cost different things. NPM tracks every connection on the
- * host, USM parses protocol traffic; either can be wanted without the other, and both are off in Datadog's
- * own default too.
+ * What an operator asked for, in Datadog's own spelling, so existing knowledge carries over. The modules are
+ * separate flags: NPM tracks every connection, USM parses their traffic, and either is wanted without the other.
  */
 /** @param {NodeJS.ProcessEnv} [env] @returns {ProbeSettings} */
 export function probeSettings(env = process.env) {
@@ -337,17 +284,8 @@ const CAP_SYS_ADMIN = 21n;
 const CAP_BPF = 39n;
 
 /**
- * Whether this process could load an eBPF program on Linux, and if not, why.
- *
- * Root is the simple case. Otherwise the effective capability set says it, and `/proc/self/status`'s
- * `CapEff` is where the kernel publishes it as a hex mask. A kernel new enough to split CAP_BPF out of
- * CAP_SYS_ADMIN accepts either, so both bits are checked rather than the older one alone.
- *
- * One thing measured rather than assumed: `setcap` on the binary bridges the gap between a container's
- * bounding set and an unprivileged process's effective set, and it costs something. A binary that gained
- * privilege runs non-dumpable, `/proc/self/mem` becomes unreadable, and system-probe's kernel-version
- * detection then fails with `permission denied`. Running as root is the route that works, and it is what
- * Datadog's own agent container does.
+ * Whether this process could load an eBPF program on Linux: root, or CAP_SYS_ADMIN or CAP_BPF in the CapEff
+ * mask. `setcap` bridges it and runs the binary non-dumpable, which breaks its kernel-version detection.
  */
 function linuxPrivilege(read, uid) {
 	if (typeof uid === "function" && uid() === 0)
@@ -380,12 +318,8 @@ function linuxPrivilege(read, uid) {
 }
 
 /**
- * The same question on macOS, where the answer has nothing to do with eBPF.
- *
- * The darwin tracer captures packets rather than loading programs, so what it needs is a BPF device:
- * `/dev/bpf0` and its siblings, which are root-owned and group `access_bpf`. Reported by trying to open
- * one, because the group membership, the device permissions and the sandbox all bear on whether it works
- * and only the open answers all three at once.
+ * The same on macOS, where the tracer captures packets rather than loading programs and needs a /dev/bpf
+ * device. Answered by opening one: group membership, permissions and the sandbox all bear on it.
  */
 function macosPrivilege(openBpf, uid) {
 	if (typeof uid === "function" && uid() === 0)
@@ -405,12 +339,8 @@ function macosPrivilege(openBpf, uid) {
 }
 
 /**
- * And on Windows, where it is neither capabilities nor a device but two signed kernel drivers.
- *
- * `\\.\ddnpm` and `\\.\ddprocmon` arrive in Datadog's MSI and install as kernel drivers, which needs
- * administrator rights and a signature chain an npm package cannot satisfy. So this reports the
- * requirement rather than testing it: opening a device to find out would be a side effect taken during a
- * status read, and the binary's own log says it plainly the moment it starts.
+ * And on Windows, two signed kernel drivers from Datadog's MSI that no npm package can install. Reported
+ * rather than tested: opening a device would be a side effect taken during a status read.
  */
 const windowsPrivilege = () => ({
 	able: null,
@@ -421,15 +351,8 @@ const windowsPrivilege = () => ({
 });
 
 /**
- * Whether this host can run system-probe, and if not, what stands in the way.
- *
- * Three platforms, three different answers, and the mechanism differs on each: eBPF capabilities on Linux,
- * a BPF device on macOS, kernel drivers on Windows. `able: null` on Windows means unknown rather than
- * refused, because nothing here can tell whether the drivers are installed without opening one.
- *
- * Reported, never enforced. system-probe is the authority on what it can do, and a check here that refused
- * to start it would be this package overruling the binary on a heuristic. What this buys is a line naming
- * the missing thing instead of a restart loop whose logs say `operation not permitted`.
+ * Whether this host can run system-probe: three platforms, three mechanisms, and `able: null` on Windows
+ * meaning unknown. Reported never enforced, so what it buys is a line rather than a restart loop.
  */
 export function probePrivilege({
 	read = () => readFileSync("/proc/self/status", "utf-8"),
@@ -447,12 +370,8 @@ export function probePrivilege({
 }
 
 /**
- * What this node resolved about system-probe and security-agent, and what stands between it and running
- * them.
- *
- * Reported rather than enforced. The binary is the authority on whether it can load an eBPF program, so a
- * refusal here would be this component overruling it on a heuristic. What this replaces is a restart loop
- * whose logs say `operation not permitted` and nothing about which capability is missing.
+ * What this node resolved about the two opt-in agents and what stands in the way. Reported rather than
+ * enforced: the binary is the authority, and this replaces a restart loop that named no missing capability.
  *
  * @param {ProbeSettings} probes What probeSettings() resolved from the environment.
  * @param {string | null} ebpfDir Where the precompiled objects are, or null if none were found.
@@ -462,9 +381,8 @@ export function probeStatus(probes, ebpfDir, { log }) {
 	const reasons = [];
 	if (probes.systemProbe) {
 		const privilege = probePrivilege();
-		// `able: null` is Windows: unknown rather than refused, because nothing here can tell whether the
-		// drivers are installed without opening one. Reported as a blocker either way, since an operator
-		// who has not installed them needs to read it.
+		// `able: null` is Windows, unknown rather than refused. Still a blocker: an operator who has not
+		// installed the drivers needs to read it.
 		if (privilege.able !== true) reasons.push(privilege.why);
 		if (!ebpfDir)
 			reasons.push(
@@ -484,9 +402,7 @@ export function probeStatus(probes, ebpfDir, { log }) {
 }
 
 // -- The runtime tree ---------------------------------------------------------------------------------------
-//
-// Where every file the agents read is written, and the one call that renders them. Under Harper's root,
-// never the component directory.
+// Where every file the agents read is written, and the one call that renders them.
 
 // The runtime tree lives under Harper's root, never the component directory, which `harper deploy` replaces
 // under a live agent. Named by the component's own directory, not just "datadog": sharing one pidDir means sharing one lock.
@@ -517,9 +433,8 @@ export function prepareRuntime(componentDir, { ports, log, ebpfDir }) {
 		sysprobeConfigDir: runtimeDir,
 		sysprobeConfigFile: join(runtimeDir, "system-probe.yaml"),
 		securityConfigFile: join(runtimeDir, "security-agent.yaml"),
-		// Where runtime security looks for its rule policies. Under the runtime tree, not
-		// /etc/datadog-agent/runtime-security.d, which is the stock install's path and which the
-		// harperdb user cannot create.
+		// Runtime security's rule policies, under the runtime tree rather than the stock install's
+		// /etc/datadog-agent/runtime-security.d, which the harperdb user cannot create.
 		securityPolicies: join(runtimeDir, "runtime-security.d"),
 		// Under the runtime tree, never /var/run/datadog: that is the stock install's path and does not
 		// exist beside a component, which is the same reason dogstatsd_socket and receiver_socket are empty.
@@ -534,9 +449,8 @@ export function prepareRuntime(componentDir, { ports, log, ebpfDir }) {
 	mkdirSync(dirname(paths.coreLog), { recursive: true });
 	mkdirSync(paths.confd, { recursive: true });
 	mkdirSync(paths.pidDir, { recursive: true });
-	// Created whether or not runtime security runs: an enabled policy engine pointed at a directory that
-	// does not exist logs `error while loading policies` every start, and an empty directory is a
-	// correct answer meaning "no custom rules", where a missing one is a misconfiguration.
+	// Created either way: an enabled engine pointed at a missing directory logs `error while loading
+	// policies` every start, where an empty one correctly means "no custom rules".
 	mkdirSync(paths.securityPolicies, { recursive: true });
 
 	const probes = probeSettings();
@@ -555,9 +469,8 @@ export function prepareRuntime(componentDir, { ports, log, ebpfDir }) {
 				check.body;
 		}
 		const owned = new Set(checks.map((check) => check.dir));
-		// Harper's own log and the agents' as log sources, written whenever the root is known. The agent
-		// tails them only when logs are on, which is DD_LOGS_ENABLED=true in the environment; off, this
-		// file costs nothing.
+		// Harper's own log and the agents', written whenever the root is known. Tailed only under
+		// DD_LOGS_ENABLED=true, so off this file costs nothing.
 		if (root) {
 			configFiles[join(paths.confd, HARPER_LOG_CHECK, "conf.yaml.default")] =
 				renderLogSources(join(root, "log", "hdb.log"), paths, REAPER_NAME);
@@ -585,10 +498,7 @@ export const writeConfigFiles = (configFiles, log) =>
 	writeFiles(configFiles, log, LABEL);
 
 // -- Where they serve --------------------------------------------------------------------------------------
-//
-// Stated once each, so the URL a verifier polls, the URL the probe blocklist names, and the `source` a status
-// read reports can never be different ports or schemes. A mismatch in the blocklist is exactly the traffic it
-// exists to keep out of the host application's APM.
+// Stated once, so a verifier, the probe blocklist and a status read cannot name different ports or schemes.
 
 /** The trace-agent's APM receiver. A receiver that does not advertise /v0.4/traces is not one dd-trace can use. */
 export const receiverInfoUrl = (port) => `http://127.0.0.1:${port}/info`;

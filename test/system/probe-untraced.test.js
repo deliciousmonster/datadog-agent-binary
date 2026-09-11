@@ -1,6 +1,5 @@
-// Suppression measured on a real tracer, at the point spans leave it, rather than on the arguments handed to
-// a fake one. A blocklist is one process-global setting and dd-trace's configurePlugin replaces a plugin's
-// config rather than merging into it, so the next caller to touch the same plugin wins it outright.
+// Suppression measured on a real tracer, at the point spans leave it, rather than on the arguments handed to a
+// fake one.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

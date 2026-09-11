@@ -1,7 +1,5 @@
 // Proof, not a call-shape check: a real Harper node, real spans posted to its real receiver, a real
-// authenticated GET reading back what it counted. Every DIMENSIONS row runs the same body, and MOD-10 /
-// MOD-16's acceptance bullet is what each row asserts on its own: the count this run sent is the count
-// the real receiver has to report back, so every path is pinned to that one number.
+// authenticated GET reading back what it counted.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -46,9 +44,8 @@ for (const row of DIMENSIONS) {
 					`the delivery verdict never left "idle" within ${DELIVERY_DEADLINE_MS}ms of sending real traffic: ${JSON.stringify(status.delivery)}`
 				);
 
-				// A row that boots the intended Harper line but silently still falls back to the bundled
-				// guard would land the same trace count and look identical from the outside; this is what
-				// tells the two paths apart. resources.js reports which supervisor actually answered.
+				// A row that boots the intended Harper line but silently still falls back to the bundled guard would land
+				// the same trace count and look identical from the outside; this is what tells the two paths apart.
 				assert.equal(
 					status.supervision,
 					row.expectedSupervision,

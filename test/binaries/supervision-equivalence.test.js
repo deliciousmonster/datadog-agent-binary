@@ -1,10 +1,5 @@
 // A second, independent proof of MOD-16's equivalence property, portable to a plain CI runner: unlike
 // test/live/harness.js's DIMENSIONS table, nothing here needs a real (and, for one row, locally-patched)
-// Harper. component.js's nativeScope stands in for Harper's own sidecar; the only things that are real
-// are the two agent binaries this repo builds and the spans this file sends them. Deliberately independent
-// of test/live/ - this file imports nothing from there - so a future change to that local-only layer can
-// never silently change what this one proves. The equivalence bullet is held per row: each path asserts
-// its own delivered count against the SPAN_COUNT it sent, pinning both to one number rather than to each other.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -46,10 +41,8 @@ const SPAN_SCRIPT = {
 };
 
 /**
- * Boots resources.js against `makeScope(root)`, drives SPAN_COUNT real spans through the real trace-agent
- * it starts, and reads the delivered count back through the component's own readDeliverySignal. Every
- * real process this starts - both agents, and the guard's reaper where there is one - is stopped
- * before this returns.
+ * Boots resources.js against `makeScope(root)`, drives SPAN_COUNT real spans through the real trace-agent it
+ * starts, and reads the delivered count back through the component's own readDeliverySignal.
  */
 async function bootDriveAndRead(makeScope) {
 	return withTempDir("dd-equivalence-", async (root) => {

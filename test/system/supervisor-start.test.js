@@ -1,9 +1,5 @@
 // Everything here is driven through handleApplication(scope), because that is the only path Harper takes and
-// the only path that starts anything. A suite that called the internals directly would pass on a build where
-// the plugin is never reached, which is the failure this component was shipped with.
-//
-// Nothing here spawns an agent: Harper's recorded sidecar stands in for the spawn. The cases that need the
-// guard to spawn one for real live in guard-spawn.test.js.
+// the only path that starts anything.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -57,11 +53,8 @@ test("NEGATIVE: importing the module starts nothing; only handleApplication does
 				[CORE_AGENT, TRACE_AGENT],
 				"handleApplication must start both agents, under the two names Harper locks on"
 			);
-			// The fixture writes what src/binaries.ts says the build produces, so a name this module invents
-			// for itself resolves nothing and the receiver never comes up. A subset, not an equality: the
-			// package ships more than it spawns. system-probe and security-agent are shipped so the
-			// capability is present, and neither is a supervised process -- system-probe needs container
-			// capabilities this component cannot grant itself, and nothing here runs the security agent.
+			// The fixture writes what src/binaries.ts says the build produces, so a name this module invents for itself
+			// resolves nothing and the receiver never comes up.
 			const shipped = new Set(built.map((file) => path.basename(file)));
 			for (const started of scope.starts.map((o) => path.basename(o.command)))
 				assert.ok(
@@ -357,9 +350,8 @@ test("NEGATIVE: an unparseable port warns and falls back rather than being read 
 });
 
 test("the warning for a missing DD_API_KEY reports what each agent actually does", async () => {
-	// Measured against the shipped 7.82.1 binaries: the core agent starts and the intake refuses its payloads
-	// with a 403, while the trace-agent exits 255 with "you must specify an API Key" and binds nothing. An
-	// operator told both agents start looks for the receiver's spans rather than for the key.
+	// Measured against the shipped 7.82.1 binaries: the core agent starts and the intake refuses its payloads with
+	// a 403, while the trace-agent exits 255 with "you must specify an API Key" and binds nothing.
 	const receiver = await findFreePort();
 	const expvarPort = await findFreePort();
 	const lines = await withTempDir("dd-runtime-", (root) =>

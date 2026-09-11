@@ -1,9 +1,5 @@
-// resources.js is the file a reader opens first, and the only one Harper compiles. It declares which
-// binaries ship and hands down the two things only it can see; everything else belongs behind the factory.
-//
-// This exists because that file was 535 lines. It held port parsing, probe status, the status resource, a
-// metrics timer and the whole start path, so the question "what does this plugin run?" took a scroll to
-// answer. The line budget below is not style: it is what stops the same accretion happening again.
+// resources.js is the file a reader opens first, and the only one Harper compiles. It declares which binaries
+// ship and hands down the two things only it can see; everything else belongs behind the factory.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -54,9 +50,8 @@ test("every binary the component starts is named in resources.js", async () => {
 	assert.equal(AGENTS.length, 5);
 });
 
-// A list is the whole declaration, so a typo in it is a binary that silently never starts. That is the
-// failure mode this package exists to remove, and it would be absurd to reintroduce it in the file that
-// declares them.
+// A list is the whole declaration, so a typo in it is a binary that silently never starts. That is the failure
+// mode this package exists to remove, and it would be absurd to reintroduce it in the file that declares them.
 test("NEGATIVE: an unknown process name throws and names the alternatives", () => {
 	assert.throws(
 		() => agentsFor(["trace_agent"], { receiver: 8126 }),

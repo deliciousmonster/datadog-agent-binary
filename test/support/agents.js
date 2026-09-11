@@ -9,9 +9,7 @@ import { createStub, withServer } from "./loopback.js";
 import { withEnvs, withTempDir } from "./sandbox.js";
 import { createTlsStub } from "../fixtures/tls-stub.js";
 
-// Harper's spawn names, which are also the PID-lock filenames. Derived from the table that assigns them,
-// never retyped: a second spelling is a second lock and a second agent per node, and there were four copies
-// of these strings across the suites before this.
+// Harper's spawn names, which are also the PID-lock filenames.
 const lockName = (shipsAs) => agentsFor([shipsAs], { receiver: 0 })[0].name;
 
 export const TRACE_AGENT = lockName("trace-agent");
@@ -32,11 +30,8 @@ export const CORE_EXPVAR = { aggregator: {}, forwarder: {}, pid: 4321 };
 const TRACE_DEBUG = { pid: "4321" };
 
 /**
- * A receiver answering /info, a core expvar answering /debug/vars, the trace-agent's own expvar over TLS,
- * and the component pointed at all three.
- *
- * Each body may be a function rather than a value, because verification compares the pid on the lock against
- * the pid the agent reports: a body fixed before the spawn can only ever describe a mismatch.
+ * A receiver answering /info, a core expvar answering /debug/vars, the trace-agent's own expvar over TLS, and
+ * the component pointed at all three.
  *
  * @param {{ info: object | (() => object), expvar: object | (() => object), debug?: object | (() => object) }} bodies
  * @param {(context: { root: string, receiver: number, expvarPort: number, debugPort: number }) => any} run
