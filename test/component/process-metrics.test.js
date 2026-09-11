@@ -5,6 +5,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -18,8 +19,9 @@ import {
 	seriesSettings,
 	standDownFor,
 	startProcessSeries,
-} from "../../runtime/component.js";
+} from "../../runtime/series.js";
 import { loadComponent } from "../support/component.js";
+import { withTempDir } from "../support/sandbox.js";
 
 const status = (rssKb, threads) =>
 	`Name:\tnode\nState:\tS (sleeping)\nThreads:\t${threads}\nVmRSS:\t${rssKb} kB\nVmSize:\t9999 kB\n`;
@@ -485,5 +487,25 @@ describe("standing down when something else owns the namespace", () => {
 	it("NEGATIVE: no conf.d path at all is not a reason to stand down", () => {
 		assert.equal(standDownFor(undefined), false);
 		assert.equal(standDownFor(""), false);
+	});
+
+	// Every case above hands in its own `stat`, and that is what let the default one ship broken: it read a
+	// bare `existsSync` this module never imported, so the only caller that matters - scheduleSeries, which
+	// passes no stat - threw ReferenceError on every start under the default prefix and took startup with it.
+	// A fake filesystem cannot see that. This one asks the real one.
+	it("reads the real filesystem when no stat is handed in", async () => {
+		await withTempDir("standdown-", async (dir) => {
+			assert.equal(
+				standDownFor(dir),
+				false,
+				"an empty conf.d is not a configured check"
+			);
+			mkdirSync(join(dir, "process.d"), { recursive: true });
+			writeFileSync(
+				join(dir, "process.d", "conf.yaml"),
+				"instances:\n  - name: harper\n"
+			);
+			assert.equal(standDownFor(dir), true);
+		});
 	});
 });

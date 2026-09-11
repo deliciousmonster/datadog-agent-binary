@@ -83,12 +83,21 @@ test("every file the component reads at runtime is in the published package", ()
 	// directory entry, one added beside resources.js is not, and an import of dist/ reaches build output the
 	// tarball no longer carries. A list of known names catches none of the three.
 	const imported = importedFrom("resources.js");
-	// The named files the walk must reach, so a broken walk cannot pass by reaching nothing. There are two,
-	// and there is nothing else: everything about supervising a process moved to the guard, and what is left
-	// is what Datadog is (datadog.js) and what this component does with it (component.js).
+	// The named files the walk must reach, so a broken walk cannot pass by reaching nothing. Everything about
+	// supervising a process moved to the guard; what is left is what Datadog is (datadog.js) with the files it
+	// writes (render.js), and the three things this component does with a running node - prove it (verify.js),
+	// read back what reached Datadog (delivery.js), measure what it costs (series.js) - joined by component.js.
 	assert.deepEqual(
 		imported.sort(),
-		["resources.js", "runtime/component.js", "runtime/datadog.js"],
+		[
+			"resources.js",
+			"runtime/component.js",
+			"runtime/datadog.js",
+			"runtime/delivery.js",
+			"runtime/render.js",
+			"runtime/series.js",
+			"runtime/verify.js",
+		],
 		`the walk cannot have followed the component's imports: ${JSON.stringify(imported)}`
 	);
 	for (const file of imported) {

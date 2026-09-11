@@ -10,12 +10,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import { probePrivilege, probeSettings } from "../../runtime/datadog.js";
 import {
-	probePrivilege,
-	probeSettings,
 	renderSecurityAgentYaml,
 	renderSystemProbeYaml,
-} from "../../runtime/datadog.js";
+} from "../../runtime/render.js";
 
 const PATHS = {
 	sysprobeSocket: "/run/sysprobe.sock",

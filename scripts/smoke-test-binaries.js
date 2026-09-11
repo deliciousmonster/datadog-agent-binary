@@ -18,7 +18,7 @@ import {
 	receiverInfoUrl,
 	writeConfigFiles,
 } from "../runtime/datadog.js";
-import { verifyLaunch } from "../runtime/component.js";
+import { verifyLaunch } from "../runtime/verify.js";
 import { REPO_ROOT } from "./paths.js";
 import { freshPorts } from "../test/support/loopback.js";
 import { FAKE_API_KEY } from "../test/support/traffic.js";

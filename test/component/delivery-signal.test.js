@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { deliveryVerdict } from "../../runtime/component.js";
+import { deliveryVerdict } from "../../runtime/delivery.js";
 import { loadComponent } from "../support/component.js";
 import { createStub, findFreePort, withServer } from "../support/loopback.js";
 import { withEnvs, withTempDir } from "../support/sandbox.js";

@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
-import { deliveryVerdict, readTraceHop } from "../../runtime/component.js";
+import { deliveryVerdict, readTraceHop } from "../../runtime/delivery.js";
 
 const stamp = (msAgo) =>
 	new Date(Date.now() - msAgo).toISOString().slice(0, 19).replace("T", " ");
