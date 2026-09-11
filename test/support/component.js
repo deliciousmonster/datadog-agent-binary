@@ -59,7 +59,7 @@ export const STAYS_UP = "exec sleep 300";
 // runtime/datadog.js's resolveBinary reads two fixed, shared locations, in order: the installed platform
 // package under node_modules/, then build/<platform>/bin. Both paths are derived from resolveBinary's own
 // file location, not from anything a caller here can redirect, so neither can be given a copy unique per
-// call the way a temp-dir fixture would be. test/e2e/harper-component.test.js plants a fake platform
+// call the way a temp-dir fixture would be. test/unit/harper-component.test.js plants a fake platform
 // package for its own file's duration; withBuiltBinaries plants build/<platform>/bin for one call's
 // duration. Either one, present when it should not be, changes what a concurrent resolveBinary() call
 // anywhere in the process tree resolves - so the one real fix is making sure only one user of these paths,
@@ -89,7 +89,8 @@ export async function acquireResolveBinaryLock() {
 			return () =>
 				fs.rmSync(RESOLVE_BINARY_LOCK, { recursive: true, force: true });
 		} catch (error) {
-			if (error.code !== "EEXIST") throw error;
+			if (/** @type {NodeJS.ErrnoException} */ (error).code !== "EEXIST")
+				throw error;
 			if (Date.now() >= deadline) {
 				throw new Error(
 					`${RESOLVE_BINARY_LOCK} is still held after ${LOCK_TIMEOUT_MS}ms. A prior run likely ` +
@@ -189,7 +190,7 @@ export async function withBuiltBinaries(run, command = EXITS_AT_ONCE) {
 
 /**
  * {@link withBuiltBinaries} without the lock, for the one caller that has to hold it across more than this
- * call: test/component/built-binaries-fixture.test.js stages the paths this plants at, and that staging is
+ * call: test/unit/built-binaries-fixture.test.js stages the paths this plants at, and that staging is
  * as visible to a concurrent resolveBinary() as the stubs are.
  */
 export async function plantBuiltBinaries(run, command = EXITS_AT_ONCE) {

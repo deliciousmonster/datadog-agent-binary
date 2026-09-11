@@ -313,7 +313,8 @@ export async function bootHarper(row) {
 			? readFileSync(log, "utf8").split("\n").slice(-40).join("\n")
 			: "(harper-run.log was never written)";
 		rmSync(workDir, { recursive: true, force: true });
-		error.message += `\n--- last 40 lines of harper-run.log ---\n${tail}`;
+		/** @type {Error} */ (error).message +=
+			`\n--- last 40 lines of harper-run.log ---\n${tail}`;
 		throw error;
 	}
 }

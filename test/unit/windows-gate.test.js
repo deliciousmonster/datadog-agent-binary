@@ -14,7 +14,7 @@ import {
 	groupVerdict,
 	selectSuites,
 	suitesIn,
-} from "../../scripts/windows-gate-checks.mjs";
+} from "../../test/windows-gate-checks.mjs";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..");
 
@@ -137,8 +137,8 @@ test("CI runs the gate on the Windows legs and npm test on the rest, with neithe
 test("CI fails a run whose glob matched no suite, which node --test alone reports as a pass", () => {
 	assert.match(
 		TEST_WORKFLOW,
-		/find test\/component test\/e2e -type f -name '\*\.test\.js'/,
-		"the empty-glob guard has to count the same directories the test step runs"
+		new RegExp(`find ${GROUPS.join(" ")} -type f -name '\\*\\.test\\.js'`),
+		"the empty-glob guard has to count the same directories the gate selects from"
 	);
 	assert.match(
 		TEST_WORKFLOW,

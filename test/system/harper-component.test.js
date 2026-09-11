@@ -81,7 +81,7 @@ function safeRemoveFixture() {
 
 /**
  * Write a fake platform sub-package identical in shape to the output of
- * scripts/create-platform-packages.js: a package.json, an index.js exposing
+ * the kit's staging: a package.json, an index.js exposing
  * getBinaryPath(), and bin/<binaryName>. The "binary" is a tiny script that
  * echoes a marker plus its args so we can prove it was actually executed.
  *

@@ -1,6 +1,6 @@
 /*
  * What runs on Windows, and what makes a run count. Split from windows-gate.mjs so both decisions can be
- * tested (test/e2e/windows-gate.test.js) rather than only observed on a Windows runner.
+ * tested (test/unit/windows-gate.test.js) rather than only observed on a Windows runner.
  *
  * SCOPE. Coverage is inclusion by default: every *.test.js under a GROUPS directory runs, so a suite added
  * tomorrow is gated on Windows the day it is added without anyone opting it in. EXCLUDED is subtracted from
@@ -18,7 +18,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 /** The two directories package.json's `test` script globs. A group is one child process. */
-export const GROUPS = ["test/component", "test/e2e"];
+export const GROUPS = ["test/unit", "test/system"];
 
 /** The directory `test:binaries` globs, gated by build-release.yml's Windows leg alone: it needs the binaries that leg just built. */
 export const BINARIES_GROUP = "test/binaries";
@@ -34,13 +34,13 @@ export const EXCLUDED = [
 	// reaper launch, the status endpoint tracking an agent that died or restarted, the refusal of a verdict
 	// taken before a restart, and stopping an orphan left by an earlier configuration. The recorded-Harper
 	// half of supervision - config rendering, port parsing, every verify verdict - still runs, in
-	// test/component/supervisor-start.test.js.
+	// test/system/supervisor-start.test.js.
 	//
 	// Unblocking these needs a fixture that writes a real Windows executable at <agent>.exe: one that
 	// ignores its argv and either exits at once or stays up, per the stub bodies component.js offers. No
 	// system binary does both, so it means shipping or generating a small PE for the purpose.
-	"test/component/guard-spawn.test.js",
-	"test/component/partial-logger.test.js",
+	"test/system/guard-spawn.test.js",
+	"test/system/partial-logger.test.js",
 
 	// --- The guard row's teardown restarts what it kills, and the runner never exits ------
 	// Observed on the release run's Windows leg (2026-09-07): the native row passes; under the guard
@@ -77,7 +77,13 @@ export const selectSuites = (root, group) =>
  * pattern matches nothing, so a run that reported no summary or ran no test has to fail here rather than
  * report a green leg that executed nothing.
  */
-export function groupVerdict({ output, status, error }) {
+export function groupVerdict(
+	/** @type {{ output: string, status: number | null, error?: Error }} */ {
+		output,
+		status,
+		error,
+	}
+) {
 	const count = (field) => {
 		const found = output.match(new RegExp(`^# ${field} (\\d+)$`, "m"));
 		return found ? Number(found[1]) : undefined;

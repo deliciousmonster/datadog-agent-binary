@@ -233,7 +233,9 @@ test("macOS is judged on a BPF device, not on capabilities it does not use", () 
 		platform: "darwin",
 		uid: () => 1000,
 		openBpf: () => {
-			const e = new Error("permission denied");
+			const e = /** @type {NodeJS.ErrnoException} */ (
+				new Error("permission denied")
+			);
 			e.code = "EACCES";
 			throw e;
 		},

@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { CHECKS, versionArgv } from "../../scripts/smoke-test-binaries.js";
+import { CHECKS, versionArgv } from "../../test/binaries/smoke.js";
 
 const RUNTIME_DIR = "/runtime/datadog-agent-binary";
 

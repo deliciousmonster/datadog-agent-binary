@@ -30,7 +30,8 @@
 		"agent-build/**/*.js",
 		"runtime/**/*.js",
 		"resources.js",
-		"scripts/**/*.js",
-		"scripts/**/*.mjs"
+		"binary-kit.config.js",
+		"test/**/*.js",
+		"test/**/*.mjs"
 	]
 }

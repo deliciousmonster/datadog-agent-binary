@@ -113,6 +113,12 @@ function startLoad(stop) {
 // ---------------------------------------------------------------------------------------------------
 // Reads: the plugin's own status, both agents' expvars, container resource use.
 
+/**
+ * The node's own /DatadogStatus/, or null when it did not answer. A long run reads this every minute and a
+ * read that lands during a restart answers null, which is an ordinary result rather than a failure.
+ *
+ * @returns {Promise<any>}
+ */
 async function status() {
 	try {
 		const response = await fetch(`${BASE}/DatadogStatus/`, {
@@ -124,6 +130,7 @@ async function status() {
 		return null;
 	}
 }
+/** @returns {Promise<{ core: any, trace: any }>} */
 async function expvars() {
 	try {
 		const out = await sh(
@@ -298,7 +305,7 @@ const ACTIONS = {
 		chaos.busyUntil = Date.now() + (KEY_MIN + 3) * 60_000;
 		const restore = () =>
 			recreate(realApiKey()).catch((error) =>
-				chaosLog(`restore failed: ${error.message}`)
+				chaosLog(`restore failed: ${/** @type {Error} */ (error).message}`)
 			);
 		chaos.pending.push(restore);
 		setTimeout(restore, KEY_MIN * 60_000);
@@ -420,8 +427,9 @@ async function restoreContainerIfDown(after) {
 		chaosLog(`${CONTAINER} recreated; the run continues`);
 	} catch (error) {
 		chaosLog(
-			`${CONTAINER} could not be recreated: ${error.message}. Every row from here reads a container ` +
-				"that is not there, and the failed-request count is the harness, not the plugin."
+			`${CONTAINER} could not be recreated: ${/** @type {Error} */ (error).message}. Every row from ` +
+				"here reads a container that is not there, and the failed-request count is the harness, not " +
+				"the plugin."
 		);
 	}
 }
@@ -500,7 +508,9 @@ async function fireChaos() {
 			chaosLog(`#${chaos.count} ${name} after 2 min: ${summary.slice(0, 300)}`);
 		}, 120_000);
 	} catch (error) {
-		chaosLog(`#${chaos.count} ${name} could not be applied: ${error.message}`);
+		chaosLog(
+			`#${chaos.count} ${name} could not be applied: ${/** @type {Error} */ (error).message}`
+		);
 		// An action that threw may have got as far as taking the container down. Only actions that
 		// recreate it can, so this is a no-op for the rest.
 		await restoreContainerIfDown(`#${chaos.count} ${name} failed`);
@@ -542,17 +552,18 @@ const refusals = (writer) =>
 	writer ? `${writer.errors ?? "-"}/${writer.retries ?? "-"}` : "-";
 
 const header = () =>
-	COLUMNS.map(([name, width]) => name.padEnd(width)).join(" ");
+	COLUMNS.map(([name, width]) => String(name).padEnd(Number(width))).join(" ");
 /** Columns already reported as too narrow, so one rotted width is one line and not one per minute. */
 const truncated = new Set();
 
-const row = (values) =>
-	COLUMNS.map(([name, width]) => {
+const row = (/** @type {Record<string, any>} */ values) =>
+	COLUMNS.map(([name, rawWidth]) => {
+		const width = Number(rawWidth);
 		const value = String(values[name] ?? "-");
 		// Silent truncation is how 33 rows of this run lost the `%` off a CPU reading over 100, which reads as
 		// a plain number. The TSV carries the value whole, so the fix is to say the width rotted, once.
-		if (value.length > width && !truncated.has(name)) {
-			truncated.add(name);
+		if (value.length > width && !truncated.has(String(name))) {
+			truncated.add(String(name));
 			console.log(
 				`soak: the ${name} column is ${width} wide and ${JSON.stringify(value)} needs ${value.length}. ` +
 					`status.tsv has it whole; widen COLUMNS.`

@@ -60,7 +60,7 @@ test("every binary the component starts is named in resources.js", async () => {
 test("NEGATIVE: an unknown process name throws and names the alternatives", () => {
 	assert.throws(
 		() => agentsFor(["trace_agent"], { receiver: 8126 }),
-		(error) => {
+		(/** @type {Error} */ error) => {
 			assert.match(error.message, /unknown Datadog process "trace_agent"/);
 			for (const known of KNOWN)
 				assert.ok(

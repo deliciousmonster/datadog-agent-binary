@@ -181,7 +181,7 @@ test("the built-binaries fixture puts back what it found at build/<platform>/bin
 	const { binDir, files } = builtBinaryPaths();
 	fs.mkdirSync(binDir, { recursive: true });
 	// Held across the staging too, not just the fixture call: these are the paths resolveBinary reads, and
-	// test/e2e/harper-component.test.js holds this same lock across a test asserting no trace-agent is here.
+	// test/unit/harper-component.test.js holds this same lock across a test asserting no trace-agent is here.
 	const release = await acquireResolveBinaryLock();
 	let restoreReal;
 	try {

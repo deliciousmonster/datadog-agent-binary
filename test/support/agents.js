@@ -27,7 +27,16 @@ export const CORE_EXPVAR = { aggregator: {}, forwarder: {}, pid: 4321 };
 // publishes it: a string. A number here would let a strict typeof test pass that the real agent fails.
 const TRACE_DEBUG = { pid: "4321" };
 
-/** A receiver answering /info, a core expvar answering /debug/vars, the trace-agent's own expvar over TLS, and the component pointed at all three. */
+/**
+ * A receiver answering /info, a core expvar answering /debug/vars, the trace-agent's own expvar over TLS,
+ * and the component pointed at all three.
+ *
+ * Each body may be a function rather than a value, because verification compares the pid on the lock against
+ * the pid the agent reports: a body fixed before the spawn can only ever describe a mismatch.
+ *
+ * @param {{ info: object | (() => object), expvar: object | (() => object), debug?: object | (() => object) }} bodies
+ * @param {(context: { root: string, receiver: number, expvarPort: number, debugPort: number }) => any} run
+ */
 export async function withAgentsAnswering(
 	{ info, expvar, debug = TRACE_DEBUG },
 	run

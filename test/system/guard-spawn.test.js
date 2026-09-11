@@ -1,5 +1,5 @@
 // The guard half of supervision, split out because every case here needs the guard to spawn a real process
-// from build/<platform>/bin - which is what scripts/windows-gate.mjs cannot run and excludes by this file.
+// from build/<platform>/bin - which is what test/windows-gate.mjs cannot run and excludes by this file.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -48,6 +48,10 @@ function breakCoreBinary(files) {
 /**
  * The guard path, with everything it spawned stopped before the runtime tree goes. Waiting for the locks to
  * clear is what keeps a release still in flight from writing into a deleted directory.
+ */
+/**
+ * @param {(context: { pidDir: string, status: any, statusResource: any }) => any} run
+ * @param {{ stalePid?: number, staleTracePid?: number, breakCoreAgent?: boolean }} [options]
  */
 async function withGuardStarted(
 	run,

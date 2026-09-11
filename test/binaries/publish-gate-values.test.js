@@ -1,7 +1,9 @@
-// The oracle scripts/verify-package.js's table has never had. test/e2e/publish-gate.test.js writes both
-// sides of every fixture it checks, so it proves the gate's branches and cannot say whether the values
-// those branches read discriminate a real build. That is the gap a forbidden value present in every
-// correctly-built core agent shipped through. Runs where the binaries are (`npm run test:binaries`).
+// The oracle the publish gate's table has never had.
+//
+// The kit's own suite writes both sides of every fixture it checks, so it proves the gate's branches and
+// cannot say whether the values those branches read discriminate a real build. A requiredSymbol absent from
+// every correctly-built binary would refuse every release; a forbiddenBuildTag present in every one of them
+// would too. Only a real binary answers that, so this runs where they are (`npm run test:binaries`).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

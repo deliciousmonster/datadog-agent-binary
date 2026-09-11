@@ -28,7 +28,7 @@ import {
 } from "../support/traffic.js";
 
 // prepareRuntime nests the runtime tree under the component's own directory name; the guard's pid
-// lock directory sits under that, same as test/component/supervisor-start.test.js's own layout.
+// lock directory sits under that, same as test/unit/supervisor-start.test.js's own layout.
 const APP_NAME = path.basename(REPO_ROOT);
 const REAPER = "datadog-agent-reaper";
 const AGENT_NAMES = ["datadog-trace-agent", "datadog-agent"];

@@ -23,7 +23,9 @@ const NO_NATIVE_SUPERVISION = {};
  */
 const spawnThatThrowsACodedError = () => ({
 	on() {
-		const error = new TypeError(".on is not a function");
+		const error = /** @type {NodeJS.ErrnoException} */ (
+			new TypeError(".on is not a function")
+		);
 		error.code = "ENOENT";
 		throw error;
 	},

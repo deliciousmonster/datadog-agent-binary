@@ -4,6 +4,9 @@
  * .github/workflows/test.yml in place of `npm test`. What it gates on, and what it leaves out, is
  * windows-gate-checks.mjs; read that file's header first.
  *
+ * It lives under test/ because it is test infrastructure: it selects suites, runs them and judges the runs.
+ * It sat in scripts/ beside the packaging tooling, which said it was part of a release.
+ *
  * Two things this does that the plain `node --test` invocation in package.json's `test` cannot.
  *
  * It runs GROUPS in separate processes, so a group that takes its own process down cannot cost the run the
@@ -28,6 +31,8 @@ import {
 	selectSuites,
 } from "./windows-gate-checks.mjs";
 
+// test/, so one hop to the root. It was two from scripts/, and a wrong count here selects no suites
+// and reports a group that "selected no suites" rather than a path that moved.
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // package.json's `test` script sets the same timeout, and for the same reason: node --test defaults to 0,
 // so a supervision change that hangs reads as a stuck machine rather than as a failure.

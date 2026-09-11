@@ -2,6 +2,10 @@
 
 // Proves a platform's built binaries are real before CI uploads them: the trace-agent must bind its
 // receiver and count a real span, the core agent must start, identify itself, and stay up.
+//
+// Under test/binaries/ because it is what that tier is: real binaries from build/<target>/bin, driven for
+// real. It reaches for runtime/verify.js rather than writing a second, weaker idea of what a working agent
+// looks like, and the release workflow runs it on every leg before anything is uploaded.
 
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, renameSync, rmSync } from "node:fs";
@@ -10,21 +14,22 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // The repo root, from this file rather than from a module whose only job was to say it four different ways.
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// test/binaries/, so two hops to the root.
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-import { binariesFor, binaryFilename } from "../agent-build/binaries.js";
-import { pinnedVersion } from "../agent-build/download.js";
-import { treeAt } from "../agent-build/tree.js";
-import { currentTarget } from "../agent-build/toolchain.js";
+import { binariesFor, binaryFilename } from "../../agent-build/binaries.js";
+import { pinnedVersion } from "../../agent-build/download.js";
+import { treeAt } from "../../agent-build/tree.js";
+import { currentTarget } from "../../agent-build/toolchain.js";
 import {
 	debugVarsUrl,
 	receiverInfoUrl,
 	writeConfigFiles,
-} from "../runtime/datadog.js";
-import { verifyLaunch } from "../runtime/verify.js";
+} from "../../runtime/datadog.js";
+import { verifyLaunch } from "../../runtime/verify.js";
 
-import { freshPorts } from "../test/support/loopback.js";
-import { FAKE_API_KEY } from "../test/support/traffic.js";
+import { freshPorts } from "../support/loopback.js";
+import { FAKE_API_KEY } from "../support/traffic.js";
 
 // Go binaries bind well under a second cold; this only needs to be longer than a slow CI runner.
 const DELIVERY_DEADLINE_MS = 15_000;
@@ -269,9 +274,7 @@ async function hideBuildTree(binDir) {
 async function main() {
 	const binDirArg = process.argv[2];
 	if (!binDirArg) {
-		console.error(
-			"usage: node scripts/smoke-test-binaries.js <platform-bin-dir>"
-		);
+		console.error("usage: node test/binaries/smoke.js <platform-bin-dir>");
 		process.exit(1);
 	}
 	const binDir = resolve(binDirArg);
@@ -306,7 +309,7 @@ async function main() {
 
 		// Dynamic, and after every env var above is set: resources.js reads DD_APM_*_PORT into module-scope
 		// constants the moment it is evaluated, so a static import here would bind the wrong ports.
-		const resources = await import("../resources.js");
+		const resources = await import("../../resources.js");
 		const runtime = resources.prepareRuntime();
 		writeConfigFiles(runtime.configFiles, console);
 

@@ -134,7 +134,7 @@ test("NEGATIVE: the platform package the component resolves is derived from this
 	// reports no binary on a node where the binary is installed.
 	await assert.rejects(
 		() => resolveBinary({ shipsAs: "no-such-agent", title: "nothing" }),
-		(error) => {
+		(/** @type {Error} */ error) => {
 			assert.ok(
 				error.message.includes(`${manifest.name}-`),
 				`the component looks for platform packages under a different name than ${manifest.name}: ${error.message}`

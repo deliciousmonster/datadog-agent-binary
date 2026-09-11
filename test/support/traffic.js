@@ -1,6 +1,6 @@
 // Real delivery through a real trace-agent: the key that makes it count payloads, the spans a child
 // process sends it, and the poll that reads the count back. Shared by test/binaries/supervision-equivalence.test.js,
-// test/live/harness.js and scripts/smoke-test-binaries.js, which differ only in span naming, not in the mechanism.
+// test/live/harness.js and test/binaries/smoke.js, which differ only in span naming, not in the mechanism.
 
 import { execFileSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";

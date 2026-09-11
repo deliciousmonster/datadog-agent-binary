@@ -267,7 +267,8 @@ export async function sendDogstatsd(
  * @param {string} options.pidDir @param {string} options.holder @param {number} options.port
  * @param {Record<string,string>} [options.tags] @param {import("@deliciousmonster/harper-process-guard").Log} [options.log]
  * @param {NodeJS.ProcessEnv} [options.env] @param {(fn: () => void, ms: number) => any} [options.setTimer]
- * @param {typeof sendDogstatsd} [options.send]
+ * @param {(lines: readonly string[], options: { port: number }) => unknown} [options.send] Only has to
+ *   deliver. A caller's stand-in need not report a count, which is what the real one returns for its own log.
  * @returns {{ stop: () => void, tick: () => Promise<'sent'|'not-owner'|'nothing'|'failed'>, intervalSeconds: number, prefix: string }}
  */
 export function startProcessSeries({
