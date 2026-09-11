@@ -358,7 +358,7 @@ export async function sendDogstatsd(
  * @param {object} options
  * @param {() => {name: string, pid?: number, self?: boolean}[]} options.members
  * @param {string} options.pidDir @param {string} options.holder @param {number} options.port
- * @param {Record<string,string>} [options.tags] @param {import("./log.js").Log} [options.log]
+ * @param {Record<string,string>} [options.tags] @param {import("@deliciousmonster/harper-process-guard").Log} [options.log]
  * @param {NodeJS.ProcessEnv} [options.env] @param {(fn: () => void, ms: number) => any} [options.setTimer]
  * @param {typeof sendDogstatsd} [options.send]
  * @returns {{ stop: () => void, tick: () => Promise<'sent'|'not-owner'|'nothing'|'failed'>, intervalSeconds: number }}
@@ -439,7 +439,7 @@ export function startProcessSeries({
  * @param {string} options.pidDir
  * @param {string} options.confd
  * @param {number} options.port DogStatsD.
- * @param {import('./log.js').Log} options.log
+ * @param {import('@deliciousmonster/harper-process-guard').Log} options.log
  * @param {() => Array<{name: string, pid?: number, self?: boolean}>} options.members
  * @param {{ stop(): void } | undefined} options.previous This thread's existing timer, stopped first so a
  *   second startup cannot leave two of them running.

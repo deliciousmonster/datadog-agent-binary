@@ -289,7 +289,7 @@ export function renderSecurityAgentYaml(paths, resolved) {
  *
  * @param {object} probes What settings() resolved from the environment.
  * @param {string | null} ebpfDir Where the precompiled objects are, or null if none were found.
- * @param {{ log: import('./log.js').Log, packageName: string }} context
+ * @param {{ log: import('@deliciousmonster/harper-process-guard').Log, packageName: string }} context
  */
 export function probeStatus(probes, ebpfDir, { log, packageName }) {
 	const reasons = [];

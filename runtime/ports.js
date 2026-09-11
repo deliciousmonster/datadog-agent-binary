@@ -12,7 +12,7 @@
  *
  * @param {string} name
  * @param {number} fallback
- * @param {import('./log.js').Log} log
+ * @param {import('@deliciousmonster/harper-process-guard').Log} log
  */
 export function resolvePort(name, fallback, log) {
 	const raw = process.env[name];
@@ -31,7 +31,7 @@ export function resolvePort(name, fallback, log) {
  * Read once per component instance, because every worker thread renders the config and probes the
  * endpoints from these numbers and a second reading could disagree with the first.
  *
- * @param {import('./log.js').Log} log
+ * @param {import('@deliciousmonster/harper-process-guard').Log} log
  */
 export function resolvePorts(log) {
 	return {

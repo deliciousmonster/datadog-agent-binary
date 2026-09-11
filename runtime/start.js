@@ -17,7 +17,7 @@ import { verifyLaunch } from "./verify.js";
  * @param {object} options
  * @param {readonly object[]} options.agents Declared processes, in start order.
  * @param {object} options.ports
- * @param {import('./log.js').Log} options.log
+ * @param {import('@deliciousmonster/harper-process-guard').Log} options.log
  * @param {Function} options.spawn Harper's constrained spawn.
  * @param {string} options.packageName
  * @param {(ebpfDir: string | null) => object} options.prepareRuntime

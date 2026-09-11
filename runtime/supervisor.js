@@ -173,7 +173,7 @@ const REAPER_NAME = "datadog-agent-reaper";
  * Removing it signals nothing. A file naming the real process, or a dead one, is Harper's to keep.
  *
  * @param {string | null} root @param {Array<{ name: string; argv?: readonly string[]; script?: string }>} named
- * @param {import("./log.js").Log} log
+ * @param {import("@deliciousmonster/harper-process-guard").Log} log
  */
 export function clearStaleHarperPidFiles(root, named, log) {
 	if (!root) return;
@@ -274,7 +274,7 @@ const REAPER_BACKOFF_MAX_MS = 15 * 60_000;
  *
  * @param {object} options
  * @param {string} options.pidDir @param {Record<string, unknown>} options.reaper
- * @param {() => Promise<unknown>} options.relaunch @param {import("./log.js").Log} options.log
+ * @param {() => Promise<unknown>} options.relaunch @param {import("@deliciousmonster/harper-process-guard").Log} options.log
  * @param {number} [options.everyMs] @param {(fn: () => void, ms: number) => any} [options.setTimer]
  * @returns {{ stop: () => void, tick: () => Promise<'present'|'relaunched'|'failed'|'backoff'> }}
  */

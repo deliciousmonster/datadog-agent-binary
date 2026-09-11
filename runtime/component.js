@@ -16,8 +16,14 @@ import { agentsFor } from "./agents.js";
 import { PACKAGE_NAME } from "./binary.js";
 import { prepareRuntime as prepare } from "./config.js";
 import { debugVarsUrl, readDeliverySignal as readSignal } from "./delivery.js";
-import { createHandleApplication, watchForNeverCalled } from "./lifecycle.js";
-import { normaliseLog } from "./log.js";
+// From the guard rather than from here: guard() documents every log method as optional and calls them
+// unguarded, and Harper importing a component without calling its plugin is a failure no component can
+// observe from inside itself. Both were written here first; both are every consumer's problem.
+import {
+	createHandleApplication,
+	normaliseLog,
+	watchForNeverCalled,
+} from "@deliciousmonster/harper-process-guard";
 import { resolvePorts } from "./ports.js";
 import { suppressAgentProbes } from "./probe.js";
 import { createStart } from "./start.js";

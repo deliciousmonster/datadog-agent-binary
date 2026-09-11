@@ -175,7 +175,7 @@ export async function pollEndpoint({
  * traced and start appearing as spans, so that one gets a line.
  *
  * @param {readonly string[]} urls Every endpoint this component polls.
- * @param {import('./log.js').Log} log
+ * @param {import('@deliciousmonster/harper-process-guard').Log} log
  * @param {(id: string) => unknown} [require] Injected for tests; defaults to this module's own resolver.
  */
 export function suppressAgentProbes(urls, log, require = undefined) {
