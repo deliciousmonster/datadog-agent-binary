@@ -358,29 +358,72 @@ async function captureContainerSpec() {
 let containerSpec = null;
 
 /**
- * Wait for the name to be free after a forced removal.
+ * Remove the container and wait for its name to be free.
  *
  * `docker rm -f` returning is not the name being available: the daemon releases it asynchronously, and the
  * `docker run` that followed lost that race on 2026-09-10 and reported a name conflict. The failure was
  * swallowed by a bare catch on the removal, so the log said only that `docker run` failed.
+ *
+ * The removal is reissued every round rather than once, because a single rm can fail in a way a second one
+ * will not. On 2026-09-11 the daemon answered `tried to kill container, but did not receive an exit event`,
+ * the container settled into Exited(137) still holding its name, and this polled a state that nothing was
+ * going to change. A container the daemon could not reap while Running is removable once it has exited, so
+ * asking again is the whole fix; asking once and watching is what lost the run.
  */
+const REMOVE_ROUNDS = 60;
+const REMOVE_ROUND_MS = 1_000;
 async function removeContainer() {
-	await docker("rm", "-f", CONTAINER).catch((error) =>
-		chaosLog(`removing ${CONTAINER} failed, continuing: ${error.message}`)
-	);
-	for (let waited = 0; waited < 30_000; waited += 500) {
+	for (let round = 0; round < REMOVE_ROUNDS; round++) {
+		const failure = await docker("rm", "-f", CONTAINER).then(
+			() => null,
+			(error) => error.message.split("\n")[0]
+		);
 		const found = await docker(
 			"ps",
 			"-aq",
 			"--filter",
 			`name=^${CONTAINER}$`
 		).catch(() => ({ stdout: "" }));
-		if (!found?.stdout?.trim()) return;
-		await new Promise((r) => setTimeout(r, 500));
+		if (!found?.stdout?.trim()) {
+			if (round > 0)
+				chaosLog(`${CONTAINER} removed after ${round + 1} rm attempts`);
+			return;
+		}
+		if (round === 0 && failure)
+			chaosLog(`removing ${CONTAINER} failed, retrying: ${failure}`);
+		await sleep(REMOVE_ROUND_MS);
 	}
 	throw new Error(
-		`${CONTAINER} still holds its name 30s after docker rm -f; nothing can recreate it`
+		`${CONTAINER} still holds its name after ${REMOVE_ROUNDS} docker rm -f attempts; nothing can recreate it`
 	);
+}
+
+/**
+ * Put the container back if a chaos action left it down.
+ *
+ * A failed action used to end the story: `wrong-api-key-10min` threw inside its recreate on 2026-09-11 and
+ * the run spent four minutes driving load at nothing, reporting 1,180 failed requests a minute, with every
+ * agent column blank. The load generator cannot tell "the thing under test is broken" from "there is no
+ * thing under test", and only the second one is the harness's own fault to repair.
+ */
+async function restoreContainerIfDown(after) {
+	const running = await docker(
+		"ps",
+		"-q",
+		"--filter",
+		`name=^${CONTAINER}$`
+	).catch(() => ({ stdout: "" }));
+	if (running?.stdout?.trim()) return;
+	chaosLog(`${CONTAINER} is not running after ${after}; recreating it`);
+	try {
+		await recreate(realApiKey());
+		chaosLog(`${CONTAINER} recreated; the run continues`);
+	} catch (error) {
+		chaosLog(
+			`${CONTAINER} could not be recreated: ${error.message}. Every row from here reads a container ` +
+				"that is not there, and the failed-request count is the harness, not the plugin."
+		);
+	}
 }
 
 async function recreate(apiKey) {
@@ -458,6 +501,9 @@ async function fireChaos() {
 		}, 120_000);
 	} catch (error) {
 		chaosLog(`#${chaos.count} ${name} could not be applied: ${error.message}`);
+		// An action that threw may have got as far as taking the container down. Only actions that
+		// recreate it can, so this is a no-op for the rest.
+		await restoreContainerIfDown(`#${chaos.count} ${name} failed`);
 	}
 }
 const nextGap = () => (GAP_MIN + Math.random() * (GAP_MAX - GAP_MIN)) * 60_000;
