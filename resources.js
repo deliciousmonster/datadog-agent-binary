@@ -83,6 +83,9 @@ const ports = {
 	// Pinned for the same reason as expvar: this component sends its own process series here, so the sender
 	// and the listener have to come from one number rather than from two defaults that can drift apart.
 	dogstatsd: resolvePort("DD_DOGSTATSD_PORT", 8125),
+	// process-agent's own expvar, separate from the core agent's. Without it nothing on this node can
+	// say whether the connections check is running, which is the only reason the binary is here.
+	processExpvar: resolvePort("DD_PROCESS_CONFIG_EXPVAR_PORT", 6062),
 };
 
 // Every URL this module polls. probe.js already suppresses these at the call site; this is the public half,
@@ -153,6 +156,26 @@ export const AGENTS = [
 		exitHint:
 			"system-probe loads eBPF programs, which needs root or CAP_SYS_ADMIN and a kernel it has an " +
 			"object for. An immediate non-zero exit is usually one of those two.",
+	},
+	{
+		kind: "process",
+		name: "datadog-process-agent",
+		title: "process-agent",
+		shipsAs: "process-agent",
+		optional: true,
+		// Follows system-probe rather than taking a flag of its own. It exists here to ship what
+		// system-probe collects, and on a node with no system-probe it would run the same `process` and
+		// `rtprocess` checks the core agent already runs, twice.
+		enabled: (probes) => probes.systemProbe,
+		args: (paths) => [
+			"--cfgpath",
+			paths.runtimeDir,
+			"--sysprobe-config",
+			paths.sysprobeConfigFile,
+		],
+		exitHint:
+			"process-agent is the only flavor that runs the connections check, so it needs the same " +
+			"system-probe config the core agent is pointed at.",
 	},
 	{
 		kind: "security",

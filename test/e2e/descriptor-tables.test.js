@@ -199,7 +199,13 @@ test("the agent version is pinned in the repo, not resolved from the network", a
 test("the table ships the four binaries the agent is, not the two it was", () => {
 	assert.deepEqual(
 		BINARIES.map((b) => b.shipsAs).sort(),
-		["datadog-agent", "security-agent", "system-probe", "trace-agent"],
+		[
+			"datadog-agent",
+			"process-agent",
+			"security-agent",
+			"system-probe",
+			"trace-agent",
+		],
 		"a binary left out of this table is a Datadog capability the package cannot deliver"
 	);
 });

@@ -109,6 +109,10 @@ function renderDatadogYaml(paths, ports) {
 		"process_config:",
 		"  process_collection:",
 		"    enabled: true",
+		"  # process-agent's own expvar and log, which the core agent ignores and process-agent reads from",
+		"  # this same file. Pinned for the same reason as the others: a probe reads the port this resolved.",
+		`  expvar_port: ${ports.processExpvar}`,
+		`  log_file: ${yamlString(paths.processLog)}`,
 		"apm_config:",
 		"  enabled: true",
 		`  receiver_port: ${ports.receiver}`,
@@ -163,6 +167,7 @@ function renderLogSources(harperLog, paths) {
 		// Tailed by path, whether or not the file exists yet: the logs agent picks one up when it appears,
 		// so a node that turns system-probe on later needs no config change to see its log.
 		...source(paths.sysprobeLog, "datadog-system-probe", "datadog-agent"),
+		...source(paths.processLog, "datadog-process-agent", "datadog-agent"),
 		...source(paths.securityLog, "datadog-security-agent", "datadog-agent"),
 		...source(paths.reaperLog, "datadog-agent-reaper", "harper-process-guard"),
 		"",
@@ -223,6 +228,7 @@ export function prepareRuntime(componentDir, { ports, log, ebpfDir }) {
 		traceLog: join(runtimeDir, "logs", "trace-agent.log"),
 		sysprobeLog: join(runtimeDir, "logs", "system-probe.log"),
 		securityLog: join(runtimeDir, "logs", "security-agent.log"),
+		processLog: join(runtimeDir, "logs", "process-agent.log"),
 		// The core agent takes `--sysprobecfgpath <directory>` and system-probe takes `-c <file>`, so both
 		// spellings of the same file are stated here rather than rebuilt at each call site.
 		sysprobeConfigDir: runtimeDir,

@@ -29,7 +29,7 @@ describe("where each binary comes from", () => {
 		// match the kernels an operator runs. Datadog precompiles 26 of them; a build runner cannot.
 		assert.deepEqual(
 			BINARIES.filter((b) => b.from === "release").map((b) => b.shipsAs),
-			["system-probe", "security-agent"]
+			["system-probe", "process-agent", "security-agent"]
 		);
 	});
 
@@ -107,7 +107,7 @@ describe("where each binary comes from", () => {
 		const linux = TARGETS.find((t) => t.os === "linux");
 		assert.deepEqual(
 			extractedFor(linux).map((b) => b.shipsAs),
-			["system-probe", "security-agent"]
+			["system-probe", "process-agent", "security-agent"]
 		);
 	});
 });

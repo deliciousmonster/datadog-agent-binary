@@ -216,6 +216,7 @@ test("the runtime tree comes from Harper, not from a variable this package inven
 			"agent.log",
 			"trace-agent.log",
 			"system-probe.log",
+			"process-agent.log",
 			"security-agent.log",
 			"reaper.log",
 		];

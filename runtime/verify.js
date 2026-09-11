@@ -201,6 +201,48 @@ async function verifySecurityAgent(state, { paths }) {
 	};
 }
 
+/**
+ * Prove process-agent is doing the one thing it was shipped for: shipping what system-probe collects.
+ *
+ * Not "is it up". The core agent already runs the `process` and `rtprocess` checks, so a process-agent
+ * that starts and ships nothing extra is indistinguishable from not having it, and that is precisely the
+ * state this package was in before: `network_tracer` loaded, `Connections Queue length: 0`. The evidence
+ * is its expvar, which carries the enabled check list.
+ */
+async function verifyProcessAgent(state, { paths, ports }) {
+	const url = expvarUrl(ports.processExpvar);
+	const vars = parseJson(await pollAgent(url, state));
+	if (!vars) {
+		return {
+			ok: false,
+			detail:
+				`nothing answering ${url} identified itself as a process-agent, so nothing is shipping the ` +
+				`connections system-probe collects.${exitDetail(state)} Read ${paths.processLog}`,
+		};
+	}
+	// The whole reason it is here. `connections` absent means eBPF programs collecting into nothing.
+	// Nested under `process_agent`, not at the top level: read from the root it comes back empty on a
+	// process-agent that is shipping perfectly well, which is a verifier that fails an agent for the
+	// thing it is doing.
+	const checks = JSON.stringify(vars.process_agent?.enabled_checks ?? "");
+	if (!checks.includes("connections")) {
+		return {
+			ok: false,
+			detail:
+				`process-agent is up and its enabled checks are ${checks}, which does not include ` +
+				`connections. system-probe's network data has no shipper, which is the state shipping this ` +
+				`binary was meant to end. Check network_config.enabled in ${paths.sysprobeConfigFile}`,
+		};
+	}
+	const held = heldPid(state);
+	return {
+		ok: true,
+		detail:
+			`process-agent runs the connections check${held === null ? "" : ` as pid ${held}`}, so what ` +
+			`system-probe collects has somewhere to go`,
+	};
+}
+
 // A supervisor that never started it has nothing to verify: both verifiers would poll on, and read whatever
 // else holds the port. Strictly false, because a caller that reports no `started` field does have a process.
 const notStarted = (state) =>
@@ -221,6 +263,7 @@ export const verifyLaunch = (agent, state, context) => {
 	const byKind = {
 		trace: verifyTraceAgent,
 		core: verifyCoreAgent,
+		process: verifyProcessAgent,
 		sysprobe: verifySystemProbe,
 		security: verifySecurityAgent,
 	};

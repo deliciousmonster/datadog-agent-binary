@@ -65,6 +65,7 @@ export const RELEASE_ARTIFACTS: Readonly<Record<string, ReleaseArtifact>> = {
 /** Where a binary sits inside the unpacked .deb, relative to `opt/datadog-agent/`. */
 export const RELEASE_PATHS: Readonly<Record<string, string>> = {
 	"trace-agent": "embedded/bin/trace-agent",
+	"process-agent": "embedded/bin/process-agent",
 	"system-probe": "embedded/bin/system-probe",
 	"security-agent": "embedded/bin/security-agent",
 };

@@ -131,9 +131,10 @@ test("NEGATIVE: a compression this cannot read is refused rather than guessed at
 	assert.throws(() => tarFlagFor("data.tar.lz4"), /compression/);
 });
 
-test("wants system-probe, security-agent and the objects on Linux", () => {
+test("wants every lifted binary and the objects on Linux", () => {
 	const wanted = wantedFrom(findTarget("linux-arm64"));
 	assert.deepEqual(wanted.binaries.map((b) => b.binary.shipsAs).sort(), [
+		"process-agent",
 		"security-agent",
 		"system-probe",
 	]);

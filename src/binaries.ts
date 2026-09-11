@@ -226,6 +226,27 @@ export const BINARIES: readonly AgentBinary[] = [
 		buildOn: ["macos", "windows"],
 	},
 	{
+		shipsAs: "process-agent",
+		from: "release",
+		task: "process-agent.build",
+		builtAt: "bin/process-agent/process-agent",
+		mandatoryArgs: [],
+		argsOverride: "DD_PROCESS_AGENT_BUILD_ARGS",
+		requiredSymbol: "datadog-agent/cmd/process-agent",
+		optional: true,
+		// The shipper for everything system-probe collects, and the reason it is here at all. The core
+		// agent runs the `process` and `rtprocess` checks itself, so Live Processes needs nothing extra,
+		// but the connections check refuses to run anywhere else: `IsEnabled()` in
+		// pkg/process/checks/net.go:136 opens with `if flavor.GetFlavor() != flavor.ProcessAgent return
+		// false`, before it looks at network_config.enabled at all. Measured on a live node 2026-09-10:
+		// system-probe had network_tracer loaded and the core agent reported `Connections Queue length: 0`
+		// and `Connections Bytes enqueued: 0`. eBPF programs collecting into nothing.
+		//
+		// Lifted on Linux and built elsewhere, the same split as system-probe and for the same reason: the
+		// extraction source is a Debian package.
+		buildOn: ["macos", "windows"],
+	},
+	{
 		shipsAs: "security-agent",
 		from: "release",
 		task: "security-agent.build",

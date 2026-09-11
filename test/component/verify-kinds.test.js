@@ -38,7 +38,7 @@ const verdictFor = (kind) =>
 test("each kind is verified against the thing that proves it is that agent", async () => {
 	const detail = Object.fromEntries(
 		await Promise.all(
-			["trace", "core", "sysprobe", "security"].map(async (kind) => [
+			["trace", "core", "process", "sysprobe", "security"].map(async (kind) => [
 				kind,
 				(await verdictFor(kind)).detail,
 			])
@@ -56,7 +56,7 @@ test("each kind is verified against the thing that proves it is that agent", asy
 test("NEGATIVE: no kind borrows another kind's evidence", async () => {
 	const detail = Object.fromEntries(
 		await Promise.all(
-			["trace", "core", "sysprobe", "security"].map(async (kind) => [
+			["trace", "core", "process", "sysprobe", "security"].map(async (kind) => [
 				kind,
 				(await verdictFor(kind)).detail,
 			])
@@ -77,13 +77,13 @@ test("NEGATIVE: no kind borrows another kind's evidence", async () => {
 // never serves. Adding a fifth agent should fail loudly here, not report the new agent as broken.
 test("NEGATIVE: an unknown kind is refused rather than routed to a verifier that does not fit", async () => {
 	const verdict = await verifyLaunch(
-		{ kind: "process", title: "process-agent" },
+		{ kind: "cluster", title: "cluster-agent" },
 		{ ...dead },
 		CONTEXT
 	);
 	assert.equal(verdict.ok, false);
 	assert.match(verdict.detail, /knows how to verify/);
-	assert.match(verdict.detail, /process/);
+	assert.match(verdict.detail, /cluster/);
 	assert.doesNotMatch(
 		verdict.detail,
 		/expvar|debug\/vars/,

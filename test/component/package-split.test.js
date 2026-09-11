@@ -108,7 +108,7 @@ test("every target publishes a probe package, because system-probe exists on eve
 	);
 	assert.deepEqual(
 		packagesFor(findTarget("macos-arm64"))[1].binaries.map((b) => b.shipsAs),
-		["system-probe"],
+		["system-probe", "process-agent"],
 		"macOS has no security-agent worth shipping: there is no eventmonitor_darwin.go for it to talk to"
 	);
 });
