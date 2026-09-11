@@ -2,7 +2,9 @@
 
 [![Test](https://github.com/deliciousmonster/datadog-agent-binary/actions/workflows/test.yml/badge.svg)](https://github.com/deliciousmonster/datadog-agent-binary/actions/workflows/test.yml)
 
-A Harper v5 plugin that runs the Datadog core agent and trace-agent beside a node, so host metrics and the spans your application's `dd-trace` produces reach Datadog. The agents ship as prebuilt binaries, one npm package per platform; npm installs the one matching the host, and no install script runs.
+A Harper v5 plugin that runs the Datadog agents beside a node, so host metrics and the spans your application's `dd-trace` produces reach Datadog. The agents ship as prebuilt binaries, one npm package per platform; npm installs the one matching the host, and no install script runs.
+
+Five binaries ship. The core agent and the trace-agent start on every node. system-probe, process-agent and security-agent are opt-in, in a package installed by name.
 
 ## What it does
 
@@ -45,13 +47,32 @@ Configuration is the environment; `datadog.yaml` is rewritten on every start, so
 | `DD_EXPVAR_PORT`, `DD_APM_DEBUG_PORT` | The agents' expvar ports, 5000 and 5012. Verification reads them; `0` turns one off and verification refuses. |
 | `DD_LOGS_ENABLED` | `true` ships Harper's own log, `<rootPath>/log/hdb.log`, as service `harper`. Off by default. |
 
-`GET /DatadogStatus/`, under Harper's own auth, reports which supervision is in charge, whether the API key is set, whether each agent verified and why not, and how far a span got: `delivery.verdict` is `delivering`, `rejected`, `traces-unconfirmed` or `idle`. Its counters are the trace-agent's own one-minute window, so read it twice.
+`GET /DatadogStatus/`, under Harper's own auth, reports which supervision is in charge, whether the API key is set, whether each agent verified and why not, and how far a span got: `delivery.verdict` is `delivering`, `rejected`, `traces-unrefuted`, `traces-unconfirmed`, `not-delivering` or `idle`. Its counters are the trace-agent's own one-minute window, so read it twice.
+
+The plugin also publishes `system.processes.*` for the processes it spawned and for Harper itself, which is the namespace the Python `process` check owns and this build has no Python to run. `DD_HARPER_PROCESS_METRICS_ENABLED=false` turns it off, `DD_HARPER_PROCESS_METRICS_PREFIX` moves it somewhere private, and a live `conf.d/process.d/conf.yaml` makes it stand down on its own.
 
 Everything the plugin writes sits under `<rootPath>/datadog/datadog-agent-binary/`: `datadog.yaml`, `conf.d/`, the agents' logs in `logs/`, and the locks in `pids/`. A lock a killed node left behind is safe to delete.
 
 ## Platforms
 
 Linux x86_64 and arm64, macOS arm64, Windows x86_64. Windows arm64 waits on Chocolatey; macOS x86_64 has no GitHub runner left to build on.
+
+## Opt-in: system-probe and security-agent
+
+Neither runs unless asked for, and their binaries are in a package npm does not install on its own. They are
+privileged and inert until a host is configured for them, so charging every install 145 MB for them is the
+cost the split refuses.
+
+```sh
+npm install @deliciousmonster/datadog-agent-binary @deliciousmonster/datadog-agent-binary-probe-linux-x86_64
+```
+
+Then `DD_SYSTEM_PROBE_ENABLED=true`, and `DD_RUNTIME_SECURITY_CONFIG_ENABLED=true` for the security agent.
+`DD_NETWORK_CONFIG_ENABLED` and `DD_SERVICE_MONITORING_CONFIG_ENABLED` turn on NPM and USM separately,
+because one watches every connection on the host and the other parses their traffic. What a node needs
+before system-probe can load a single program is four things it mostly cannot fix itself; `AGENTS.md` lists
+them, and `GET /DatadogStatus/` reports which one is missing under `probes.blockers` rather than restarting
+a process that exits every time.
 
 ## To do
 
