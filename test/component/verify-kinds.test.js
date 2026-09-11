@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { verifyLaunch } from "../../runtime/verify.js";
+import { verifyLaunch } from "../../runtime/component.js";
 
 const PATHS = {
 	coreLog: "/logs/agent.log",

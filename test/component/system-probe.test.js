@@ -12,10 +12,10 @@ import assert from "node:assert/strict";
 
 import {
 	probePrivilege,
+	probeSettings,
 	renderSecurityAgentYaml,
 	renderSystemProbeYaml,
-	settings,
-} from "../../runtime/system-probe.js";
+} from "../../runtime/datadog.js";
 
 const PATHS = {
 	sysprobeSocket: "/run/sysprobe.sock",
@@ -29,7 +29,7 @@ const valueOf = (yaml, key) =>
 	new RegExp(`^\\s*${key}:\\s*(.+?)\\s*$`, "m").exec(yaml)?.[1];
 
 test("both agents are off unless something turned them on", () => {
-	const resolved = settings({});
+	const resolved = probeSettings({});
 	assert.equal(resolved.systemProbe, false);
 	assert.equal(resolved.security, false);
 	for (const [name, on] of Object.entries(resolved.modules))
@@ -41,18 +41,24 @@ test("both agents are off unless something turned them on", () => {
 test("NEGATIVE: a value that is not an explicit truth leaves system-probe off", () => {
 	for (const value of ["", "maybe", "TRUE ", "0", "no", undefined])
 		assert.equal(
-			settings({ DD_SYSTEM_PROBE_ENABLED: value }).systemProbe,
+			probeSettings({ DD_SYSTEM_PROBE_ENABLED: value }).systemProbe,
 			false,
 			`DD_SYSTEM_PROBE_ENABLED=${JSON.stringify(value)} turned it on`
 		);
-	assert.equal(settings({ DD_SYSTEM_PROBE_ENABLED: "true" }).systemProbe, true);
-	assert.equal(settings({ DD_SYSTEM_PROBE_ENABLED: "TRUE" }).systemProbe, true);
+	assert.equal(
+		probeSettings({ DD_SYSTEM_PROBE_ENABLED: "true" }).systemProbe,
+		true
+	);
+	assert.equal(
+		probeSettings({ DD_SYSTEM_PROBE_ENABLED: "TRUE" }).systemProbe,
+		true
+	);
 });
 
 // NPM watches every connection on the host and USM parses their traffic. Either is a decision on its own,
 // and Datadog's own default leaves both off, so turning system-probe on must not turn them on with it.
 test("NEGATIVE: system-probe alone turns on neither network nor service monitoring", () => {
-	const resolved = settings({ DD_SYSTEM_PROBE_ENABLED: "true" });
+	const resolved = probeSettings({ DD_SYSTEM_PROBE_ENABLED: "true" });
 	assert.equal(resolved.modules.networkMonitoring, false);
 	assert.equal(resolved.modules.serviceMonitoring, false);
 	// Discovery follows system-probe, because it is the module the core agent asks for unprompted.
@@ -60,7 +66,7 @@ test("NEGATIVE: system-probe alone turns on neither network nor service monitori
 });
 
 test("a module cannot be on while system-probe is off, whatever its own flag says", () => {
-	const resolved = settings({
+	const resolved = probeSettings({
 		DD_NETWORK_CONFIG_ENABLED: "true",
 		DD_SERVICE_MONITORING_CONFIG_ENABLED: "true",
 		DD_DISCOVERY_ENABLED: "true",
@@ -71,7 +77,7 @@ test("a module cannot be on while system-probe is off, whatever its own flag say
 });
 
 test("discovery can be turned off on a node that runs system-probe for something else", () => {
-	const resolved = settings({
+	const resolved = probeSettings({
 		DD_SYSTEM_PROBE_ENABLED: "true",
 		DD_DISCOVERY_ENABLED: "false",
 		DD_NETWORK_CONFIG_ENABLED: "true",
@@ -82,14 +88,14 @@ test("discovery can be turned off on a node that runs system-probe for something
 
 // The whole point of writing the file on a node that runs neither agent.
 test("with everything off, the config still turns discovery off", () => {
-	const yaml = renderSystemProbeYaml(PATHS, settings({}), null);
+	const yaml = renderSystemProbeYaml(PATHS, probeSettings({}), null);
 	assert.match(yaml, /^discovery:$/m);
 	assert.equal(valueOf(yaml.split("discovery:")[1], "enabled"), "false");
 	assert.equal(valueOf(yaml, "sysprobe_socket"), '"/run/sysprobe.sock"');
 });
 
 test("NEGATIVE: with everything off, nothing in the config claims to be enabled", () => {
-	const yaml = renderSystemProbeYaml(PATHS, settings({}), null);
+	const yaml = renderSystemProbeYaml(PATHS, probeSettings({}), null);
 	const enabled = [...yaml.matchAll(/^\s*enabled:\s*(\S+)\s*$/gm)].map(
 		(m) => m[1]
 	);
@@ -112,7 +118,7 @@ test("NEGATIVE: with everything off, nothing in the config claims to be enabled"
 test("bpf_dir names the ebpf directory, not the directory holding it", () => {
 	const yaml = renderSystemProbeYaml(
 		PATHS,
-		settings({ DD_SYSTEM_PROBE_ENABLED: "true" }),
+		probeSettings({ DD_SYSTEM_PROBE_ENABLED: "true" }),
 		"/n/m/pkg/share/system-probe"
 	);
 	assert.equal(valueOf(yaml, "bpf_dir"), '"/n/m/pkg/share/system-probe/ebpf"');
@@ -128,7 +134,7 @@ test("bpf_dir names the ebpf directory, not the directory holding it", () => {
 test("the prebuilt objects are allowed to load, or shipping them buys nothing", () => {
 	const yaml = renderSystemProbeYaml(
 		PATHS,
-		settings({ DD_SYSTEM_PROBE_ENABLED: "true" }),
+		probeSettings({ DD_SYSTEM_PROBE_ENABLED: "true" }),
 		"/n/m/pkg/share/system-probe"
 	);
 	assert.equal(valueOf(yaml, "allow_prebuilt_fallback"), "true");
@@ -137,7 +143,7 @@ test("the prebuilt objects are allowed to load, or shipping them buys nothing", 
 test("NEGATIVE: no bpf_dir key is written when no probe package supplied one", () => {
 	const yaml = renderSystemProbeYaml(
 		PATHS,
-		settings({ DD_SYSTEM_PROBE_ENABLED: "true" }),
+		probeSettings({ DD_SYSTEM_PROBE_ENABLED: "true" }),
 		null
 	);
 	for (const key of ["bpf_dir", "btf_path", "allow_prebuilt_fallback"])
@@ -151,7 +157,7 @@ test("NEGATIVE: no bpf_dir key is written when no probe package supplied one", (
 test("the security-agent config names its own log and socket, not the core agent's", () => {
 	const yaml = renderSecurityAgentYaml(
 		PATHS,
-		settings({ DD_RUNTIME_SECURITY_CONFIG_ENABLED: "true" })
+		probeSettings({ DD_RUNTIME_SECURITY_CONFIG_ENABLED: "true" })
 	);
 	assert.equal(valueOf(yaml, "log_file"), '"/logs/security-agent.log"');
 	assert.equal(valueOf(yaml, "socket"), '"/run/runtime-security.sock"');
@@ -163,7 +169,7 @@ test("the security-agent config names its own log and socket, not the core agent
 test("NEGATIVE: runtime security does not turn compliance scanning on with it", () => {
 	const yaml = renderSecurityAgentYaml(
 		PATHS,
-		settings({ DD_RUNTIME_SECURITY_CONFIG_ENABLED: "true" })
+		probeSettings({ DD_RUNTIME_SECURITY_CONFIG_ENABLED: "true" })
 	);
 	const compliance = yaml.split("compliance_config:")[1];
 	assert.ok(

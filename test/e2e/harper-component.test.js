@@ -27,19 +27,19 @@ const { currentTarget } = require(
 const { BINARIES } = require(
 	path.join(REPO_ROOT, "dist", "src", "binaries.js")
 );
-const { resolveBinary } = await import("../../runtime/binary.js");
+const { resolveBinary } = await import("../../runtime/datadog.js");
 
 const platform = currentTarget();
 const platformName = platform.name; // e.g. linux-x86_64
 const binaryName = `${BINARIES[0].shipsAs}${platform.exe}`; // datadog-agent[.exe]
-// runtime/binary.js names the file it looked for, suffix and all, so an assertion on that message has to
+// the resolver names the file it looked for, suffix and all, so an assertion on that message has to
 // carry the same suffix or it only ever holds where the platform has none.
 const traceBinaryName = `${BINARIES[1].shipsAs}${platform.exe}`; // trace-agent[.exe]
 
 const TRACE_AGENT = "datadog-trace-agent";
 const CORE_AGENT = "datadog-agent";
 
-// runtime/binary.js resolves the optional platform package by specifier, so it must live in this repo's
+// runtime/datadog.js resolves the optional platform package by specifier, so it must live in this repo's
 // node_modules- exactly where it would sit as a sibling dependency inside a Harper app's tree.
 const platformPkgName = `@deliciousmonster/datadog-agent-binary-${platformName}`;
 const platformPkgDir = path.join(REPO_ROOT, "node_modules", platformPkgName);

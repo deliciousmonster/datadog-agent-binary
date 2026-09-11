@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { guardDescriptors } from "../../runtime/supervisor.js";
+import { guardDescriptors } from "@deliciousmonster/harper-process-guard";
 import { loadComponent } from "../support/component.js";
 
 const { AGENTS } = await loadComponent();

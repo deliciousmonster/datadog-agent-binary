@@ -13,9 +13,12 @@ import { binariesFor, binaryFilename } from "../dist/src/binaries.js";
 import { pinnedVersion } from "../dist/src/downloader.js";
 import { treeAt } from "../dist/src/layout.js";
 import { currentTarget } from "../dist/src/targets.js";
-import { debugVarsUrl } from "../runtime/delivery.js";
-import { writeConfigFiles } from "../runtime/config.js";
-import { receiverInfoUrl, verifyLaunch } from "../runtime/verify.js";
+import {
+	debugVarsUrl,
+	receiverInfoUrl,
+	writeConfigFiles,
+} from "../runtime/datadog.js";
+import { verifyLaunch } from "../runtime/component.js";
 import { REPO_ROOT } from "./paths.js";
 import { freshPorts } from "../test/support/loopback.js";
 import { FAKE_API_KEY } from "../test/support/traffic.js";
@@ -36,7 +39,7 @@ const tracer = require('dd-trace').init({ startupLogs: false, flushInterval: 0 }
 tracer.startSpan('smoke-test.span').finish();
 `;
 
-/** Spawns `binPath` and reports its exit in the shape runtime/verify.js's verifyLaunch expects. */
+/** Spawns `binPath` and reports its exit in the shape runtime/component.js's verifyLaunch expects. */
 function spawnAgent(binPath, args) {
 	const child = spawn(binPath, args, { stdio: ["ignore", "pipe", "pipe"] });
 	const state = { pid: child.pid, exited: false, code: null, signal: null };

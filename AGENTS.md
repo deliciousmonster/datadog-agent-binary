@@ -4,7 +4,11 @@ For whoever changes this repository. `README.md` is for whoever installs it.
 
 ## Layout
 
-- `resources.js`, `runtime/`: the plugin Harper loads. `runtime/binary.js` resolves the binaries; `PACKAGE_NAME` there is a literal, never derived, because a deployed component's nearest `package.json` can carry any name. `runtime/supervisor.js` starts and watches the agents, through Harper's `scope.processes` where a build carries it and through `@deliciousmonster/harper-process-guard` otherwise.
+- `resources.js`: 14 lines. The process names and the compartment globals, and nothing else. Harper compiles only this file, so the constrained `spawn` and `logger` are read here and handed down; a module that imports them itself gets the unconstrained ones.
+- `runtime/datadog.js`: what Datadog is on this node. The platform packages that carry the binaries, the process table keyed by binary filename, the five ports, every config file rendered. `PACKAGE_NAME` is a literal, never derived, because a deployed component's nearest `package.json` can carry any name. Nothing in it reads anything back.
+- `runtime/component.js`: what this component does with that. Start the processes, prove each one does its job, read back whether anything reached Datadog, measure what the processes cost, answer `/DatadogStatus/`. Supervision is `@deliciousmonster/harper-process-guard`'s `supervisorFor`, which takes Harper's `scope.processes` where a build carries it and the guard's own path otherwise.
+
+Everything that is about supervising a process rather than about Datadog is in the guard: the lock, the reaper, the binary resolver, the pollers, Harper's root path, the port reader, the per-thread claim, the verdict staleness. Two files here is the whole plugin.
 - `src/`: the TypeScript build CLI that clones and compiles Datadog's agent. Not in the tarball; it needs `dda`, `go` and `pip`.
 - `scripts/`: packaging and gates: `create-platform-packages.js`, `update-optional-deps.js`, `verify-package.js`, `smoke-test-binaries.js`, `windows-gate.mjs` with `windows-gate-checks.mjs`.
 - `conf.d/`, `config.yaml`: shipped as written; the core checks ship or the core agent collects nothing.
@@ -46,7 +50,7 @@ wanted without the other, and Datadog leaves both off too.
 
 Off is the default here and on is the default for the process series, and the asymmetry is deliberate.
 These cost privileges: system-probe loads eBPF programs, which needs root or CAP_SYS_ADMIN and an object
-matching the running kernel. `eBPFPrivilege()` in `runtime/system-probe.js` reads `CapEff` out of
+matching the running kernel. `probePrivilege()` in `runtime/datadog.js` reads `CapEff` out of
 `/proc/self/status` and reports what is missing at WARN, rather than letting the supervisor restart a
 process that exits every time with `operation not permitted`. It reports; it does not refuse. The binary is
 the authority on what it can do.
@@ -56,7 +60,7 @@ come with them. `resolveEbpfDir()` asks that package where they landed and the a
 `system_probe_config.bpf_dir`. Without it system-probe starts, answers `version`, and loads not one
 program, which is the worst outcome available because everything downstream then reports healthy.
 
-`runtime/config.js` writes `system-probe.yaml` on every start whether or not either agent runs, and that
+`runtime/datadog.js` writes `system-probe.yaml` on every start whether or not either agent runs, and that
 file is also the fix for the log noise below. The core agent is passed `--sysprobecfgpath <runtimeDir>`,
 system-probe `-c <runtimeDir>/system-probe.yaml`, and security-agent both its own config and
 `--sysprobe-config`, so all three read one file and cannot disagree about the socket.
@@ -112,7 +116,7 @@ rather than a long path.
 probe package (`-probe-<platform>`) carries the lifted ones plus the eBPF objects and is deliberately not
 an optionalDependency: npm installs an optionalDependency on every host whose os and cpu match, and
 charging 145 MB to nodes that never turn system-probe on is the cost the split refuses. An operator who
-wants them installs one by name. `runtime/binary.js` asks both packages for every binary, and reports an
+wants them installs one by name. The resolver asks both packages for every binary, and reports an
 absent probe package as the opt-in it is rather than as a broken install.
 
 ### What a node needs before system-probe can load a program

@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 
-import { supervisorFor } from "../../runtime/supervisor.js";
+import { supervisorFor } from "../../runtime/component.js";
 import { withTempDir } from "../support/sandbox.js";
 
 const SILENT = { info: () => {}, warn: () => {}, error: () => {} };
@@ -33,7 +33,10 @@ test("NEGATIVE: an agent that never started answers the same questions a running
 			{ log: SILENT, spawn: spawnThatBreaksGuard }
 		);
 		const { processes } = await supervisor.start([AGENT], {
-			runtime: { paths: { pidDir, reaperLog: join(pidDir, "reaper.log") } },
+			// Flat, because the guard supervises processes and knows nothing about a runtime tree. The
+			// consumer reads its own paths out and hands over only what a supervisor needs.
+			pidDir,
+			reaperLog: join(pidDir, "reaper.log"),
 			configFiles: {},
 			fingerprintParts: ["status-shape-test"],
 		});
@@ -70,7 +73,7 @@ test("Harper's own reaper is shaped before it reaches the status, not copied int
 		const { reaper } = await supervisor.start(
 			[{ ...AGENT, verify: async () => ({ ok: true, detail: "" }) }],
 			{
-				runtime: { paths: { pidDir: join(root, "pids") } },
+				pidDir: join(root, "pids"),
 				configFiles: {},
 				fingerprintParts: ["status-shape-test"],
 			}

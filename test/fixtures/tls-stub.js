@@ -1,6 +1,7 @@
 // The one thing a plaintext stub cannot stand in for: the trace-agent serves its expvar under a self-signed
-// IPC certificate, and every probe that reads it goes over https. Without this the TLS half of probe.js is
-// exercised by nothing, which is how a response that starts and then stalls got as far as a release.
+// IPC certificate, and every probe that reads it goes over https. The poller itself is the guard's and its own
+// suite owns the TLS edges, including the stalled response that got as far as a release; what this covers is a
+// fixture standing in for the real trace-agent while this component reads a delivery signal off it.
 
 import https from "node:https";
 
@@ -45,18 +46,5 @@ export function createTlsStub({ body = {}, answers = "/debug/vars" } = {}) {
 		}
 		response.writeHead(200, head);
 		response.end(JSON.stringify(typeof body === "function" ? body() : body));
-	});
-}
-
-/**
- * Headers, part of a body, then nothing, on every request: the socket stays open and idle. A wedged agent
- * does this, and it is the one case a request-level timeout cannot see, since the request is long finished.
- * `held` collects the responses so a caller's teardown can end them.
- */
-export function createStallingTlsStub(held) {
-	return https.createServer(CREDENTIALS, (request, response) => {
-		response.writeHead(200, { "content-type": "application/json" });
-		response.write('{"receiver":');
-		held.push(response);
 	});
 }

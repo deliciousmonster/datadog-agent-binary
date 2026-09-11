@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { createRequire } from "node:module";
 
 import { REPO_ROOT } from "../support/generator.js";
 import { findFreePort } from "../support/loopback.js";
@@ -108,7 +109,11 @@ test("NEGATIVE: a quiet boot exports no span for the plugin's own probes or its 
 			HTTPS_PROBE_URL: httpsProbeUrl,
 			DELIVERY_PORT: String(deliveryPort),
 			CONTROL_URL: `http://127.0.0.1:${controlPort}/control`,
-			PROBE_FILE: path.join(REPO_ROOT, "runtime", "probe.js"),
+			// The guard's, resolved from this repo's node_modules: the polling moved there, and what the plugin
+			// still owns is the suppression that importing resources.js installs around it.
+			PROBE_FILE: createRequire(path.join(REPO_ROOT, "package.json")).resolve(
+				"@deliciousmonster/harper-process-guard"
+			),
 			RESOURCES_FILE: path.join(REPO_ROOT, "resources.js"),
 		})
 	);

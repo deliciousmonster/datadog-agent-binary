@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { agentsFor, KNOWN } from "../../runtime/agents.js";
+import { KNOWN, agentsFor } from "../../runtime/datadog.js";
 import { loadComponent } from "../support/component.js";
 
 const source = readFileSync(

@@ -19,7 +19,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import { PACKAGE_NAME, resolveBinary } from "../../runtime/binary.js";
+import { PACKAGE_NAME, resolveBinary } from "../../runtime/datadog.js";
 import { REPO_ROOT } from "../support/generator.js";
 import { findFreePort } from "../support/loopback.js";
 import {
@@ -377,7 +377,7 @@ async function bootHarperInto(workDir, row, realHome, onSpawn) {
 				)
 			);
 
-	// Confirmed against this repo's own runtime/config.js: HOME is what os.homedir() (and so
+	// Confirmed against this repo's own runtime/datadog.js: HOME is what os.homedir() (and so
 	// getPropsFilePath) resolves from, so this is what keeps `install` off the operator's real
 	// ~/.harperdb/hdb_boot_properties.file.
 	console.log(`[live] HOME for this boot: ${home} (real HOME: ${realHome})`);

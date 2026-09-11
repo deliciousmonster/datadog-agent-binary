@@ -17,7 +17,7 @@ import {
 	forgetStatsHistory,
 	recallStatsWindow,
 	sharedStatsStore,
-} from "../../runtime/delivery.js";
+} from "../../runtime/component.js";
 
 const snapshot = ({ stats = {}, spans = 2483 } = {}) => ({
 	version: { Version: "7.82.1" },

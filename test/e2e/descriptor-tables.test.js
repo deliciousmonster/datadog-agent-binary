@@ -107,7 +107,7 @@ test("an unknown binary name throws rather than returning a path that does not e
 });
 
 // Python is excluded and settled: not because it cannot be shipped, which was disproven, but because
-// `runtime/process-metrics.js` produces the one family a Harper node wants and nothing else in
+// `runtime/component.js` produces the one family a Harper node wants and nothing else in
 // integrations-core is worth 634 MB a platform. systemd left this flag, because it rode in on python's
 // coat-tails with no measurement recorded for it. `src/binaries.ts` carries both halves.
 test("the override adds flags and cannot drop the python exclusion", () => {

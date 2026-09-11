@@ -8,72 +8,21 @@ import { describe, it } from "node:test";
 import { join } from "node:path";
 
 import {
-	aggregate,
-	applyPatterns,
-	claimEmitter,
 	DEFAULT_PREFIX,
 	PRIVATE_PREFIX,
-	claimStaleMs,
+	aggregate,
+	applyPatterns,
 	dogstatsdLines,
 	processSeries,
-	readProcess,
-	selfProcess,
 	sendDogstatsd,
-	settings,
+	seriesSettings,
 	standDownFor,
 	startProcessSeries,
-} from "../../runtime/process-metrics.js";
+} from "../../runtime/component.js";
 import { loadComponent } from "../support/component.js";
 
 const status = (rssKb, threads) =>
 	`Name:\tnode\nState:\tS (sleeping)\nThreads:\t${threads}\nVmRSS:\t${rssKb} kB\nVmSize:\t9999 kB\n`;
-
-describe("reading one process", () => {
-	it("reads resident bytes and threads out of /proc on linux", () => {
-		const got = readProcess(4242, "linux", () => status(2048, 7));
-		assert.deepEqual(got, { rssBytes: 2048 * 1024, threads: 7 });
-	});
-
-	it("NEGATIVE: answers null off linux rather than guessing", () => {
-		// There is no /proc on macOS or Windows, and the alternatives are spawning `ps` on a schedule, which
-		// Harper's constrained spawn would make an operator allowlist, or a native addon, which would end the
-		// package's no-install-scripts property. Absent beats wrong.
-		for (const platform of ["darwin", "win32", "freebsd"])
-			assert.equal(
-				readProcess(4242, platform, () => status(2048, 7)),
-				null
-			);
-	});
-
-	it("NEGATIVE: answers null when the process went away mid-read", () => {
-		const gone = () => {
-			throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-		};
-		assert.equal(readProcess(4242, "linux", gone), null);
-	});
-
-	it("NEGATIVE: answers null for a status with no VmRSS, rather than reporting zero", () => {
-		// A kernel thread has no VmRSS. Reporting 0 would drag every average down.
-		assert.equal(
-			readProcess(2, "linux", () => "Name:\tkthreadd\nThreads:\t1\n"),
-			null
-		);
-	});
-
-	it("NEGATIVE: refuses a pid that is not a positive integer", () => {
-		for (const bad of [0, -1, 1.5, NaN, undefined, null, "7"])
-			assert.equal(
-				readProcess(bad, "linux", () => status(1, 1)),
-				null
-			);
-	});
-
-	it("reads this process without /proc at all, which is what covers macOS and Windows", () => {
-		const got = selfProcess();
-		assert.ok(got.rssBytes > 0, "a live Node process has resident memory");
-		assert.equal(typeof got.rssBytes, "number");
-	});
-});
 
 describe("aggregating a named group", () => {
 	const s = (rss, threads = 1) => ({ rssBytes: rss, threads });
@@ -181,13 +130,13 @@ describe("whether it sends at all", () => {
 	// own subject. That puts it with apm_config.enabled and process_config.process_collection.enabled, both
 	// of which this package already renders as booleans.
 	it("is on when nothing says otherwise, because installing the plugin is the ask", () => {
-		assert.equal(settings({}).enabled, true);
+		assert.equal(seriesSettings({}).enabled, true);
 	});
 
 	it("is off only for an explicit falsehood", () => {
 		for (const off of ["false", "FALSE", "0", "no", "off", "Off"])
 			assert.equal(
-				settings({ DD_HARPER_PROCESS_METRICS_ENABLED: off }).enabled,
+				seriesSettings({ DD_HARPER_PROCESS_METRICS_ENABLED: off }).enabled,
 				false,
 				off
 			);
@@ -196,16 +145,17 @@ describe("whether it sends at all", () => {
 	it("NEGATIVE: a typo leaves it on rather than silently stopping the data", () => {
 		for (const typo of ["flase", "", "true", "yes", "1"])
 			assert.equal(
-				settings({ DD_HARPER_PROCESS_METRICS_ENABLED: typo }).enabled,
+				seriesSettings({ DD_HARPER_PROCESS_METRICS_ENABLED: typo }).enabled,
 				true,
 				typo
 			);
 	});
 
 	it("carries Datadog's own default cadence, so the number an operator knows still applies", () => {
-		assert.equal(settings({}).intervalSeconds, 15);
+		assert.equal(seriesSettings({}).intervalSeconds, 15);
 		assert.equal(
-			settings({ DD_HARPER_PROCESS_METRICS_INTERVAL: "60" }).intervalSeconds,
+			seriesSettings({ DD_HARPER_PROCESS_METRICS_INTERVAL: "60" })
+				.intervalSeconds,
 			60
 		);
 	});
@@ -213,7 +163,8 @@ describe("whether it sends at all", () => {
 	it("NEGATIVE: refuses a cadence that is not a positive number", () => {
 		for (const bad of ["0", "-5", "soon", ""])
 			assert.equal(
-				settings({ DD_HARPER_PROCESS_METRICS_INTERVAL: bad }).intervalSeconds,
+				seriesSettings({ DD_HARPER_PROCESS_METRICS_INTERVAL: bad })
+					.intervalSeconds,
 				15,
 				bad
 			);
@@ -288,147 +239,6 @@ describe("where the settings are visible", () => {
 				!new RegExp(`^\\s*${key}\\s*:`, "m").test(rendered),
 				`${key} must not be rendered as an agent setting`
 			);
-	});
-});
-
-describe("which thread sends", () => {
-	// Harper runs many worker threads and every one loads this component. Without arbitration each would
-	// emit the same gauges, and `number` and `mem.rss` would read as the thread count times the truth.
-	// Measured on this node: six status requests came back from five distinct threadIds.
-	const store = () => {
-		let held;
-		return {
-			read: () => {
-				if (held === undefined) throw new Error("ENOENT");
-				return held;
-			},
-			write: (_file, text) => {
-				held = text;
-			},
-			get held() {
-				return held;
-			},
-		};
-	};
-
-	it("the first thread to ask takes an unheld claim", () => {
-		const s = store();
-		assert.equal(
-			claimEmitter({
-				dir: "/d",
-				holder: "a",
-				staleMs: 45_000,
-				now: 1000,
-				...s,
-			}),
-			true
-		);
-		assert.match(s.held, /^a 1000\n$/);
-	});
-
-	it("NEGATIVE: a second thread is refused while the first keeps refreshing", () => {
-		const s = store();
-		claimEmitter({ dir: "/d", holder: "a", staleMs: 45_000, now: 1000, ...s });
-		assert.equal(
-			claimEmitter({
-				dir: "/d",
-				holder: "b",
-				staleMs: 45_000,
-				now: 20_000,
-				...s,
-			}),
-			false,
-			"two emitters would double every gauge for as long as both ran"
-		);
-		assert.equal(
-			claimEmitter({
-				dir: "/d",
-				holder: "a",
-				staleMs: 45_000,
-				now: 20_000,
-				...s,
-			}),
-			true
-		);
-	});
-
-	it("a claim nobody has refreshed is taken over, which is what covers a dead thread", () => {
-		const s = store();
-		claimEmitter({ dir: "/d", holder: "a", staleMs: 45_000, now: 1000, ...s });
-		assert.equal(
-			claimEmitter({
-				dir: "/d",
-				holder: "b",
-				staleMs: 45_000,
-				now: 46_001,
-				...s,
-			}),
-			true
-		);
-		assert.match(s.held, /^b 46001\n$/);
-	});
-
-	it("NEGATIVE: a claim stamped in the future is not treated as expired", () => {
-		// Clock skew between a container and its host, or a claim written by a thread whose clock jumped.
-		// Reading it as stale would hand the series to a second sender while the first is still refreshing.
-		const s = store();
-		claimEmitter({
-			dir: "/d",
-			holder: "a",
-			staleMs: 45_000,
-			now: 9_000_000,
-			...s,
-		});
-		assert.equal(
-			claimEmitter({
-				dir: "/d",
-				holder: "b",
-				staleMs: 45_000,
-				now: 1000,
-				...s,
-			}),
-			false
-		);
-	});
-
-	it("NEGATIVE: an unwritable claim directory refuses rather than letting every thread emit", () => {
-		const s = store();
-		assert.equal(
-			claimEmitter({
-				dir: "/d",
-				holder: "a",
-				staleMs: 45_000,
-				now: 1000,
-				read: s.read,
-				write: () => {
-					throw new Error("EACCES");
-				},
-			}),
-			false,
-			"failing open would put the whole thread pool on the wire, which is what the claim prevents"
-		);
-	});
-
-	it("NEGATIVE: a garbled claim is treated as unheld, not as a permanent lock", () => {
-		for (const junk of ["", "a", "a notanumber\n", "\n\n"]) {
-			const held = { read: () => junk, write: () => {} };
-			assert.equal(
-				claimEmitter({
-					dir: "/d",
-					holder: "b",
-					staleMs: 45_000,
-					now: 1000,
-					...held,
-				}),
-				true,
-				junk
-			);
-		}
-	});
-
-	it("the claim survives three missed ticks, so one slow read does not hand over the series", () => {
-		assert.equal(claimStaleMs(15), 45_000);
-		assert.equal(claimStaleMs(60), 180_000);
 	});
 });
 
@@ -581,7 +391,7 @@ describe("which namespace it publishes under", () => {
 	// namespace the Python `process` check owns. The metric names underneath were already Datadog's: `number`,
 	// `threads`, `mem.rss` and the avg/max/min suffixes come straight off ATTR_TO_METRIC in process.py.
 	it("defaults to the namespace a stock dashboard queries", () => {
-		assert.equal(settings({}).prefix, "system.processes");
+		assert.equal(seriesSettings({}).prefix, "system.processes");
 		assert.equal(DEFAULT_PREFIX, "system.processes");
 	});
 
@@ -600,7 +410,8 @@ describe("which namespace it publishes under", () => {
 
 	it("an operator can take the private namespace back", () => {
 		assert.equal(
-			settings({ DD_HARPER_PROCESS_METRICS_PREFIX: PRIVATE_PREFIX }).prefix,
+			seriesSettings({ DD_HARPER_PROCESS_METRICS_PREFIX: PRIVATE_PREFIX })
+				.prefix,
 			"harper.processes"
 		);
 		const got = processSeries([{ name: "self", self: true }], {
@@ -615,7 +426,7 @@ describe("which namespace it publishes under", () => {
 		// which is a metric name nothing queries and nothing rejects.
 		for (const typed of ["custom.procs.", "custom.procs..", "custom.procs"])
 			assert.equal(
-				settings({ DD_HARPER_PROCESS_METRICS_PREFIX: typed }).prefix,
+				seriesSettings({ DD_HARPER_PROCESS_METRICS_PREFIX: typed }).prefix,
 				"custom.procs",
 				typed
 			);
@@ -624,7 +435,7 @@ describe("which namespace it publishes under", () => {
 	it("NEGATIVE: whitespace or an empty override falls back rather than emitting a bare name", () => {
 		for (const blank of ["", "   ", undefined])
 			assert.equal(
-				settings({ DD_HARPER_PROCESS_METRICS_PREFIX: blank }).prefix,
+				seriesSettings({ DD_HARPER_PROCESS_METRICS_PREFIX: blank }).prefix,
 				DEFAULT_PREFIX,
 				JSON.stringify(blank)
 			);

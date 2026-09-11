@@ -9,8 +9,8 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { createRequire } from "node:module";
 
-import { PACKAGE_NAME } from "../../runtime/binary.js";
-import { writeConfigFiles } from "../../runtime/config.js";
+import { PACKAGE_NAME } from "../../runtime/datadog.js";
+import { writeConfigFiles } from "../../runtime/datadog.js";
 import { withEnvs } from "./sandbox.js";
 
 const require = createRequire(import.meta.url);
@@ -56,7 +56,7 @@ const EXITS_AT_ONCE = "exit 0";
  */
 export const STAYS_UP = "exec sleep 300";
 
-// runtime/binary.js's resolveBinary reads two fixed, shared locations, in order: the installed platform
+// runtime/datadog.js's resolveBinary reads two fixed, shared locations, in order: the installed platform
 // package under node_modules/, then build/<platform>/bin. Both paths are derived from resolveBinary's own
 // file location, not from anything a caller here can redirect, so neither can be given a copy unique per
 // call the way a temp-dir fixture would be. test/e2e/harper-component.test.js plants a fake platform

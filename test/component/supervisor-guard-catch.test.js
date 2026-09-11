@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 
-import { supervisorFor } from "../../runtime/supervisor.js";
+import { supervisorFor } from "../../runtime/component.js";
 import { withTempDir } from "../support/sandbox.js";
 
 // A Scope with no `processes.start` is what selects guardSupervisor; see supervisorFor's own check.
@@ -68,7 +68,10 @@ test("NEGATIVE: a guard() rejection reports both agents with the same untranslat
 		);
 
 		const result = await supervisor.start(agents, {
-			runtime: { paths: { pidDir, reaperLog: join(pidDir, "reaper.log") } },
+			// Flat, because the guard supervises processes and knows nothing about a runtime tree. The
+			// consumer reads its own paths out and hands over only what a supervisor needs.
+			pidDir,
+			reaperLog: join(pidDir, "reaper.log"),
 			configFiles: {},
 			fingerprintParts: ["supervisor-guard-catch-test"],
 		});
@@ -125,9 +128,7 @@ test("NEGATIVE: a guard() rejection reports both agents with the same untranslat
 		);
 
 		assert.ok(
-			logged.errors.some((line) =>
-				line.includes("the guard call for both agents threw")
-			),
+			logged.errors.some((line) => line.includes("the guard call threw")),
 			`the boot log must still say the call threw; logged: ${JSON.stringify(logged.errors)}`
 		);
 	}));

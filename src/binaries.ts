@@ -146,7 +146,7 @@ export const BINARIES: readonly AgentBinary[] = [
 		//
 		// So the exclusion cannot be justified by portability. It is justified by not needing it. The one
 		// thing Python bought that a Harper node wants is the `system.processes.*` family, and
-		// `runtime/process-metrics.js` produces the same named, aggregated, alertable series from `/proc` and
+		// `runtime/component.js` produces the same named, aggregated, alertable series from `/proc` and
 		// `process.memoryUsage()` in the runtime Harper already ships. What is left behind is the
 		// integrations-core long tail -- Postgres, Redis, nginx -- which a node running Harper does not run,
 		// and OpenMetrics scraping, which nothing here asks for. Paying 634 MB per platform for that would be

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-import { resolveBinary } from "../../runtime/binary.js";
+import { resolveBinary } from "../../runtime/datadog.js";
 import { loadComponent, REPO_ROOT } from "../support/component.js";
 import {
 	withEnvs,
@@ -44,7 +44,7 @@ test("NEGATIVE: config.yaml carries pluginModule, without which the plugin is ne
 /**
  * Every local file reachable from `entries` by import, as repo-relative posix paths. Matches a static
  * `from "..."` specifier and a dynamic `import("...")` call, in both cases only a literal relative path:
- * runtime/binary.js's `import(platformPackage)` names an external optional dependency built from a
+ * runtime/datadog.js's `import(platformPackage)` names an external optional dependency built from a
  * variable, so it resolves to no local file and correctly falls outside this walk rather than being missed by it.
  */
 function importedFrom(...entries) {
@@ -83,9 +83,13 @@ test("every file the component reads at runtime is in the published package", ()
 	// directory entry, one added beside resources.js is not, and an import of dist/ reaches build output the
 	// tarball no longer carries. A list of known names catches none of the three.
 	const imported = importedFrom("resources.js");
-	assert.ok(
-		imported.length > 6 && imported.includes("runtime/supervisor.js"),
-		`the walk reached ${imported.length} files and cannot have followed the component's imports: ${JSON.stringify(imported)}`
+	// The named files the walk must reach, so a broken walk cannot pass by reaching nothing. There are two,
+	// and there is nothing else: everything about supervising a process moved to the guard, and what is left
+	// is what Datadog is (datadog.js) and what this component does with it (component.js).
+	assert.deepEqual(
+		imported.sort(),
+		["resources.js", "runtime/component.js", "runtime/datadog.js"],
+		`the walk cannot have followed the component's imports: ${JSON.stringify(imported)}`
 	);
 	for (const file of imported) {
 		assert.ok(
