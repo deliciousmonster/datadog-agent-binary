@@ -332,6 +332,11 @@ jobs:
     # A tag that exists, or GitHub reports the whole workflow invalid at trigger time and the tag push runs
     # nothing at all, with no job to read the reason off.
     uses: deliciousmonster/harper-binary-kit/.github/workflows/release.yml@v0.1.0-next.1
+    # Granted here, not in the callee: a called workflow's own `permissions` block is ignored, and the caller
+    # asking for less than it needs fails the run before any job starts.
+    permissions:
+      contents: read
+      id-token: write
     with:
       version: ${{ needs.prepare.outputs.version }}
       targets: '["linux-x86_64", "linux-arm64", "macos-arm64", "windows-x86_64"]'
