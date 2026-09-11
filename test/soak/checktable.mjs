@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// One row per statistic, not per check: current reading, change since the reading before it, and the
-// high, low and mean over everything recorded so far. Two histories feed it and they are kept apart
+// One row per statistic, not per check: the current reading, the change since the reading before it, and
+// the mean over everything recorded so far. Two histories feed it and they are kept apart
 // rather than averaged together: the node's own minute-by-minute status.tsv, and checks.tsv, which is
 // what a Datadog page showed when somebody looked. `n` says which, by how many samples stand behind a row.
 //
@@ -270,8 +270,10 @@ for (const stat of STATS) {
 		cells: [
 			fmt(current, stat.dp, stat.unit),
 			delta,
-			fmt(Math.max(...values), stat.dp, stat.unit),
-			fmt(Math.min(...values), stat.dp, stat.unit),
+			// No high or low. A 48-hour run's extremes are its chaos rounds and its startup, which is what
+			// they reported: a 15,005 ms p95 from one wedged minute and a 0.00 GB container from the second
+			// before it booted. Both stayed in the table for every check afterwards, so the two columns said
+			// the same thing at hour 3 and at hour 72 and nothing about either.
 			fmt(
 				values.reduce((a, b) => a + b, 0) / values.length,
 				stat.dp,
@@ -282,7 +284,7 @@ for (const stat of STATS) {
 	});
 }
 
-const HEAD = ["statistic", "current", "delta", "high", "low", "mean", "n"];
+const HEAD = ["statistic", "current", "delta", "mean", "n"];
 const widths = HEAD.map((h, i) =>
 	Math.max(
 		h.length,
