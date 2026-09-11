@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import { PACKAGE_NAME, resolveBinary } from "../../runtime/datadog.js";
-import { REPO_ROOT } from "../support/generator.js";
+import { REPO_ROOT } from "../support/repo.js";
 import { findFreePort } from "../support/loopback.js";
 import {
 	FAKE_API_KEY,

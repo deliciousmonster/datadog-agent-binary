@@ -14,9 +14,8 @@ import {
 	groupVerdict,
 	selectSuites,
 	suitesIn,
-} from "../../test/windows-gate-checks.mjs";
-
-const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..");
+} from "../windows-gate-checks.mjs";
+import { REPO_ROOT } from "../support/repo.js";
 
 const summary = ({ tests = 1, fail = 0 }) =>
 	`1..${tests}\n# tests ${tests}\n# pass ${tests - fail}\n# fail ${fail}\n`;

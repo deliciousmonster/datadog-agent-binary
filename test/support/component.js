@@ -19,7 +19,7 @@ const {
 	BINARIES,
 	binariesFor,
 	currentTarget,
-} = require("./generator.js");
+} = require("./repo.js");
 
 export { REPO_ROOT };
 

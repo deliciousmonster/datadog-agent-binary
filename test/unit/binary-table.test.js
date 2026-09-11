@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { REPO_ROOT, BINARIES, binariesFor } from "../support/generator.js";
+import { REPO_ROOT, BINARIES, binariesFor } from "../support/repo.js";
 import { buildArgs } from "../../agent-build/compile.js";
 import { pinnedVersion } from "../../agent-build/download.js";
 import { TARGETS, findTarget } from "../../agent-build/toolchain.js";

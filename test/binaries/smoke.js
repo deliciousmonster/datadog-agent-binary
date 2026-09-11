@@ -29,7 +29,7 @@ import {
 import { verifyLaunch } from "../../runtime/verify.js";
 
 import { freshPorts } from "../support/loopback.js";
-import { FAKE_API_KEY } from "../support/traffic.js";
+import { driveTraffic, FAKE_API_KEY } from "../support/traffic.js";
 
 // Go binaries bind well under a second cold; this only needs to be longer than a slow CI runner.
 const DELIVERY_DEADLINE_MS = 15_000;
@@ -40,12 +40,14 @@ const LIVENESS_HOLD_MS = 3_000;
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 const log = (message) => console.log(`smoke-test: ${message}`);
 
-// Same shape as test/live/harness.js's TRAFFIC_SCRIPT. flushInterval 0 skips dd-trace's own batching
-// delay, so the span posts immediately instead of racing this script's poll deadline.
-const SPAN_SCRIPT = `
-const tracer = require('dd-trace').init({ startupLogs: false, flushInterval: 0 });
-tracer.startSpan('smoke-test.span').finish();
-`;
+// The mechanism is support/traffic.js's, shared with the equivalence suite and the live tier; only the
+// span naming is this file's own. It carried its own copy of the script before, under a comment saying it
+// was the same shape as the one it could have imported.
+const SPAN_SCRIPT = {
+	envVar: "SMOKE_SPAN_COUNT",
+	spanName: "smoke-test.span",
+	tagKey: "smoke.iteration",
+};
 
 /** Spawns `binPath` and reports its exit in the shape runtime/component.js's verifyLaunch expects. */
 function spawnAgent(binPath, args) {
@@ -95,18 +97,7 @@ async function checkTraceAgent(binPath, ports, paths, resources, spawned) {
 	log(`trace-agent bound: ${bound.detail}`);
 
 	try {
-		execFileSync(process.execPath, ["-e", SPAN_SCRIPT], {
-			cwd: REPO_ROOT,
-			timeout: 20_000,
-			env: {
-				...process.env,
-				DD_TRACE_AGENT_URL: `http://127.0.0.1:${ports.receiver}`,
-				DD_TRACE_STARTUP_LOGS: "false",
-				DD_INSTRUMENTATION_TELEMETRY_ENABLED: "false",
-				DD_REMOTE_CONFIGURATION_ENABLED: "false",
-				DD_CRASHTRACKING_ENABLED: "false",
-			},
-		});
+		driveTraffic(ports.receiver, 1, SPAN_SCRIPT);
 	} catch (error) {
 		throw new Error(
 			`sending a real span failed: ${/** @type {Error} */ (error).message}\n${proc.output()}`

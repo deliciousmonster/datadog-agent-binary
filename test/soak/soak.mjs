@@ -30,6 +30,8 @@ const IMAGE = process.env.SOAK_IMAGE ?? "harperfast/harper:5.2.9";
 const BASE = "https://localhost:9926";
 const AUTH = "Basic " + Buffer.from("admin:password").toString("base64");
 const ROOT = "/home/harperdb/harper";
+// The three pid files a restart seeds, by the names the plugin locks on. Retyped here rather than imported
+// because this runs against a container from outside it, with no dependency on this checkout's runtime/.
 const NAMES = ["datadog-trace-agent", "datadog-agent", "datadog-agent-reaper"];
 const HOURS = Number(process.env.SOAK_HOURS ?? 48);
 const RPS = Number(process.env.SOAK_RPS ?? 20);

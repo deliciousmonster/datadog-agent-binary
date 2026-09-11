@@ -3,16 +3,20 @@
 
 import path from "node:path";
 
+import { agentsFor, REAPER_NAME } from "../../runtime/datadog.js";
 import { REPO_ROOT } from "./component.js";
 import { createStub, withServer } from "./loopback.js";
 import { withEnvs, withTempDir } from "./sandbox.js";
 import { createTlsStub } from "../fixtures/tls-stub.js";
 
-// Harper's spawn names, which are also the PID-lock filenames. resources.js states them once; a second
-// spelling here would be a second lock and a second agent per node.
-export const TRACE_AGENT = "datadog-trace-agent";
-export const CORE_AGENT = "datadog-agent";
-export const REAPER = "datadog-agent-reaper";
+// Harper's spawn names, which are also the PID-lock filenames. Derived from the table that assigns them,
+// never retyped: a second spelling is a second lock and a second agent per node, and there were four copies
+// of these strings across the suites before this.
+const lockName = (shipsAs) => agentsFor([shipsAs], { receiver: 0 })[0].name;
+
+export const TRACE_AGENT = lockName("trace-agent");
+export const CORE_AGENT = lockName("datadog-agent");
+export const REAPER = REAPER_NAME;
 export const BOTH_AGENTS = [TRACE_AGENT, CORE_AGENT];
 
 // prepareRuntime nests the runtime tree under the component's own directory name.

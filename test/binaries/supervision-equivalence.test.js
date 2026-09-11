@@ -19,6 +19,7 @@ import {
 	waitForLocksCleared,
 	withRealBinaries,
 } from "../support/component.js";
+import { BOTH_AGENTS, REAPER } from "../support/agents.js";
 import { withEnvs, withTempDir } from "../support/sandbox.js";
 import { freshPorts } from "../support/loopback.js";
 import {
@@ -30,8 +31,6 @@ import {
 // prepareRuntime nests the runtime tree under the component's own directory name; the guard's pid
 // lock directory sits under that, same as test/unit/supervisor-start.test.js's own layout.
 const APP_NAME = path.basename(REPO_ROOT);
-const REAPER = "datadog-agent-reaper";
-const AGENT_NAMES = ["datadog-trace-agent", "datadog-agent"];
 
 const SPAN_COUNT = 5;
 // The concentrator only leaves "idle" once it has built a stats bucket from what the receiver counted,
@@ -107,7 +106,7 @@ async function bootDriveAndRead(makeScope) {
 					if (status?.supervision === "guard") {
 						const pidDir = path.join(root, "datadog", APP_NAME, "pids");
 						halt(lockedPid(pidDir, REAPER));
-						await waitForLocksCleared(pidDir, [...AGENT_NAMES, REAPER]);
+						await waitForLocksCleared(pidDir, [...BOTH_AGENTS, REAPER]);
 					}
 				}
 			}

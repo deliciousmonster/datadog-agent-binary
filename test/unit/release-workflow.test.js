@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { REPO_ROOT } from "../support/generator.js";
+import { REPO_ROOT } from "../support/repo.js";
 
 const WORKFLOW_DIR = join(REPO_ROOT, ".github", "workflows");
 const WORKFLOW = readFileSync(join(WORKFLOW_DIR, "build-release.yml"), "utf8");

@@ -8,7 +8,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { REPO_ROOT } = require("../support/generator.js");
+const { REPO_ROOT } = require("../support/repo.js");
 const { withTempDir } = require("../support/sandbox.js");
 const { pipxInterpreter, pythonPin } = require(
 	path.join(REPO_ROOT, "agent-build", "compile.js")

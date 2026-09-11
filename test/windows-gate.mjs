@@ -20,8 +20,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 import {
 	BINARIES_GROUP,
@@ -30,10 +29,7 @@ import {
 	groupVerdict,
 	selectSuites,
 } from "./windows-gate-checks.mjs";
-
-// test/, so one hop to the root. It was two from scripts/, and a wrong count here selects no suites
-// and reports a group that "selected no suites" rather than a path that moved.
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+import { REPO_ROOT } from "./support/repo.js";
 // package.json's `test` script sets the same timeout, and for the same reason: node --test defaults to 0,
 // so a supervision change that hangs reads as a stuck machine rather than as a failure.
 const TEST_TIMEOUT_MS = 120_000;

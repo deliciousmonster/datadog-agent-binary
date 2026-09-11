@@ -4,7 +4,7 @@
 
 import { execFileSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import { REPO_ROOT } from "./generator.js";
+import { REPO_ROOT } from "./repo.js";
 
 // Syntactically valid, not real. A wrong key still makes the trace-agent build and count real
 // payloads before the intake refuses them; an unset key disables the forwarder and proves nothing.

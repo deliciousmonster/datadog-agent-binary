@@ -19,6 +19,7 @@ const {
 	start,
 } = await import("../support/component.js");
 const { findFreePort } = await import("../support/loopback.js");
+const { CORE_AGENT, TRACE_AGENT } = await import("../support/agents.js");
 const { withTempDir } = await import("../support/sandbox.js");
 
 const { currentTarget } = require(
@@ -35,9 +36,6 @@ const binaryName = `${BINARIES[0].shipsAs}${platform.exe}`; // datadog-agent[.ex
 // the resolver names the file it looked for, suffix and all, so an assertion on that message has to
 // carry the same suffix or it only ever holds where the platform has none.
 const traceBinaryName = `${BINARIES[1].shipsAs}${platform.exe}`; // trace-agent[.exe]
-
-const TRACE_AGENT = "datadog-trace-agent";
-const CORE_AGENT = "datadog-agent";
 
 // runtime/datadog.js resolves the optional platform package by specifier, so it must live in this repo's
 // node_modules- exactly where it would sit as a sibling dependency inside a Harper app's tree.
