@@ -2,6 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -9,6 +10,7 @@ import { REPO_ROOT } from "../support/repo.js";
 
 const WORKFLOW_DIR = join(REPO_ROOT, ".github", "workflows");
 const WORKFLOW = readFileSync(join(WORKFLOW_DIR, "build-release.yml"), "utf8");
+const KIT_REPO = "https://github.com/deliciousmonster/harper-binary-kit.git";
 const matches = (pattern) => [...WORKFLOW.matchAll(pattern)].length;
 
 /** Every `run:` block body in `text`, keyed by nothing but its own indentation. */
@@ -102,10 +104,22 @@ test("every action is pinned to a commit SHA", () => {
 // same list binary-kit.config.js declares, or the matrix builds one set and the release publishes another.
 test("the publish job calls the kit and passes the targets the config declares", async () => {
 	const { default: config } = await import("../../binary-kit.config.js");
-	assert.match(
-		WORKFLOW,
-		/uses: deliciousmonster\/harper-binary-kit\/\.github\/workflows\/release\.yml@/,
+	const call =
+		/uses: deliciousmonster\/harper-binary-kit\/\.github\/workflows\/release\.yml@(\S+)/.exec(
+			WORKFLOW
+		);
+	assert.ok(
+		call,
 		"the release no longer calls the kit, so the publish shape is back in this repo"
+	);
+	// A ref that does not exist makes GitHub report the whole file invalid at trigger time: the tag push then
+	// runs nothing, with no job to read the reason off. v0 was that, for a repo with no tags.
+	const refs = execFileSync("git", ["ls-remote", "--tags", KIT_REPO], {
+		encoding: "utf8",
+	});
+	assert.ok(
+		refs.includes(`refs/tags/${call[1]}`),
+		`the workflow calls the kit at ${call[1]}, which is not a tag on ${KIT_REPO}: ${refs}`
 	);
 	const passed = /targets: '(\[[^']*\])'/.exec(WORKFLOW)?.[1];
 	assert.ok(passed, `the publish job passes no target list: ${WORKFLOW}`);
