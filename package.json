@@ -34,8 +34,8 @@
 	"author": "",
 	"license": "Apache-2.0",
 	"dependencies": {
-		"@deliciousmonster/harper-binary-kit": "0.1.0-next.0",
-		"@deliciousmonster/harper-process-guard": "0.1.0-next.6"
+		"@deliciousmonster/harper-binary-kit": "0.1.0-next.1",
+		"@deliciousmonster/harper-process-guard": "0.1.0-next.7"
 	},
 	"devDependencies": {
 		"@types/node": "^26.5.1",
