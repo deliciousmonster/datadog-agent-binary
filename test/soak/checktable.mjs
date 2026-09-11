@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // One row per statistic, not per check: the current reading, the change since the reading before it, and
-// the mean over everything recorded so far. Two histories feed it and they are kept apart
-// rather than averaged together: the node's own minute-by-minute status.tsv, and checks.tsv, which is
-// what a Datadog page showed when somebody looked. `n` says which, by how many samples stand behind a row.
+// the mean over everything recorded so far. Two histories feed it and they are kept apart rather than
+// averaged together: the node's own minute-by-minute status.tsv, and checks.tsv, which is what a Datadog
+// page showed when somebody looked. A heading band says which history the rows under it came from.
 //
 //   node test/soak/checktable.mjs <soak-dir> --hosts 1 --apm-rps 31.7 --apm-err 0 \
 //     --logs 10.6K --procs 5 --ram 1.9/2.6 --swap 0/316 --note "..."     # append a check, then render
@@ -251,7 +251,7 @@ for (const stat of STATS) {
 	}
 	const values = stat.src.map(stat.get).filter((v) => v !== null);
 	if (values.length === 0) {
-		rows.push({ label: stat.label, cells: ["-", "-", "-", "-", "-", "0"] });
+		rows.push({ label: stat.label, cells: ["-", "-", "-"] });
 		continue;
 	}
 	const current = values.at(-1);
@@ -279,12 +279,14 @@ for (const stat of STATS) {
 				stat.dp,
 				stat.unit
 			),
-			String(values.length),
 		],
 	});
 }
 
-const HEAD = ["statistic", "current", "delta", "mean", "n"];
+// Ruled rather than space-aligned. Columns held apart by two spaces read as a table until one cell runs
+// long, and then the eye has nothing to follow across the row; a soak table is read at a glance by someone
+// checking whether a number moved.
+const HEAD = ["statistic", "current", "delta", "mean"];
 const widths = HEAD.map((h, i) =>
 	Math.max(
 		h.length,
@@ -293,17 +295,41 @@ const widths = HEAD.map((h, i) =>
 			.map((r) => (i === 0 ? r.label.length : r.cells[i - 1].length))
 	)
 );
+const PAD = 1;
+const bar = (left, join, right) =>
+	left + widths.map((w) => "─".repeat(w + PAD * 2)).join(join) + right;
+/** A rule that closes the columns above it and opens them again below, for a section heading band. */
+const band = (left, right) =>
+	left +
+	"─".repeat(widths.reduce((a, w) => a + w + PAD * 2, 0) + widths.length - 1) +
+	right;
 const line = (cells) =>
+	"│" +
 	cells
-		.map((c, i) =>
-			i === 0 ? String(c).padEnd(widths[i]) : String(c).padStart(widths[i])
-		)
-		.join("  ");
-const out = [line(HEAD), widths.map((w) => "-".repeat(w)).join("  ")];
+		.map((c, i) => {
+			const text = String(c);
+			const padded =
+				i === 0 ? text.padEnd(widths[i]) : text.padStart(widths[i]);
+			return " ".repeat(PAD) + padded + " ".repeat(PAD);
+		})
+		.join("│") +
+	"│";
+const heading = (text) =>
+	"│" +
+	" ".repeat(PAD) +
+	text.padEnd(
+		widths.reduce((a, w) => a + w + PAD * 2, 0) + widths.length - 1 - PAD * 2
+	) +
+	" ".repeat(PAD) +
+	"│";
+
+const out = [bar("┌", "┬", "┐"), line(HEAD), bar("├", "┼", "┤")];
 for (const row of rows) {
-	if (row.separator) out.push("", `${row.separator}`);
-	else out.push(line([row.label, ...row.cells]));
+	if (row.separator) {
+		out.push(bar("├", "┴", "┤"), heading(row.separator), bar("├", "┬", "┤"));
+	} else out.push(line([row.label, ...row.cells]));
 }
+out.push(bar("└", "┴", "┘"));
 const latest = checks.at(-1);
 if (latest)
 	out.push(
