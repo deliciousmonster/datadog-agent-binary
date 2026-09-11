@@ -7,7 +7,7 @@ import { builtFor, binaryFilename } from "./binaries.js";
 
 /** @typedef {import("./binaries.js").AgentBinary} AgentBinary */
 /** @typedef {import("./toolchain.js").Target} Target */
-import { buildTree } from "./layout.js";
+import { buildTree } from "./tree.js";
 import { logger } from "./log.js";
 
 /**

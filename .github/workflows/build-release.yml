@@ -251,21 +251,23 @@ jobs:
           fi
           exit "$rc"
 
+      # Named the way the kit's release workflow reads them back, so nothing between here and staging has to
+      # translate one convention into another.
       - name: Upload ${{ matrix.platform }} artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: agent-${{ matrix.platform }}
+          name: bin-${{ matrix.platform }}
           path: build/${{ matrix.platform }}/bin/
           retention-days: 90
 
-      # Its own artifact, not folded into agent-*, because the release job treats every agent-* directory
-      # as one platform's binary set and would package 42MB of eBPF objects as if they were binaries.
-      # Ignored where there are none: only the Linux legs extract anything, and system-probe is the only
-      # binary these belong to.
+      # Its own artifact, not folded into bin-*, because the release job treats every bin-* directory as one
+      # platform's binary set and would package 42MB of eBPF objects as if they were binaries. Ignored where
+      # there are none: only the Linux legs extract anything, and system-probe is the only binary these
+      # belong to.
       - name: Upload ${{ matrix.platform }} eBPF objects
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ebpf-${{ matrix.platform }}
+          name: share-${{ matrix.platform }}
           path: build/${{ matrix.platform }}/share/
           if-no-files-found: ignore
           retention-days: 90
@@ -283,18 +285,18 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Named by pattern, not unfiltered: the loop below turns every entry under artifacts/ into a
-      # release asset, so anything a later job uploads must not silently become one.
+      # release asset, so the eBPF objects a Linux leg uploads must not silently become one.
       - name: Download all artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: agent-*
+          pattern: bin-*
           path: artifacts/
 
       # Git permits ; $() ` && and | in a tag name, so ref_name spliced into a run body is shell
       # source. It arrives as a value, like every other untrusted input in this workflow.
       #
-      # Driven off the downloaded agent-* directory names (same idea as publish's "Move binaries
-      # to build dirs" step) instead of a hardcoded arch list, so a matrix change needs no edit here.
+      # Driven off the downloaded bin-* directory names instead of a hardcoded arch list, so a matrix change
+      # needs no edit here.
       - name: Prepare release assets
         id: prepare_assets
         env:
@@ -307,9 +309,9 @@ jobs:
           cd artifacts
 
 
-          for artifact in agent-*; do
+          for artifact in bin-*; do
             [ -d "$artifact" ] || continue
-            platform=${artifact#agent-}
+            platform=${artifact#bin-}
             os=${platform%%-*}
             arch=${platform#*-}
             case "$os" in
@@ -373,189 +375,24 @@ jobs:
             sha256sum -c checksums.txt
             ```
 
+  # Staging, the symbol floors, the gate, the publish and the dist-tag move, none of it written here any
+  # more. What used to sit in this job was a glob over `npm/*/` to decide what to publish, 25 lines of
+  # `strings | grep | sort -V` for the floor, and a loop reconstructing `build/<target>/bin` from artifact
+  # names, each rediscovering the package set from the filesystem and each having to agree with a
+  # declaration nothing checked it against.
+  #
+  # The kit reads binary-kit.config.js for all of it, so the package list, the CI matrix above and the
+  # optionalDependencies cannot disagree. `targets` is the one thing still passed, and it is passed from the
+  # same config the kit reads, so the matrix legs and the published names stay one statement.
   publish:
     needs: [build, prepare]
-    runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
-    permissions:
-      contents: read
-      # npm authenticates with this OIDC token: a trusted publisher on each package names this repository
-      # and this workflow file, and provenance is attached from the same token. No npm token exists on this
-      # repository. Seven packages now: the main one, four base platform packages, and the two Linux probe
-      # packages. A new name has no trusted publisher until one is created for it, and npm answers a first
-      # publish without one with a 404 rather than an authorisation error.
-      id-token: write
-    # npm publish is the only external call here; it doesn't hang for hours.
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      # Named by pattern, not unfiltered: "Move binaries to build dirs" below treats every entry
-      # under artifacts/ as one platform's binary set.
-      - name: Download binaries
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: agent-*
-          path: artifacts/
-
-      # The eBPF objects system-probe loads, uploaded separately by the build job. Absent on every leg that
-      # extracted nothing, which is why this does not fail on an empty download.
-      - name: Download eBPF objects
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: ebpf-*
-          path: ebpf-artifacts/
-
-      - name: Move binaries to build dirs
-        run: |
-          pushd artifacts
-          for artifact in *
-          do
-            platform=${artifact#agent-}
-            echo "Moving contents of $artifact into ../build/$platform/bin/"
-            mkdir -p "../build/$platform/bin"
-            mv "$artifact"/* "../build/$platform/bin/"
-          done
-          popd
-
-          # Beside bin/, not inside it: the build tree and the platform package are the same shape, so
-          # create-platform-packages.js copies rather than rearranges.
-          shopt -s nullglob
-          for artifact in ebpf-artifacts/*
-          do
-            platform=${artifact#ebpf-artifacts/ebpf-}
-            echo "Moving contents of $artifact into build/$platform/share/"
-            mkdir -p "build/$platform/share"
-            mv "$artifact"/* "build/$platform/share/"
-          done
-
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          # Reads package.json's engines.node, the one already-checked-in source of truth - no
-          # separate Actions variable to keep in sync with it.
-          node-version-file: "package.json"
-          cache: "npm"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Install dependencies
-        run: npm ci
-
-      # The release tag (vX.Y.Z) is the version everything is published at, so the npm package version must
-      # match it. This runs the `version` lifecycle script (update-optional-deps), keeping optionalDependencies
-      # pinned to the same version. --allow-same-version makes re-runs safe.
-      - name: Set package version from tag
-        env:
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          echo "Setting npm package version to $VERSION"
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
-
-      - name: Prepare platform packages with binaries
-        run: |
-          node scripts/create-platform-packages.js --all
-
-      # Checks what npm pack would actually ship, not the working tree: refuses any platform package
-      # whose binaries are absent or missing a required symbol.
-      - name: Verify package
-        run: npm run verify-package
-
-      # npm 11 refuses to publish a prerelease with no --tag, and `latest` is only ever the stable line, so
-      # the dist-tag is the version's prerelease identifier or latest, never a guess.
-      - name: Derive the dist-tag from the version
-        id: dist
-        run: |
-          node -e '
-            const { version } = JSON.parse(require("node:fs").readFileSync("package.json", "utf8"));
-            const identifier = version.split("-")[1]?.split(".")[0];
-            if (identifier !== undefined && !/^[a-zA-Z][a-zA-Z0-9-]*$/.test(identifier)) {
-              console.log(`::error::Version ${version} has the prerelease identifier "${identifier}". A dist-tag cannot start with a digit, because npm would read it as a version. Name the prerelease (7.82.1-next.0), then re-tag.`);
-              process.exit(1);
-            }
-            const tag = identifier ?? "latest";
-            require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\n`);
-            console.log(`Publishing ${version} under the ${tag} dist-tag.`);
-          '
-
-      # Every package is attempted, and the step fails at the end naming all of them. The loop used to
-      # run under `bash -e` and stop at the first failure, which on 2026-09-11 published four packages,
-      # hit a 404 on the fifth, and never attempted the four after it or the main package. npm answers a
-      # publish to a name with no trusted publisher with 404 rather than 403, so that one abort left the
-      # release half-done AND said nothing about whether the remaining names were configured. One run
-      # now answers that for all of them, which is the difference between one round trip and four.
-      - name: Publish platform packages
-        run: |
-          failed=()
-          for platform_dir in npm/*/; do
-            platform=$(basename "$platform_dir")
-            echo "Publishing platform package: $platform"
-
-            cd "$platform_dir"
-
-            # Check if binaries exist
-            if [ -d "bin" ] && [ "$(ls -A bin)" ]; then
-              if npm publish --access public --tag "$DIST_TAG"; then
-                echo "Published @deliciousmonster/datadog-agent-binary-$platform"
-              else
-                echo "::error::Publishing @deliciousmonster/datadog-agent-binary-$platform failed. A 404 on PUT means the package has no trusted publisher for this repository and workflow; create one and re-run."
-                failed+=("$platform")
-              fi
-            else
-              echo "Skipping $platform - no binaries found"
-            fi
-
-            cd - > /dev/null
-          done
-
-          if [ ${#failed[@]} -gt 0 ]; then
-            echo "::error::${#failed[@]} platform package(s) did not publish: ${failed[*]}"
-            exit 1
-          fi
-        env:
-          DIST_TAG: ${{ steps.dist.outputs.tag }}
-
-      - name: Publish main package
-        run: npm publish --access public --tag '${{ steps.dist.outputs.tag }}'
-
-      # `npm publish` sets exactly one tag, and npm only assigns `latest` on a package's FIRST publish.
-      # Every release since has gone out under `next`, so `latest` froze at whatever version created each
-      # name: on 2026-09-11 all ten packages served 7.82.1-next.9 under `next` and 7.82.1-next.6 under
-      # `latest`, three releases behind. npmjs.com shows `latest`, and so does a bare `npm install`, so
-      # that stale number is the one a reader sees and an installer gets.
-      #
-      # This moves `latest` to the version just published, and only forward: a re-run of an older tag
-      # compares semver and leaves the newer `latest` alone rather than walking it backwards.
-      #
-      # Authentication is the open question. This job has no npm token and authenticates by OIDC, which
-      # npm documents for `npm publish`; whether the same exchange covers `dist-tag add` is not something
-      # this file can assert. The step therefore fails loudly and prints the exact commands to run by
-      # hand, rather than passing quietly and leaving `latest` wrong for another release.
-      - name: Point latest at this release
-        run: |
-          set -o pipefail
-          version="$(node -p 'require("./package.json").version')"
-          names=("@deliciousmonster/datadog-agent-binary")
-          for platform_dir in npm/*/; do
-            names+=("@deliciousmonster/datadog-agent-binary-$(basename "$platform_dir")")
-          done
-
-          failed=()
-          for name in "${names[@]}"; do
-            current="$(npm view "$name" dist-tags.latest 2>/dev/null || true)"
-            if [ -n "$current" ] && [ "$current" = "$(printf '%s\n%s\n' "$current" "$version" | sort -rV | head -1)" ] && [ "$current" != "$version" ]; then
-              echo "Leaving $name at latest=$current, which is newer than $version"
-              continue
-            fi
-            if npm dist-tag add "$name@$version" latest; then
-              echo "latest -> $version for $name"
-            else
-              failed+=("$name")
-            fi
-          done
-
-          if [ ${#failed[@]} -gt 0 ]; then
-            echo "::error::latest was not moved for ${#failed[@]} package(s). The release itself published; only the tag is stale. Run these with a token that can write dist-tags:"
-            for name in "${failed[@]}"; do echo "  npm dist-tag add $name@$version latest"; done
-            exit 1
-          fi
+    uses: deliciousmonster/harper-binary-kit/.github/workflows/release.yml@v0
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      targets: '["linux-x86_64", "linux-arm64", "macos-arm64", "windows-x86_64"]'
+    secrets:
+      # `dist-tag add` is the one step OIDC has not covered in practice: a job that had just published ten
+      # packages was answered E401 for every tag write. Publishing itself still authenticates by the job's
+      # own OIDC identity through a trusted publisher on each package.
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -12,8 +12,8 @@ import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
+import { createBinaryResolver } from "@deliciousmonster/harper-binary-kit/resolve";
 import {
-	createBinaryResolver,
 	hostRoot,
 	resolvePort,
 	writeFiles,
@@ -110,9 +110,9 @@ const resolver = createBinaryResolver({
 	packageRoot: `${import.meta.dirname}/..`,
 	variants: [BASE, PROBE],
 	buildCommand: "npm run build-agent",
-	// Written here rather than inside the guard: a bare specifier resolves against the file the `import` is
-	// written in, so a resolver importing from the guard's own directory would look for these packages beside
-	// the guard. A flat node_modules hides that; a symlinked or nested install does not.
+	// Written here rather than inside the kit: a bare specifier resolves against the file the `import` is
+	// written in, so a resolver importing from the kit's own directory would look for these packages beside
+	// the kit. A flat node_modules hides that; a symlinked or nested install does not.
 	load: (name) => import(name),
 });
 
@@ -122,11 +122,15 @@ export const resolveBinary = (agent) => resolver.resolveBinary(agent);
 /**
  * Where the probe package put Datadog's precompiled eBPF objects, or null when it is not installed.
  *
- * The package states its own layout through `getEbpfDir()` rather than this file computing it, because the
+ * The package states its own layout through its own accessor rather than this file computing it, because the
  * path is that package's business and a computed one goes stale the moment the layout changes. Null is an
  * ordinary answer: system-probe is opt-in, so most nodes have no probe package at all.
+ *
+ * The name is derived from the directory by one rule - `share/system-probe` gives `getShareSystemProbeDir` -
+ * so a consumer can write the call without reading the staged package first.
  */
-export const resolveEbpfDir = () => resolver.resolveDir(PROBE, "getEbpfDir");
+export const resolveEbpfDir = () =>
+	resolver.resolveDir(PROBE, "getShareSystemProbeDir");
 
 // -- The ports ---------------------------------------------------------------------------------------------
 

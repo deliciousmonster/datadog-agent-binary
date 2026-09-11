@@ -8,7 +8,7 @@ import {
 	fetchLatestVersion,
 	pinnedVersion,
 } from "./download.js";
-import { buildTree } from "./layout.js";
+import { buildTree } from "./tree.js";
 import { EBPF_SHIP_DIR } from "./release.js";
 import { logger } from "./log.js";
 /**

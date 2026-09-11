@@ -9,9 +9,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// The repo root, from this file rather than from a module whose only job was to say it four different ways.
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
 import { binariesFor, binaryFilename } from "../agent-build/binaries.js";
 import { pinnedVersion } from "../agent-build/download.js";
-import { treeAt } from "../agent-build/layout.js";
+import { treeAt } from "../agent-build/tree.js";
 import { currentTarget } from "../agent-build/toolchain.js";
 import {
 	debugVarsUrl,
@@ -19,7 +22,7 @@ import {
 	writeConfigFiles,
 } from "../runtime/datadog.js";
 import { verifyLaunch } from "../runtime/verify.js";
-import { REPO_ROOT } from "./paths.js";
+
 import { freshPorts } from "../test/support/loopback.js";
 import { FAKE_API_KEY } from "../test/support/traffic.js";
 

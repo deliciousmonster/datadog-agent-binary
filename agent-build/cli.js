@@ -32,8 +32,8 @@ program
 	.description("Build Datadog Agent for current platform")
 	.option("--datadog-version <version>", "Datadog Agent version to build")
 	.option("-d, --debug", "Enable debug logging")
-	// No output option: scripts/create-platform-packages.js reads the built binaries back out of
-	// build/<target>/bin, so a relocatable tree is a tree the packaging step cannot find.
+	// No output option: the kit's staging reads the built binaries back out of build/<target>/bin, so a
+	// relocatable tree is a tree the packaging step cannot find.
 	.action(
 		run(
 			/** @param {{ datadogVersion?: string; debug?: boolean }} options */
