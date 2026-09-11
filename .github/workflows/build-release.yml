@@ -487,8 +487,15 @@ jobs:
             console.log(`Publishing ${version} under the ${tag} dist-tag.`);
           '
 
+      # Every package is attempted, and the step fails at the end naming all of them. The loop used to
+      # run under `bash -e` and stop at the first failure, which on 2026-09-11 published four packages,
+      # hit a 404 on the fifth, and never attempted the four after it or the main package. npm answers a
+      # publish to a name with no trusted publisher with 404 rather than 403, so that one abort left the
+      # release half-done AND said nothing about whether the remaining names were configured. One run
+      # now answers that for all of them, which is the difference between one round trip and four.
       - name: Publish platform packages
         run: |
+          failed=()
           for platform_dir in npm/*/; do
             platform=$(basename "$platform_dir")
             echo "Publishing platform package: $platform"
@@ -497,14 +504,23 @@ jobs:
 
             # Check if binaries exist
             if [ -d "bin" ] && [ "$(ls -A bin)" ]; then
-              npm publish --access public --tag "$DIST_TAG"
-              echo "Published @deliciousmonster/datadog-agent-binary-$platform"
+              if npm publish --access public --tag "$DIST_TAG"; then
+                echo "Published @deliciousmonster/datadog-agent-binary-$platform"
+              else
+                echo "::error::Publishing @deliciousmonster/datadog-agent-binary-$platform failed. A 404 on PUT means the package has no trusted publisher for this repository and workflow; create one and re-run."
+                failed+=("$platform")
+              fi
             else
               echo "Skipping $platform - no binaries found"
             fi
 
             cd - > /dev/null
           done
+
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error::${#failed[@]} platform package(s) did not publish: ${failed[*]}"
+            exit 1
+          fi
         env:
           DIST_TAG: ${{ steps.dist.outputs.tag }}
 

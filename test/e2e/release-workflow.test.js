@@ -112,3 +112,58 @@ test("every action is pinned to a commit SHA", () => {
 	}
 	assert.deepEqual(unpinned, []);
 });
+
+// A release that publishes four packages, fails on the fifth, and never attempts the last four is
+// worse than one that fails outright: half the names are at the new version, half at the old, and
+// the run says nothing about whether the untried ones would have worked. That happened on
+// 2026-09-11, and it cost a whole build cycle per missing trusted publisher to discover them one at
+// a time. npm answers a publish to a name with no trusted publisher with 404 rather than 403, so
+// "not configured" and "not there" look identical and every name has to be tried to be known.
+test("the platform publish loop attempts every package before it fails", () => {
+	const loop = scriptBodies(WORKFLOW).find((body) =>
+		body.includes("npm publish --access public --tag")
+	);
+	assert.ok(loop, "no platform publish loop in the workflow");
+
+	// The defect exactly: a bare `npm publish` inside a `bash -e` loop aborts the iteration.
+	assert.ok(
+		!/^\s*npm publish --access public --tag "\$DIST_TAG"\s*$/m.test(loop),
+		"an unguarded npm publish inside the loop aborts at the first failure"
+	);
+	assert.match(
+		loop,
+		/if npm publish --access public --tag "\$DIST_TAG"; then/,
+		"the publish has to be tested rather than run bare, or bash -e ends the loop"
+	);
+});
+
+// Attempting everything is only half of it: a run that swallowed the failures would report success
+// on a half-published release, which is worse again.
+test("NEGATIVE: a failed publish still fails the step, naming what did not publish", () => {
+	const loop = scriptBodies(WORKFLOW).find((body) =>
+		body.includes("npm publish --access public --tag")
+	);
+	assert.match(loop, /failed\+=\("\$platform"\)/, "failures are not collected");
+	assert.match(
+		loop,
+		/if \[ \$\{#failed\[@\]\} -gt 0 \]; then[\s\S]*exit 1/,
+		"collected failures never fail the step"
+	);
+	assert.match(
+		loop,
+		/\$\{failed\[\*\]\}/,
+		"the failure does not name which packages did not publish"
+	);
+});
+
+// The main package carries optionalDependencies pinned to the platform versions, so publishing it
+// after a partial platform publish points it at versions that do not exist.
+test("the main package publishes only after every platform package did", () => {
+	const platformAt = WORKFLOW.indexOf("- name: Publish platform packages");
+	const mainAt = WORKFLOW.indexOf("- name: Publish main package");
+	assert.ok(platformAt !== -1 && mainAt !== -1);
+	assert.ok(
+		platformAt < mainAt,
+		"the main package is published before the platform packages it depends on"
+	);
+});
