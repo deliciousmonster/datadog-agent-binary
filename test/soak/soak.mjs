@@ -497,7 +497,8 @@ const COLUMNS = [
 	["p95ms", 6],
 	["sup", 5],
 	["verified", 8],
-	["restarts", 8],
+	// Five agents joined by "/" is 9 at one digit each, and a chaos run reaches two digits on some of them.
+	["restarts", 11],
 	["verdict", 19],
 	["traces", 7],
 	["spans", 6],
