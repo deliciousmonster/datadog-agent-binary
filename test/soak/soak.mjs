@@ -25,6 +25,8 @@ const ROOT = "/home/harperdb/harper";
 // The three pid files a restart seeds, by the names the plugin locks on. Retyped here rather than imported
 // because this runs against a container from outside it, with no dependency on this checkout's runtime/.
 const NAMES = ["datadog-trace-agent", "datadog-agent", "datadog-agent-reaper"];
+import { parseStamp, stamp } from "./soak-clock.mjs";
+
 const HOURS = Number(process.env.SOAK_HOURS ?? 48);
 const RPS = Number(process.env.SOAK_RPS ?? 20);
 const KEY_MIN = Number(process.env.SOAK_KEY_MIN ?? 10);
@@ -36,7 +38,6 @@ mkdirSync(OUT, { recursive: true });
 const STATUS_TSV = join(OUT, "status.tsv");
 const CHAOS_LOG = join(OUT, "chaos.log");
 
-const stamp = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 const log = (line) => console.log(`${stamp()} ${line}`);
 const chaosLog = (line) => {
 	log(`CHAOS ${line}`);
@@ -549,7 +550,7 @@ function anchorStart(dir) {
 	const file = join(dir, "started");
 	try {
 		const written = readFileSync(file, "utf-8").trim();
-		const at = Date.parse(written.replace(" ", "T"));
+		const at = parseStamp(written);
 		if (Number.isFinite(at)) {
 			log(
 				`soak: resuming the clock from ${written}, which this directory already carries`
