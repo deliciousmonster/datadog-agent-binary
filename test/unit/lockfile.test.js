@@ -1,5 +1,11 @@
 // The lock file has to agree with the manifest, because `npm ci` is the first thing every CI leg runs. This is
 // not a theoretical tidiness check.
+//
+// It is also why the committed `version` trails the tag being released. optionalDependencies name the platform
+// packages THIS release publishes, so at the moment of tagging they do not exist and the lock cannot resolve
+// them. The release sets the version itself: `npm ci` first, then `npm version <tag>`, which runs
+// `harper-binary-kit deps --write` and moves optionalDependencies with it. Bumping the manifest to the tag
+// before pushing it leaves four unresolved entries here and fails `npm ci` on every leg.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
