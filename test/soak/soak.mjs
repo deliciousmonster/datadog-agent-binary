@@ -450,6 +450,11 @@ async function fireChaos() {
 		// Read the outcome after the world has had time to move; two minutes covers a restart and a verify,
 		// and a read that lands inside a pause is retried for a minute more.
 		setTimeout(async () => {
+			// Before reading the outcome, not only after a throw. `docker restart` can report success and
+			// still leave the container down, and on 2026-09-08 that went unnoticed for fourteen minutes
+			// because recovery lived in the catch block alone. Two minutes in, no action is still holding the
+			// container down on purpose: the pause is 30 s and a recreate brings it straight back.
+			await restoreContainerIfDown(`#${chaos.count} ${name}`);
 			let observed;
 			for (let attempt = 0; attempt < 6; attempt++) {
 				observed = await check(before).catch(
@@ -474,8 +479,8 @@ async function fireChaos() {
 		chaosLog(
 			`#${chaos.count} ${name} could not be applied: ${/** @type {Error} */ (error).message}`
 		);
-		// An action that threw may have got as far as taking the container down. Only actions that
-		// recreate it can, so this is a no-op for the rest.
+		// An action that threw may have got as far as taking the container down. Recovered here as well
+		// as at the readback, so an action that fails outright does not wait two minutes for it.
 		await restoreContainerIfDown(`#${chaos.count} ${name} failed`);
 	}
 }
