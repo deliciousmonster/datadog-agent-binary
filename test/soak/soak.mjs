@@ -26,6 +26,7 @@ const ROOT = "/home/harperdb/harper";
 // because this runs against a container from outside it, with no dependency on this checkout's runtime/.
 const NAMES = ["datadog-trace-agent", "datadog-agent", "datadog-agent-reaper"];
 import { parseStamp, stamp } from "./soak-clock.mjs";
+import { mountArgs, mountsPath } from "./soak-container.mjs";
 
 const HOURS = Number(process.env.SOAK_HOURS ?? 48);
 const RPS = Number(process.env.SOAK_RPS ?? 20);
@@ -330,7 +331,7 @@ async function captureContainerSpec() {
 	// added to the container is carried without this file having to learn its name.
 	for (const entry of c.Config?.Env ?? [])
 		if (!entry.startsWith("PATH=")) args.push("-e", entry);
-	for (const bind of host.Binds ?? []) args.push("-v", bind);
+	args.push(...mountArgs(host));
 	for (const [port, bindings] of Object.entries(host.PortBindings ?? {}))
 		for (const b of bindings ?? [])
 			args.push("-p", `${b.HostPort}:${port.split("/")[0]}`);
@@ -403,6 +404,14 @@ async function recreate(apiKey) {
 		throw new Error(
 			"no container spec was captured at startup, so a recreate would build a container that is not " +
 				"the one under test; refusing rather than replacing it with a guess"
+		);
+	// Without this the failure is silent and total: docker satisfies the image's own VOLUME with a fresh
+	// anonymous one, Harper comes up with an empty components/ directory, and every row after that reads a
+	// container with no plugin in it as though the plugin were healthy.
+	if (!mountsPath(containerSpec, ROOT))
+		throw new Error(
+			`the captured spec mounts nothing at ${ROOT}, so a recreate would start Harper on an empty ` +
+				"volume with no component installed; refusing rather than testing a container that carries nothing"
 		);
 	await removeContainer();
 	await run("docker", [
