@@ -331,7 +331,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     # A tag that exists, or GitHub reports the whole workflow invalid at trigger time and the tag push runs
     # nothing at all, with no job to read the reason off.
-    uses: deliciousmonster/harper-binary-kit/.github/workflows/release.yml@v0.1.0-next.1
+    uses: deliciousmonster/harper-binary-kit/.github/workflows/release.yml@v0.1.0-next.3
     # Granted here, not in the callee: a called workflow's own `permissions` block is ignored, and the caller
     # asking for less than it needs fails the run before any job starts.
     permissions:

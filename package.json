@@ -1,6 +1,6 @@
 {
 	"name": "@deliciousmonster/datadog-agent-binary",
-	"version": "7.82.1-next.11",
+	"version": "7.82.1-next.12",
 	"description": "Harper component that runs the Datadog trace-agent and core-agent alongside a node, with pre-built binaries installed per platform",
 	"type": "module",
 	"scripts": {
@@ -34,7 +34,7 @@
 	"author": "",
 	"license": "Apache-2.0",
 	"dependencies": {
-		"@deliciousmonster/harper-binary-kit": "0.1.0-next.1",
+		"@deliciousmonster/harper-binary-kit": "0.1.0-next.3",
 		"@deliciousmonster/harper-process-guard": "0.1.0-next.7"
 	},
 	"devDependencies": {
@@ -65,10 +65,10 @@
 	},
 	"homepage": "https://github.com/deliciousmonster/datadog-agent-binary#readme",
 	"optionalDependencies": {
-		"@deliciousmonster/datadog-agent-binary-linux-arm64": "7.82.1-next.11",
-		"@deliciousmonster/datadog-agent-binary-linux-x86_64": "7.82.1-next.11",
-		"@deliciousmonster/datadog-agent-binary-macos-arm64": "7.82.1-next.11",
-		"@deliciousmonster/datadog-agent-binary-windows-x86_64": "7.82.1-next.11"
+		"@deliciousmonster/datadog-agent-binary-linux-x86_64": "7.82.1-next.12",
+		"@deliciousmonster/datadog-agent-binary-linux-arm64": "7.82.1-next.12",
+		"@deliciousmonster/datadog-agent-binary-macos-arm64": "7.82.1-next.12",
+		"@deliciousmonster/datadog-agent-binary-windows-x86_64": "7.82.1-next.12"
 	},
 	"lint-staged": {
 		"*.{ts,js,json}": [
