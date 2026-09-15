@@ -333,7 +333,8 @@ export function createStart({
 				...agent,
 				command: binaries[index],
 				args: agent.args(runtime.paths),
-				verify: (launched) => verifyLaunch(agent, launched, verifyContext),
+				verify: (launched, context) =>
+					verifyLaunch(agent, launched, verifyContext, context),
 			}));
 
 			// Reported here rather than inside a supervisor, so the two of them cannot describe the same

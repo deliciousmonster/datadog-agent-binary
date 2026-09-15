@@ -15,14 +15,33 @@ import { debugVarsUrl, expvarUrl, receiverInfoUrl } from "./datadog.js";
 /** The path dd-trace posts spans to. A receiver that does not advertise it is not one this node can use. */
 const TRACE_ENDPOINT = "/v0.4/traces";
 
+/**
+ * What a read-path retake of a refuted verdict gets to spend. The poll defaults are for a process that was
+ * spawned a moment ago and has bound nothing yet; a retake runs while a /DatadogStatus/ request is held open,
+ * and the process it asks about has been up long enough to have answered already if it were going to.
+ */
+const RETAKE_BUDGET_MS = 750;
+
+/** The poll budget for this call: the default, unless the guard is re-asking a verdict that already said no. */
+const budgetFor = (context) =>
+	context?.reason === "refuted" ? { timeoutMs: RETAKE_BUDGET_MS } : {};
+
 // Both verifiers poll the same way and differ only in url; state.exited is the one giveUp condition either
 // agent has, since a dead process cannot bind the port it is being polled for.
-const pollAgent = (url, state) =>
-	pollEndpoint({ url, giveUp: () => state.exited === true });
+const pollAgent = (url, state, context) =>
+	pollEndpoint({
+		url,
+		giveUp: () => state.exited === true,
+		...budgetFor(context),
+	});
 
 /** The same wait, against a unix socket: system-probe and security-agent serve sockets, not loopback ports. */
-const pollSocket = (path, state) =>
-	pollUnixSocket({ path, giveUp: () => state.exited === true });
+const pollSocket = (path, state, context) =>
+	pollUnixSocket({
+		path,
+		giveUp: () => state.exited === true,
+		...budgetFor(context),
+	});
 
 /** The pid this node's supervisor started, or null. A guard attempt that never reached a spawn leaves it undefined (the guard's src/supervise.js:156), and comparing against that reads a healthy agent as stale. */
 const heldPid = (state) => (typeof state?.pid === "number" ? state.pid : null);
@@ -50,7 +69,7 @@ function exitDetail(state) {
 }
 
 /** Prove the trace-agent serves the endpoint dd-trace posts to and is the process this node started; a bare TCP connect is satisfied by any stray socket, and dd-trace reports a successful flush either way. */
-async function verifyTraceAgent(state, { paths, ports }) {
+async function verifyTraceAgent(state, { paths, ports }, context) {
 	if (ports.receiver === 0) {
 		return {
 			ok: false,
@@ -68,7 +87,7 @@ async function verifyTraceAgent(state, { paths, ports }) {
 		};
 	}
 	const url = receiverInfoUrl(ports.receiver);
-	const body = await pollAgent(url, state);
+	const body = await pollAgent(url, state, context);
 	const endpoints = parseJson(body)?.endpoints;
 	const serving =
 		Array.isArray(endpoints) &&
@@ -88,7 +107,7 @@ async function verifyTraceAgent(state, { paths, ports }) {
 	// /info identifies nobody: an agent left from an earlier boot answers it exactly like this node's own,
 	// and it is the one holding the port this node's agent could not bind. The expvar names the pid.
 	const identity = debugVarsUrl(ports.debug);
-	const vars = parseJson(await pollAgent(identity, state));
+	const vars = parseJson(await pollAgent(identity, state, context));
 	const answering = expvarPid(vars);
 	if (answering === null) {
 		return {
@@ -113,7 +132,7 @@ async function verifyTraceAgent(state, { paths, ports }) {
 }
 
 /** Prove the process behind the lock is a core agent: only it publishes aggregator and forwarder, and a live process of the wrong kind passes every cheaper check. */
-async function verifyCoreAgent(state, { paths, ports }) {
+async function verifyCoreAgent(state, { paths, ports }, context) {
 	if (ports.expvar === 0) {
 		return {
 			ok: false,
@@ -123,7 +142,7 @@ async function verifyCoreAgent(state, { paths, ports }) {
 		};
 	}
 	const url = expvarUrl(ports.expvar);
-	const vars = parseJson(await pollAgent(url, state));
+	const vars = parseJson(await pollAgent(url, state, context));
 	if (!vars || !("aggregator" in vars) || !("forwarder" in vars)) {
 		return {
 			ok: false,
@@ -155,9 +174,9 @@ async function verifyCoreAgent(state, { paths, ports }) {
  * Prove system-probe serves its socket, which is what makes it useful to anything else. A connect, not an
  * HTTP poll: a socket nothing accepts on is the state where it runs and no consumer can tell.
  */
-async function verifySystemProbe(state, { paths }) {
+async function verifySystemProbe(state, { paths }, context) {
 	const socket = paths.sysprobeSocket;
-	const served = await pollSocket(socket, state);
+	const served = await pollSocket(socket, state, context);
 	if (!served) {
 		return {
 			ok: false,
@@ -177,9 +196,9 @@ async function verifySystemProbe(state, { paths }) {
 }
 
 /** The same for security-agent, whose runtime security serves its own socket beside system-probe's. */
-async function verifySecurityAgent(state, { paths }) {
+async function verifySecurityAgent(state, { paths }, context) {
 	const socket = paths.securitySocket;
-	const served = await pollSocket(socket, state);
+	const served = await pollSocket(socket, state, context);
 	if (!served) {
 		return {
 			ok: false,
@@ -202,9 +221,9 @@ async function verifySecurityAgent(state, { paths }) {
  * Prove process-agent ships what system-probe collects, not that it is up: one that starts and ships nothing
  * extra is indistinguishable from not having it. The evidence is its expvar's enabled check list.
  */
-async function verifyProcessAgent(state, { paths, ports }) {
+async function verifyProcessAgent(state, { paths, ports }, context) {
 	const url = expvarUrl(ports.processExpvar);
-	const vars = parseJson(await pollAgent(url, state));
+	const vars = parseJson(await pollAgent(url, state, context));
 	if (!vars) {
 		return {
 			ok: false,
@@ -235,7 +254,7 @@ async function verifyProcessAgent(state, { paths, ports }) {
 }
 
 /** The verdict for one launched agent. Both supervisors call this, so neither can reach a verdict the other cannot. */
-export const verifyLaunch = (agent, state, context) => {
+export const verifyLaunch = (agent, state, config, context) => {
 	// Each supervisor verifies once, after the first spawn, and then rewrites `pid` and `restarts` on this
 	// same object without retaking the verdict. The pid it was taken against is the only record of that.
 	takeVerdictAgainst(state);
@@ -254,5 +273,5 @@ export const verifyLaunch = (agent, state, context) => {
 			ok: false,
 			detail: `nothing here knows how to verify an agent of kind "${agent.kind}"`,
 		};
-	return neverStarted(state) ?? verify(state, context);
+	return neverStarted(state) ?? verify(state, config, context);
 };

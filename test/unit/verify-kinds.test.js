@@ -101,3 +101,53 @@ test("NEGATIVE: an agent this node never started is not polled at all", async ()
 		assert.match(verdict.detail, /probe package is not installed/);
 	}
 });
+
+// The other half of the 2026-09-15 fix. The guard decides a verdict of `false` may be asked again; only this
+// file knows what asking costs. The boot poll waits 30 s because the process it asks about was spawned a moment
+// ago and has bound nothing yet, and a read-path retake is holding a /DatadogStatus/ request open while it
+// waits. Handing the retake that same 30 s is how the fix would have traded a stuck `false` for a stuck reader.
+// A live state, not the `exited: true` the tests above use: the point here is the deadline, so the poll has to
+// reach one.
+const live = () => ({ started: true, exited: false, pid: 4242, restarts: 0 });
+
+const securityVerdictIn = async (state, context) => {
+	const began = performance.now();
+	const verdict = await verifyLaunch(
+		{ kind: "security", title: "security-agent" },
+		state,
+		CONTEXT,
+		context
+	);
+	return { verdict, took: performance.now() - began };
+};
+
+test("a retake of a refused verdict is not given the boot poll's budget", async () => {
+	const { verdict, took } = await securityVerdictIn(live(), {
+		reason: "refuted",
+	});
+	assert.equal(
+		verdict.ok,
+		false,
+		"nothing serves the socket, so the verdict still says no"
+	);
+	assert.ok(
+		took < 2_000,
+		`a retake ran ${Math.round(took)}ms with a status request held open; it gets its own short budget`
+	);
+});
+
+// And the short budget must not leak the other way: a security-agent whose socket appears a few seconds after
+// its process starts is the normal case, and 750 ms of waiting at boot would refuse every one of them. Bounded
+// by flipping `exited` rather than by waiting out the real deadline, so the suite does not pay 30 s to read it.
+test("NEGATIVE: the boot poll keeps the long budget a just-spawned process needs", async () => {
+	const state = live();
+	setTimeout(() => {
+		state.exited = true;
+	}, 2_500).unref();
+	const { verdict, took } = await securityVerdictIn(state, undefined);
+	assert.equal(verdict.ok, false);
+	assert.ok(
+		took >= 2_400,
+		`the boot poll gave up after ${Math.round(took)}ms, which is the retake budget leaking into it`
+	);
+});
