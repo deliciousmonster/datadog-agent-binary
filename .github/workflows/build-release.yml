@@ -123,6 +123,23 @@ jobs:
         run: |
           brew install cmake
 
+      # The macos-latest image began shipping a system-wide Bazel between 2026-09-14 and 2026-09-15: the same
+      # leg built 7.82.1-next.11 and then refused 7.82.1-next.12 with "bazelisk is required to build this
+      # project". Datadog's build accepts no other entry point, because bazelisk is what reads .bazelversion
+      # and bootstraps the version the tree was written against; anything else is speculatively compatible.
+      # Removed before the build rather than worked around inside it, so `inv install-tools` puts its own
+      # `bazel` symlink on a PATH with nothing else claiming the name.
+      - name: Remove the system Bazel that shadows bazelisk (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew uninstall --ignore-dependencies bazel 2>/dev/null || true
+          sudo rm -f /usr/local/bin/bazel /opt/homebrew/bin/bazel
+          if command -v bazel >/dev/null 2>&1; then
+            echo "::error::A bazel still resolves to $(command -v bazel) after removing the image's. Datadog's build will refuse it; find what put it there before re-running."
+            exit 1
+          fi
+          echo "no bazel on PATH; bazelisk will own the name"
+
       - name: Install build dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -150,7 +167,12 @@ jobs:
       - name: Stop the Bazel daemon the build started
         if: always()
         shell: bash
+        env:
+          # `./tools/bazel` refuses an unset XDG_CACHE_HOME under CI, which is what it answered here on the
+          # macOS leg instead of shutting the daemon down.
+          XDG_CACHE_HOME: ${{ runner.temp }}/xdg-cache
         run: |
+          mkdir -p "$XDG_CACHE_HOME"
           cd "build/${{ matrix.platform }}/src" || exit 0
           ./tools/bazel shutdown || bazel shutdown || echo "no bazel to shut down"
 
