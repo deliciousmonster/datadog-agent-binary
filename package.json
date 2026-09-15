@@ -71,7 +71,7 @@
 		"@deliciousmonster/datadog-agent-binary-windows-x86_64": "7.82.1-next.11"
 	},
 	"lint-staged": {
-		"*.{ts,js,json}": [
+		"*.{ts,js,mjs,json,md,yml,yaml}": [
 			"prettier --check"
 		]
 	}
