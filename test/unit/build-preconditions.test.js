@@ -39,9 +39,6 @@ const onWindowsHost = (dir, run) =>
 /**
  * A throwaway HOME on a runner whose CI is `ci`, with XDG_CACHE_HOME set to `xdgCacheHome(home)`.
  * `run` is handed both, since two of these assert against the cache path they asked for.
- */
-/**
- * A throwaway HOME on a runner whose CI is `ci`, with XDG_CACHE_HOME set to `xdgCacheHome(home)`.
  *
  * @param {{ prefix: string, ci?: string, xdgCacheHome?: (home: string) => string | undefined }} options
  * @param {(home: string, requested: string | undefined) => any} run
