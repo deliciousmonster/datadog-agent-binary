@@ -144,7 +144,14 @@ test("the security-agent config names its own log and socket, not the core agent
 		PATHS,
 		probeSettings({ DD_RUNTIME_SECURITY_CONFIG_ENABLED: "true" })
 	);
-	assert.equal(valueOf(yaml, "log_file"), '"/logs/security-agent.log"');
+	// Not valueOf("log_file"): that helper tolerates leading whitespace, so it matches the top-level key and
+	// the nested one alike. It asserted the right path from the wrong placement, which is how the
+	// security-agent shipped logging to /var/log/datadog while this test stayed green.
+	assert.equal(
+		/^security_agent:\n\s+log_file:\s*"(.+?)"/m.exec(yaml)?.[1],
+		"/logs/security-agent.log",
+		"the security-agent reads its own log path from security_agent.log_file"
+	);
 	assert.equal(valueOf(yaml, "socket"), '"/run/runtime-security.sock"');
 	assert.match(yaml, /runtime_security_config:/);
 });
@@ -259,4 +266,54 @@ test("NEGATIVE: capabilities that cannot be read are not treated as capabilities
 	});
 	assert.equal(verdict.able, false);
 	assert.match(verdict.why, /could not be read/);
+});
+
+// Observed live on 2026-09-16: every agent logged into the runtime tree except the security-agent, which was
+// writing a growing /var/log/datadog/security-agent.log while the path this component asked for did not exist.
+// The setting was read and resolved correctly; it was the wrong key. A top-level `log_file` in the file the
+// security-agent is given sets the CORE agent's path, and the security-agent takes its own from
+// `security_agent.log_file`, defaulting to a root-owned directory outside the runtime tree. So the one log an
+// operator wants when runtime security misbehaves was the one log nobody had placed.
+test("the security-agent's own log goes where this component put every other one", () => {
+	const yaml = renderSecurityAgentYaml(PATHS, { security: true });
+	// The nested key, which is the one this binary reads for itself.
+	assert.match(
+		yaml,
+		/^security_agent:$/m,
+		"the nested section has to exist for the key below to be read"
+	);
+	assert.equal(
+		/^security_agent:\n\s+log_file:\s*"(.+?)"/m.exec(yaml)?.[1],
+		PATHS.securityLog,
+		"security_agent.log_file must name the runtime path"
+	);
+});
+
+// NEGATIVE: the shape of the bug, stated so a revert reads as a failure rather than as a tidy-up. A top-level
+// log_file alone leaves the security-agent on its compiled-in default.
+test("NEGATIVE: no rendered config leaves an agent logging under /var/log/datadog", () => {
+	for (const [name, yaml] of [
+		["security-agent", renderSecurityAgentYaml(PATHS, { security: true })],
+		[
+			"security-agent, disabled",
+			renderSecurityAgentYaml(PATHS, { security: false }),
+		],
+		[
+			"system-probe",
+			renderSystemProbeYaml(PATHS, probeSettings({}), "/objects"),
+		],
+	]) {
+		assert.doesNotMatch(
+			yaml,
+			/\/var\/log\/datadog/,
+			`${name} names the stock log directory`
+		);
+		// Every log_file the file sets, nested or not, has to be one this component placed.
+		for (const [, value] of yaml.matchAll(/^\s*log_file:\s*"(.+?)"/gm)) {
+			assert.ok(
+				value === PATHS.securityLog || value === PATHS.sysprobeLog,
+				`${name} sets log_file to ${value}, which is not a path this component owns`
+			);
+		}
+	}
 });

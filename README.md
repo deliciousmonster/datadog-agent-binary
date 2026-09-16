@@ -53,6 +53,36 @@ The plugin also publishes `system.processes.*` for the processes it spawned and 
 
 Everything the plugin writes sits under `<rootPath>/datadog/datadog-agent-binary/`: `datadog.yaml`, `conf.d/`, the agents' logs in `logs/`, and the locks in `pids/`. A lock a killed node left behind is safe to delete.
 
+## If you know Datadog, read this first
+
+Nothing is where a stock install puts it, and the agent CLI will not find its own config. Every path lives
+under `<rootPath>/datadog/datadog-agent-binary/`, because a component installed into someone else's Harper
+cannot write `/etc/datadog-agent`, and two nodes on one host would collide over a single system location.
+
+| You would reach for | Here it is |
+| --- | --- |
+| `datadog-agent status` | `datadog-agent status -c <rootPath>/datadog/datadog-agent-binary/datadog.yaml` |
+| `/etc/datadog-agent/datadog.yaml` | `<rootPath>/datadog/datadog-agent-binary/datadog.yaml` |
+| `/etc/datadog-agent/conf.d/` | `<rootPath>/datadog/datadog-agent-binary/conf.d/` |
+| `/etc/datadog-agent/runtime-security.d/` | `<rootPath>/datadog/datadog-agent-binary/runtime-security.d/` |
+| `/var/log/datadog/` | `<rootPath>/datadog/datadog-agent-binary/logs/` |
+| `/var/run/datadog/` | `<rootPath>/datadog/datadog-agent-binary/run/` — sockets, `auth_token`, `ipc_cert.pem` |
+| the agent's PID files | `<rootPath>/datadog/datadog-agent-binary/pids/`, not Harper's own `pids/` |
+
+Without `-c`, every agent subcommand fails with `unable to read artifact: open auth_token: no such file or
+directory`. That is a relative path, so the message does not say where it looked; it means the flag is missing,
+not that the agent is broken. `configcheck`, `health`, `flare` and `check <name>` all behave the same way.
+
+Before reaching for the CLI at all, try `GET /DatadogStatus/`. It answers per worker thread, and it reports
+which supervision is in charge, whether the API key is set, each process with the proof that it is the agent
+this node needs, and a delivery verdict read from three hops. It is usually the faster answer, and it needs no
+flags.
+
+Two things that will look wrong and are not. `datadog.yaml` is regenerated on every worker start, so editing it
+changes nothing — the environment is the configuration. And the config contents are folded into the fingerprint
+that decides whether a running agent is stale, so a config change replaces the process rather than reloading
+it; a pid that changes after an environment change is the design working.
+
 ## Platforms
 
 Linux x86_64 and arm64, macOS arm64, Windows x86_64. Windows arm64 waits on Chocolatey; macOS x86_64 has no GitHub runner left to build on.
