@@ -579,6 +579,23 @@ function anchorStart(dir) {
 const startedAt = anchorStart(OUT);
 let lastLoad = { sent: 0, ok: 0, failed: 0 };
 
+/**
+ * Put the container back if it is not running, whatever killed it.
+ *
+ * `restoreContainerIfDown` is also called from the chaos path, but only there: from the catch when an action
+ * throws, and from the readback two minutes after one. Between actions the gap is 10 to 30 minutes, and on
+ * 2026-09-16 the container was OOM-killed inside one. The run went on driving 20 req/s at nothing for thirteen
+ * minutes, logging about 1,180 failures a minute, and every row read `-` for supervision and verification.
+ * Rows like that are indistinguishable from a plugin that has stopped answering, which is the measurement this
+ * harness exists to take, so the recovery cannot hang off the chaos schedule.
+ *
+ * Runs after the row rather than before it, so the row still records the outage that prompted the recovery.
+ */
+async function watchdog() {
+	if (chaos.busyUntil > Date.now()) return; // an action is deliberately holding the container down
+	await restoreContainerIfDown("the status watchdog");
+}
+
 async function statusRow() {
 	const [s, vars, stats] = await Promise.all([
 		status(),
@@ -673,7 +690,10 @@ async function main() {
 	const end = Date.now() + HOURS * 3_600_000;
 	let nextChaos = Date.now() + nextGap();
 	const statusTimer = setInterval(
-		() => statusRow().catch((error) => log(`status failed: ${error.message}`)),
+		() =>
+			statusRow()
+				.then(watchdog)
+				.catch((error) => log(`status failed: ${error.message}`)),
 		60_000
 	);
 	await statusRow();
