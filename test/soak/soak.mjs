@@ -13,13 +13,16 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"; // Harper's own self-signed certificate on 9926.
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"; // Harper's own self-signed certificate on the app port.
 
 const run = promisify(execFile);
 const CONTAINER = process.env.SOAK_CONTAINER ?? "harper-demo";
 const VOLUME = process.env.SOAK_VOLUME ?? "harper-demo-vol";
 const IMAGE = process.env.SOAK_IMAGE ?? "harperfast/harper:5.2.9";
-const BASE = "https://localhost:9926";
+// Parameterised alongside CONTAINER and VOLUME, so two legs of the matrix can run against two containers
+// on two ports. A container reusing 9926 needs nothing set.
+const PORT = Number(process.env.SOAK_PORT ?? 9926);
+const BASE = `https://localhost:${PORT}`;
 const AUTH = "Basic " + Buffer.from("admin:password").toString("base64");
 const ROOT = "/home/harperdb/harper";
 // The three pid files a restart seeds, by the names the plugin locks on. Retyped here rather than imported
@@ -510,7 +513,7 @@ const COLUMNS = [
 	["req/s", 5],
 	["fail", 5],
 	["p95ms", 6],
-	["sup", 5],
+	["sup", 6],
 	["verified", 8],
 	// Five agents joined by "/" is 9 at one digit each, and a chaos run reaches two digits on some of them.
 	["restarts", 11],
