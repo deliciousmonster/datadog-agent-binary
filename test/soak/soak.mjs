@@ -233,11 +233,15 @@ const ACTIONS = {
 		};
 	},
 	async "kill-reaper"() {
+		// Guarded like every other kill here, and it was the one that was not. A status that publishes no
+		// reaper pid made this run `kill -9 undefined`, which kills nothing, and the check below then found
+		// the reaper still alive and recorded a pass. A leg that cannot kill its reaper has to say so.
 		const pid = (await status())?.reaper?.pid;
+		if (!pid) return notApplicable("no reaper pid in the status to kill");
 		await sh(`kill -9 ${pid}`);
 		return {
 			expect:
-				"the agents keep running; a reaper is relaunched on the next thread start or restart",
+				"the agents keep running and a replacement reaper comes up under a new pid",
 			check: async () => (await status())?.reaper,
 			before: pid,
 		};
