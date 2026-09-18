@@ -678,10 +678,36 @@ async function statusRow() {
 
 // ---------------------------------------------------------------------------------------------------
 
+/**
+ * Refuse to run against a container other than the one named. Docker starts a container whose published ports
+ * are already taken with NO publication at all and reports success, so a second leg on the same ports answers
+ * every request while the harness labels the rows with the first leg's name. That nearly cost a 24-hour run
+ * measuring the wrong Harper.
+ */
+async function assertContainerOwnsPort() {
+	let mapped;
+	try {
+		mapped = (await run("docker", ["port", CONTAINER, "9926"])).stdout;
+	} catch (error) {
+		throw new Error(
+			`soak: cannot read ${CONTAINER}'s port map (${error.message.split("\n")[0]}). ` +
+				`It must be running and publishing 9926 before a run starts.`
+		);
+	}
+	if (!new RegExp(`:${PORT}\\b`).test(mapped)) {
+		throw new Error(
+			`soak: ${CONTAINER} does not publish 9926 on host port ${PORT}; docker reports "${mapped.trim() || "nothing"}". ` +
+				`Whatever is answering ${BASE} is a different container, so every row would be labelled wrongly. ` +
+				`Stop the other leg and recreate this one: docker start alone will not add a publication it failed to take.`
+		);
+	}
+}
+
 async function main() {
 	log(
 		`soak: ${HOURS}h at ${RPS} req/s against ${CONTAINER} (${IMAGE}); chaos every ${GAP_MIN}-${GAP_MAX} min; output under ${OUT}`
 	);
+	await assertContainerOwnsPort();
 	containerSpec = await captureContainerSpec();
 	log(
 		containerSpec
