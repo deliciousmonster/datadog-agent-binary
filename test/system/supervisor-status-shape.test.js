@@ -48,17 +48,25 @@ test("NEGATIVE: an agent that never started answers the same questions a running
 		assert.equal(state.restarts, 0);
 	}));
 
-test("Harper's own reaper is shaped before it reaches the status, not copied into it", () =>
+// This assertion used to be its inverse: the reaper was copied through a ["adopted","name","started"] allowlist
+// on the reasoning that a host this package does not ship may hang anything off it. The allowlist dropped
+// `pid`, which is what an operator reads to find the process and what chaos testing kills, and `exited`, which
+// on the native path is the death signal itself. With both gone the status endpoint re-derived liveness from a
+// lock file this package never wrote, and published a live reaper as dead. The counterpoint the allowlist was
+// built for is real and is kept below: a host that hangs an internal handle here does publish it.
+test("Harper's own reaper reaches the status whole, as the object Harper goes on mutating", () =>
 	withTempDir("status-shape-", async (root) => {
-		// A field a real Harper may hang off its reaper, which nothing in this package has read or documented.
+		const reaperState = {
+			name: "harper-reaper",
+			started: true,
+			adopted: false,
+			pid: 4242,
+			exited: false,
+			internalHandle: { socket: "/var/run/harper.sock" },
+		};
 		const scope = {
 			processes: {
-				reaper: {
-					name: "harper-reaper",
-					started: true,
-					adopted: false,
-					internalHandle: { socket: "/var/run/harper.sock" },
-				},
+				reaper: reaperState,
 				start: async (options) => {
 					const state = { started: true, pid: process.pid, exited: false };
 					const verdict = await options.verify(state);
@@ -82,9 +90,29 @@ test("Harper's own reaper is shaped before it reaches the status, not copied int
 			true,
 			"a running reaper must be tellable from an absent one"
 		);
-		assert.deepEqual(
-			Object.keys(reaper).sort(),
-			["adopted", "name", "started"],
-			"the status endpoint published Harper's own object rather than the fields this package documents"
+		assert.equal(
+			reaper.pid,
+			4242,
+			"the field an operator needs to find the process, and the one chaos testing kills"
 		);
+		assert.equal(
+			reaper.exited,
+			false,
+			"and the one that carries its death on this path"
+		);
+		assert.equal(
+			reaper,
+			reaperState,
+			"a copy freezes the status on what was true at boot; Harper mutates this object for the life of the node"
+		);
+
+		// The cost of publishing whole, asserted rather than left implicit: whatever the host hangs here is
+		// published. A Harper SidecarState is plain data, and the fields the allowlist dropped are worth more.
+		assert.deepEqual(reaper.internalHandle, { socket: "/var/run/harper.sock" });
+
+		// Mutation is the point: the status endpoint reads this object again on every request
+		reaperState.started = false;
+		reaperState.error = "the reaper was terminated by SIGKILL";
+		assert.equal(reaper.started, false);
+		assert.equal(reaper.error, "the reaper was terminated by SIGKILL");
 	}));

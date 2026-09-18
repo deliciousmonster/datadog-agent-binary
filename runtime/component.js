@@ -228,10 +228,18 @@ export function createStatusResource({
 						)
 					)
 				),
-				// Same reason as the verdicts above: a reaper the supervisor started can be gone, and until
-				// this was read here the status reported the boot state and the dead pid with it.
+				// Same reason as the verdicts above: a reaper the guard started can be gone, and until this
+				// was read here the status reported the boot state and the dead pid with it. Only the
+				// guard's: it is the one that builds a state once and leaves a copy behind. A native host
+				// mutates the state it published, so a lock read here was a second opinion formed from the
+				// wrong directory in the wrong format, and it reported a live reaper as dead.
 				...(status.reaper
-					? { reaper: currentReaper(status.reaper, state.pidDir, REAPER_NAME) }
+					? {
+							reaper:
+								status.supervision === "guard"
+									? currentReaper(status.reaper, state.pidDir, REAPER_NAME)
+									: status.reaper,
+						}
 					: {}),
 				// Which thread answered; every field above it is per-thread state.
 				threadId,
@@ -377,7 +385,8 @@ export function createStart({
 						.map((agent) => {
 							const live = nodeProcess(
 								startedProcess(agent.name),
-								runtime.paths.pidDir
+								runtime.paths.pidDir,
+								status.supervision
 							);
 							return { name: agent.name, pid: live?.pid };
 						})

@@ -690,8 +690,9 @@ async function assertContainerOwnsPort() {
 		mapped = (await run("docker", ["port", CONTAINER, "9926"])).stdout;
 	} catch (error) {
 		throw new Error(
-			`soak: cannot read ${CONTAINER}'s port map (${error.message.split("\n")[0]}). ` +
-				`It must be running and publishing 9926 before a run starts.`
+			`soak: cannot read ${CONTAINER}'s port map (${
+				String(error instanceof Error ? error.message : error).split("\n")[0]
+			}). ` + `It must be running and publishing 9926 before a run starts.`
 		);
 	}
 	if (!new RegExp(`:${PORT}\\b`).test(mapped)) {
