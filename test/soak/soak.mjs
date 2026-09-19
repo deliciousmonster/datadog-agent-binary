@@ -189,6 +189,26 @@ const chaos = {
 	busyUntil: 0,
 	pending: [],
 };
+
+/**
+ * Counters that must keep climbing while the node is under load, and what the last row saw of each.
+ *
+ * The harness recorded these and asserted nothing about them, so leg 1 spent ten of its twenty-four hours
+ * with the trace hop refused and finished without a word: the columns held the evidence and nobody was
+ * reading them until afterwards. A pipeline that stops outside a chaos window is now counted and logged
+ * while the run is still going.
+ */
+const STALL_ROWS = 3;
+const pipelines = {
+	logsSent: { label: "logs", last: null, quiet: 0 },
+	fwdOK: {
+		label: "metrics and everything else the core agent ships",
+		last: null,
+		quiet: 0,
+	},
+	series: { label: "metric series", last: null, quiet: 0 },
+};
+const stalls = { flagged: 0, verdictRows: 0, byPipeline: {} };
 const pidOf = (s, kind) => s?.processes?.find((p) => p.kind === kind)?.pid;
 
 /**
@@ -529,6 +549,7 @@ const COLUMNS = [
 	["traceOK", 7],
 	["traceErr", 8],
 	["fwdOK", 6],
+	["series", 7],
 	["logsSent", 8],
 	["logsErr", 7],
 	["chaos", 32],
@@ -603,6 +624,55 @@ async function watchdog() {
 	await restoreContainerIfDown("the status watchdog");
 }
 
+/**
+ * Whether the node is far enough from the last chaos action for a stalled pipeline to mean something. A kill
+ * or a recreate legitimately stops every counter for a minute or two, and the recovery reads the same as a
+ * failure, so a row inside that window proves nothing either way.
+ */
+const quietNow = () =>
+	chaos.busyUntil <= Date.now() &&
+	(chaos.at === null || Date.now() - chaos.at > 3 * 60_000);
+
+/**
+ * Flag a pipeline that has stopped moving, or a trace verdict that reads refused, while nothing is being done
+ * to the node. Counted rather than thrown: a leg is worth finishing even with one hop down, and the count is
+ * what the run summary reports so nobody has to go looking afterwards.
+ *
+ * @param {Record<string, any>} values The row just written.
+ */
+function assertPipelinesMoving(values) {
+	if (!quietNow()) {
+		for (const p of Object.values(pipelines)) p.quiet = 0;
+		return;
+	}
+	for (const [column, p] of Object.entries(pipelines)) {
+		const now = values[column];
+		if (typeof now !== "number") continue;
+		// Strictly greater: a counter that holds its value under continuous load has stopped.
+		p.quiet = p.last !== null && now <= p.last ? p.quiet + 1 : 0;
+		p.last = now;
+		if (p.quiet === STALL_ROWS) {
+			stalls.flagged++;
+			stalls.byPipeline[column] = (stalls.byPipeline[column] ?? 0) + 1;
+			log(
+				`STALL: ${p.label} has not moved for ${STALL_ROWS} minutes with no chaos in flight ` +
+					`(${column} held at ${now}). The pipeline is down and this is not a chaos window.`
+			);
+		}
+	}
+	if (values.verdict === "rejected") {
+		stalls.verdictRows++;
+		if (stalls.verdictRows % STALL_ROWS === 0)
+			log(
+				`STALL: delivery has read rejected for ${stalls.verdictRows} rows with no chaos in flight. ` +
+					`Check the trace-agent log for the reason; leg 1 saw both a name-resolution failure and a ` +
+					`client timeout this way, neither of them this node's doing.`
+			);
+	} else {
+		stalls.verdictRows = 0;
+	}
+}
+
 async function statusRow() {
 	const [s, vars, stats] = await Promise.all([
 		status(),
@@ -627,6 +697,9 @@ async function statusRow() {
 	lastLoad = { sent: load.sent, ok: load.ok, failed: load.failed };
 	const sorted = load.latencyMs.splice(0).sort((a, b) => a - b);
 	const p95 = sorted.length ? sorted[Math.floor(sorted.length * 0.95)] : "-";
+	// The metrics hop. SeriesFlushed climbing is the aggregator handing series to the forwarder; the
+	// forwarder's own Success count is that hop landing. Neither was read before.
+	const series = vars.core?.aggregator?.SeriesFlushed;
 	const forwarder = vars.core?.forwarder?.Transactions ?? {};
 	const fwdOK =
 		Object.values(forwarder.Success ?? {}).reduce(
@@ -664,6 +737,7 @@ async function statusRow() {
 		traceOK: d.traceWriter?.payloads ?? "-",
 		traceErr: refusals(d.traceWriter),
 		fwdOK: typeof fwdOK === "number" ? fwdOK : "-",
+		series: typeof series === "number" ? series : "-",
 		logsSent: logs.LogsSent ?? "-",
 		logsErr: logs.DestinationErrors ?? "-",
 		chaos: chaos.at
@@ -672,12 +746,89 @@ async function statusRow() {
 	};
 	if (rows++ % 20 === 0) console.log(header());
 	console.log(row(values));
+	assertPipelinesMoving(values);
 	appendFileSync(
 		STATUS_TSV,
 		(rows === 1 ? COLUMNS.map(([n]) => n).join("\t") + "\n" : "") +
 			COLUMNS.map(([n]) => values[n]).join("\t") +
 			"\n"
 	);
+}
+
+/**
+ * Ask Datadog what it actually received for this leg, which is the one thing no local reading can establish.
+ *
+ * `trace_writer` publishes zeros on agent 7.82.1 even while it delivers, so the plugin's own strongest claim
+ * about traces is `proven.tracesAtDatadog: null` and the verdict is named `traces-unrefuted` for that reason.
+ * Every other figure this harness records is the agent's own accounting of what it believes it sent.
+ *
+ * Needs an application key, which is a different credential from the intake key the agents use: the intake
+ * key validates against /api/v1/validate and is refused 401 by every read endpoint. Put one at
+ * ~/.config/datadog/APP_KEY and this arms itself. Without one the leg records that it could not ask, rather
+ * than claiming anything.
+ */
+async function confirmAtDatadog() {
+	const site = process.env.DD_SITE ?? "datadoghq.com";
+	let appKey;
+	let apiKey;
+	try {
+		appKey = readFileSync(
+			join(homedir(), ".config/datadog/APP_KEY"),
+			"utf-8"
+		).trim();
+		apiKey = readFileSync(
+			join(homedir(), ".config/datadog/API_KEY"),
+			"utf-8"
+		).trim();
+	} catch {
+		log(
+			"soak: no application key at ~/.config/datadog/APP_KEY, so nothing was asked of Datadog. Every " +
+				"delivery figure above is the agents' own accounting of what they believe they sent, and traces " +
+				"are unrefuted rather than confirmed."
+		);
+		return;
+	}
+	const from = Math.floor(startedAt / 1000);
+	const to = Math.floor(Date.now() / 1000);
+	const host = process.env.DD_HOSTNAME ?? CONTAINER;
+	const ask = async (label, path, body) => {
+		try {
+			const res = await fetch(`https://api.${site}${path}`, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"DD-API-KEY": apiKey,
+					"DD-APPLICATION-KEY": appKey,
+				},
+				body: JSON.stringify(body),
+				signal: AbortSignal.timeout(20_000),
+			});
+			if (!res.ok)
+				return log(`soak: Datadog refused the ${label} query (${res.status})`);
+			const json = /** @type {{ data?: unknown[] }} */ (await res.json());
+			// Both endpoints answer with a data array; the length is what this is for.
+			log(
+				`soak: Datadog reports ${(json.data ?? []).length} ${label} for host ${host} during this leg`
+			);
+		} catch (error) {
+			log(
+				`soak: could not ask Datadog for ${label} (${error instanceof Error ? error.message : error})`
+			);
+		}
+	};
+	await ask("spans", "/api/v2/spans/events/search", {
+		data: {
+			attributes: {
+				filter: { from: `${from}`, to: `${to}`, query: `host:${host}` },
+				page: { limit: 25 },
+			},
+			type: "search_request",
+		},
+	});
+	await ask("logs", "/api/v2/logs/events/search", {
+		filter: { from: `${from}000`, to: `${to}000`, query: `host:${host}` },
+		page: { limit: 25 },
+	});
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -739,6 +890,15 @@ async function main() {
 		log(
 			`soak: finished after ${((Date.now() - startedAt) / 3_600_000).toFixed(2)}h, ${chaos.count} chaos actions, ${load.sent} requests (${load.failed} failed)`
 		);
+		const stalled = Object.entries(stalls.byPipeline)
+			.map(([k, n]) => `${k} x${n}`)
+			.join(", ");
+		log(
+			stalls.flagged === 0
+				? "soak: every pipeline kept climbing in every quiet row"
+				: `soak: ${stalls.flagged} pipeline stall(s) outside a chaos window: ${stalled}`
+		);
+		await confirmAtDatadog();
 		for (const r of chaos.results)
 			log(`  ${r.name}: ${r.summary.slice(0, 200)}`);
 		process.exit(0);
