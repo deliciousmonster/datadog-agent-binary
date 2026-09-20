@@ -22,6 +22,8 @@ const IMAGE = process.env.SOAK_IMAGE ?? "harperfast/harper:5.2.9";
 // Parameterised alongside CONTAINER and VOLUME, so two legs of the matrix can run against two containers
 // on two ports. A container reusing 9926 needs nothing set.
 const PORT = Number(process.env.SOAK_PORT ?? 9926);
+/** The port inside the container, which the host port above is published onto. Irrelevant to a host leg. */
+const PORT_IN_CONTAINER = Number(process.env.SOAK_CONTAINER_PORT ?? 9926);
 const BASE = `https://localhost:${PORT}`;
 const AUTH = "Basic " + Buffer.from("admin:password").toString("base64");
 const ROOT = "/home/harperdb/harper";
@@ -48,13 +50,43 @@ const chaosLog = (line) => {
 	appendFileSync(CHAOS_LOG, `${stamp()} ${line}\n`);
 };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Where the node under test runs. A docker leg is driven through the container; a host leg is the Harper this
+ * machine has installed, driven through its own CLI and this shell.
+ *
+ * The harness was docker-only and the two host legs of the matrix could not be run at all: `sh` was
+ * `docker exec`, resource use came from `docker stats`, and half the chaos actions were `docker restart`.
+ * Each of those is one seam now, with a host answer beside the container one.
+ *
+ * The measurements are NOT numerically comparable across modes, and are not meant to be: container CPU has no
+ * exact host analogue. The matrix asks patched against unpatched, which is answered inside the docker pair and
+ * again inside the host pair, and each pair shares its plumbing.
+ */
+const HOST_MODE = (process.env.SOAK_MODE ?? "docker") === "host";
 const sh = async (cmd) =>
-	(
-		await run("docker", ["exec", CONTAINER, "sh", "-c", cmd], {
-			maxBuffer: 8 << 20,
-		})
-	).stdout;
+	HOST_MODE
+		? (await run("sh", ["-c", cmd], { maxBuffer: 8 << 20 })).stdout
+		: (
+				await run("docker", ["exec", CONTAINER, "sh", "-c", cmd], {
+					maxBuffer: 8 << 20,
+				})
+			).stdout;
 const docker = (...args) => run("docker", args, { maxBuffer: 8 << 20 });
+/** The Harper CLI drives a host leg the way `docker` drives a container one. */
+const harperCli = (...args) => run("harper", args, { maxBuffer: 8 << 20 });
+
+/** Every pid of the host leg's Harper, the main process first. Empty when it is not running. */
+async function hostHarperPids() {
+	try {
+		const out = await sh(
+			"ps -eo pid,command | grep -i '[h]arper' | grep -v ' grep ' | awk '{print $1}'"
+		);
+		return out.trim().split(/\s+/).filter(Boolean).map(Number).filter(Boolean);
+	} catch {
+		return [];
+	}
+}
 
 // ---------------------------------------------------------------------------------------------------
 // Load: a fixed rate spread over a handful of workers, paths discovered from the shop's own listing.
@@ -148,6 +180,20 @@ async function expvars() {
 	}
 }
 async function containerStats() {
+	if (HOST_MODE) {
+		try {
+			// The node's own process tree rather than a container's cgroup: %cpu is per-process and summed,
+			// rss likewise. Not the same measurement as docker's, and not compared against it.
+			const out = await sh(
+				"ps -eo pcpu,rss,command | grep -i '[h]arper' | grep -v ' grep ' | " +
+					"awk '{c+=$1; r+=$2} END {printf \"%.2f%% %.3fGiB\", c, r/1048576}'"
+			);
+			const [cpu, mem] = out.trim().split(/\s+/);
+			return { cpu: cpu || "-", mem: mem || "-" };
+		} catch {
+			return { cpu: "-", mem: "-" };
+		}
+	}
 	try {
 		const { stdout } = await docker(
 			"stats",
@@ -163,6 +209,21 @@ async function containerStats() {
 	}
 }
 async function rss(pids) {
+	if (HOST_MODE) {
+		// macOS has no /proc. `ps -o rss=` prints kibibytes, which is what the /proc branch converts to.
+		return Promise.all(
+			pids.map(async (pid) => {
+				if (!Number(pid)) return "-";
+				try {
+					const out = await sh(`ps -o rss= -p ${Number(pid)}`);
+					const kb = Number(out.trim());
+					return kb ? String(Math.round(kb / 1024)) : "-";
+				} catch {
+					return "-";
+				}
+			})
+		);
+	}
 	try {
 		// One token per pid, whatever happens to it.
 		const out = await sh(
@@ -176,6 +237,35 @@ async function rss(pids) {
 	} catch {
 		return pids.map(() => "-");
 	}
+}
+
+/** Restart the node under test: the container, or Harper's own CLI on a host leg. */
+const restartNode = () =>
+	HOST_MODE ? harperCli("restart") : docker("restart", CONTAINER);
+
+/**
+ * Hold the node still. `docker pause` freezes a container's processes with SIGSTOP under the hood, so a host
+ * leg signals the same thing to Harper's own tree. Its children, the agents, are deliberately left running:
+ * that is what the container case does too, since the agents are in the same cgroup but the point of the
+ * action is an unresponsive node rather than dead agents.
+ */
+async function pauseNode() {
+	if (!HOST_MODE) return docker("pause", CONTAINER);
+	for (const pid of await hostHarperPids())
+		try {
+			process.kill(pid, "SIGSTOP");
+		} catch {
+			// gone between the listing and the signal
+		}
+}
+async function resumeNode() {
+	if (!HOST_MODE) return docker("unpause", CONTAINER);
+	for (const pid of await hostHarperPids())
+		try {
+			process.kill(pid, "SIGCONT");
+		} catch {
+			// gone between the listing and the signal
+		}
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -267,7 +357,7 @@ const ACTIONS = {
 		};
 	},
 	async restart() {
-		await docker("restart", CONTAINER);
+		await restartNode();
 		return {
 			expect: "both agents come back verified after the restart",
 			check: async () => (await status())?.processes,
@@ -277,7 +367,7 @@ const ACTIONS = {
 		await sh(
 			`for n in ${NAMES.join(" ")}; do printf '1\\n' > ${ROOT}/pids/$n.pid; done`
 		);
-		await docker("restart", CONTAINER);
+		await restartNode();
 		return {
 			expect:
 				"the plugin removes Harper's three pid files naming pid 1 and both agents come back verified",
@@ -298,10 +388,10 @@ const ACTIONS = {
 		};
 	},
 	async "pause-30s"() {
-		await docker("pause", CONTAINER);
+		await pauseNode();
 		chaos.busyUntil = Date.now() + 60_000;
-		chaos.pending.push(() => docker("unpause", CONTAINER).catch(() => {}));
-		setTimeout(() => docker("unpause", CONTAINER).catch(() => {}), 30_000);
+		chaos.pending.push(() => resumeNode().catch(() => {}));
+		setTimeout(() => resumeNode().catch(() => {}), 30_000);
 		return {
 			expect: "requests fail for 30 s, then everything resumes with no restart",
 			check: async () => (await status())?.processes,
@@ -406,6 +496,19 @@ async function removeContainer() {
  * Put the container back if a chaos action left it down.
  */
 async function restoreContainerIfDown(after) {
+	if (HOST_MODE) {
+		const up = await harperCli("status")
+			.then(({ stdout }) => /status:\s*running/.test(stdout))
+			.catch(() => false);
+		if (up) return;
+		chaosLog(
+			`the host leg's Harper is not running after ${after}; starting it`
+		);
+		await harperCli("start").catch((error) =>
+			chaosLog(`could not start it: ${/** @type {Error} */ (error).message}`)
+		);
+		return;
+	}
 	const running = await docker(
 		"ps",
 		"-q",
@@ -427,6 +530,13 @@ async function restoreContainerIfDown(after) {
 }
 
 async function recreate(apiKey) {
+	if (HOST_MODE) {
+		// A host leg has no container to rebuild, so the key moves in the environment Harper is restarted
+		// with. DD_API_KEY is what the plugin renders into datadog.yaml on every boot.
+		process.env.DD_API_KEY = apiKey;
+		await harperCli("restart");
+		return;
+	}
 	if (!containerSpec)
 		throw new Error(
 			"no container spec was captured at startup, so a recreate would build a container that is not " +
@@ -681,12 +791,19 @@ async function statusRow() {
 	]);
 	const tracePid = pidOf(s, "trace");
 	const corePid = pidOf(s, "core");
-	// Harper's own node process is the biggest one; pid 1 is a one-megabyte shim in front of it.
-	const harperPid = await sh(
-		`for d in /proc/[0-9]*; do p=$(basename $d); awk -v p=$p '/VmRSS/{print $2, p}' $d/status; done | sort -n | tail -1 | awk '{print $2}'`
-	)
-		.then((out) => Number(out.trim()) || 0)
-		.catch(() => 0);
+	// Harper's own node process is the biggest one; pid 1 is a one-megabyte shim in front of it. On a host
+	// leg there is no /proc and no pid 1 shim, so the same "biggest Harper process" is found through ps.
+	const harperPid = HOST_MODE
+		? await sh(
+				"ps -eo rss,pid,command | grep -i '[h]arper' | grep -v ' grep ' | sort -rn | head -1 | awk '{print $2}'"
+			)
+				.then((out) => Number(out.trim()) || 0)
+				.catch(() => 0)
+		: await sh(
+				`for d in /proc/[0-9]*; do p=$(basename $d); awk -v p=$p '/VmRSS/{print $2, p}' $d/status; done | sort -n | tail -1 | awk '{print $2}'`
+			)
+				.then((out) => Number(out.trim()) || 0)
+				.catch(() => 0);
 	const [harperMB, traceMB, coreMB] = await rss([
 		harperPid,
 		tracePid ?? 0,
@@ -840,9 +957,27 @@ async function confirmAtDatadog() {
  * measuring the wrong Harper.
  */
 async function assertContainerOwnsPort() {
+	if (HOST_MODE) {
+		// No publication to check. The equivalent question is whether this leg's Harper is the thing
+		// answering on the port the run is about to drive.
+		const answered = await fetch(`${BASE}/`, {
+			signal: AbortSignal.timeout(8000),
+		}).then(
+			() => true,
+			() => false
+		);
+		if (!answered)
+			throw new Error(
+				`soak: nothing answers ${BASE} on this host, so there is no leg to drive. Start Harper ` +
+					"against this leg's root and confirm it serves before a run starts."
+			);
+		return;
+	}
 	let mapped;
 	try {
-		mapped = (await run("docker", ["port", CONTAINER, "9926"])).stdout;
+		mapped = (
+			await run("docker", ["port", CONTAINER, String(PORT_IN_CONTAINER)])
+		).stdout;
 	} catch (error) {
 		throw new Error(
 			`soak: cannot read ${CONTAINER}'s port map (${
@@ -864,12 +999,20 @@ async function main() {
 		`soak: ${HOURS}h at ${RPS} req/s against ${CONTAINER} (${IMAGE}); chaos every ${GAP_MIN}-${GAP_MAX} min; output under ${OUT}`
 	);
 	await assertContainerOwnsPort();
-	containerSpec = await captureContainerSpec();
-	log(
-		containerSpec
-			? `soak: captured the container's own run configuration (${containerSpec.filter((a) => a === "--cap-add").length} added capabilities, ${containerSpec.filter((a) => a === "-v").length} mounts); recreates replay it`
-			: `soak: ${CONTAINER} is not running, so no run configuration was captured; any chaos action that recreates it will refuse`
-	);
+	if (HOST_MODE) {
+		log(
+			`soak: host mode. The node is this machine's Harper, driven through its own CLI; resource figures ` +
+				`come from the Harper process tree rather than a container and are not comparable with a ` +
+				`docker leg's.`
+		);
+	} else {
+		containerSpec = await captureContainerSpec();
+		log(
+			containerSpec
+				? `soak: captured the container's own run configuration (${containerSpec.filter((a) => a === "--cap-add").length} added capabilities, ${containerSpec.filter((a) => a === "-v").length} mounts); recreates replay it`
+				: `soak: ${CONTAINER} is not running, so no run configuration was captured; any chaos action that recreates it will refuse`
+		);
+	}
 	const stop = { stopped: false };
 	const stopLoad = startLoad(stop);
 	const end = Date.now() + HOURS * 3_600_000;

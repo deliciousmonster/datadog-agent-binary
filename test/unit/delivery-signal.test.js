@@ -192,10 +192,17 @@ test("counters missing from the payload are read as zero, not as NaN in a verdic
 test("NEGATIVE: /DatadogStatus/ carries the delivery signal on a thread that started nothing", async () => {
 	// The counters belong to the node's trace-agent, so a thread that never ran startup still has a reading to
 	// report; a verdict computed and then not wired into the response is the whole ticket going missing.
-	const status = await DatadogStatus.get();
+	//
+	// The port is pinned to one just proven free rather than left at the default. This read used to trust the
+	// default port to be closed and called that deterministic, which held until a real agent ran on the same
+	// machine: a soak leg on this host answers 127.0.0.1:5000 and the verdict came back traces-unconfirmed,
+	// failing a test that has nothing to do with what was running.
+	const free = await findFreePort();
+	const component = await withEnvs({ DD_APM_DEBUG_PORT: String(free) }, () =>
+		loadComponent()
+	);
+	const status = await component.DatadogStatus.get();
 	assert.equal(status.delivery.signalVersion, 3);
-	// No agent has started on this thread, so the debug port readDeliverySignal dials (5012 by default) has
-	// nothing listening: the read comes back unavailable, deterministically.
 	assert.equal(status.delivery.verdict, "unavailable");
 });
 
