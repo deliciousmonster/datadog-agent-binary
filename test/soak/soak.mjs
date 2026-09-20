@@ -551,8 +551,8 @@ async function restoreContainerIfDown(after) {
 async function recreate(apiKey) {
 	if (HOST_MODE) {
 		// A host leg has no container to rebuild, so the key moves in the environment Harper is restarted
-		// with. DD_API_KEY is what the plugin renders into datadog.yaml on every boot, and an empty one
-		// makes the trace-agent exit 255 immediately, so it has to be present on every start here.
+		// with. DD_API_KEY is what the plugin renders into datadog.yaml on every boot, so a restart started
+		// without it in the environment renders an empty key and the leg silently stops delivering.
 		process.env.DD_API_KEY = apiKey;
 		await restartNode();
 		return;
