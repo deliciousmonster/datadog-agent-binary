@@ -377,6 +377,12 @@ const ACTIONS = {
 		};
 	},
 	async "restart-seeded-pid-1"() {
+		// The seeded lock is a stale one, so the agents it names must be gone before it is written. On a
+		// container leg the restart kills them anyway; on a host leg they survive, and a lock naming pid 1
+		// beside a live agent is not the stale-file case this action exists to test. It is a different one,
+		// an unfindable orphan holding its port, which cost leg 4 ninety minutes and is now fixed in the
+		// supervisor rather than manufactured here.
+		if (HOST_MODE) await harperCli("stop").catch(() => {});
 		await sh(
 			`for n in ${NAMES.join(" ")}; do printf '1\\n' > ${ROOT}/pids/$n.pid; done`
 		);
@@ -545,9 +551,10 @@ async function restoreContainerIfDown(after) {
 async function recreate(apiKey) {
 	if (HOST_MODE) {
 		// A host leg has no container to rebuild, so the key moves in the environment Harper is restarted
-		// with. DD_API_KEY is what the plugin renders into datadog.yaml on every boot.
+		// with. DD_API_KEY is what the plugin renders into datadog.yaml on every boot, and an empty one
+		// makes the trace-agent exit 255 immediately, so it has to be present on every start here.
 		process.env.DD_API_KEY = apiKey;
-		await harperCli("restart");
+		await restartNode();
 		return;
 	}
 	if (!containerSpec)
