@@ -26,7 +26,8 @@ const PORT = Number(process.env.SOAK_PORT ?? 9926);
 const PORT_IN_CONTAINER = Number(process.env.SOAK_CONTAINER_PORT ?? 9926);
 const BASE = `https://localhost:${PORT}`;
 const AUTH = "Basic " + Buffer.from("admin:password").toString("base64");
-const ROOT = "/home/harperdb/harper";
+/** The node's data root, where the pid locks live. A host leg's is wherever that leg was installed. */
+const ROOT = process.env.SOAK_ROOT ?? "/home/harperdb/harper";
 // The three pid files a restart seeds, by the names the plugin locks on. Retyped here rather than imported
 // because this runs against a container from outside it, with no dependency on this checkout's runtime/.
 const NAMES = ["datadog-trace-agent", "datadog-agent", "datadog-agent-reaper"];
@@ -239,9 +240,18 @@ async function rss(pids) {
 	}
 }
 
-/** Restart the node under test: the container, or Harper's own CLI on a host leg. */
-const restartNode = () =>
-	HOST_MODE ? harperCli("restart") : docker("restart", CONTAINER);
+/**
+ * Restart the node under test.
+ *
+ * `harper restart` is not one: it exits 4 with "Harper is already running" while Harper is up, so the host
+ * leg stops and starts instead. The stop is allowed to fail, because a node already down is the state the
+ * start wants anyway.
+ */
+const restartNode = async () => {
+	if (!HOST_MODE) return docker("restart", CONTAINER);
+	await harperCli("stop").catch(() => {});
+	await harperCli("start");
+};
 
 /**
  * Hold the node still. `docker pause` freezes a container's processes with SIGSTOP under the hood, so a host
@@ -290,13 +300,16 @@ const chaos = {
  */
 const STALL_ROWS = 3;
 const pipelines = {
-	logsSent: { label: "logs", last: null, quiet: 0 },
+	// Payload counts, not line counts: the logs agent batches, so a quiet three minutes is ordinary and only
+	// a much longer silence means anything. Ten minutes under continuous load sending no log payload is not.
+	logsSent: { label: "logs", last: null, quiet: 0, rows: 10 },
 	fwdOK: {
 		label: "metrics and everything else the core agent ships",
 		last: null,
 		quiet: 0,
+		rows: STALL_ROWS,
 	},
-	series: { label: "metric series", last: null, quiet: 0 },
+	series: { label: "metric series", last: null, quiet: 0, rows: STALL_ROWS },
 };
 const stalls = { flagged: 0, verdictRows: 0, byPipeline: {} };
 const pidOf = (s, kind) => s?.processes?.find((p) => p.kind === kind)?.pid;
@@ -758,14 +771,17 @@ function assertPipelinesMoving(values) {
 	for (const [column, p] of Object.entries(pipelines)) {
 		const now = values[column];
 		if (typeof now !== "number") continue;
-		// Strictly greater: a counter that holds its value under continuous load has stopped.
-		p.quiet = p.last !== null && now <= p.last ? p.quiet + 1 : 0;
+		// A counter that went BACKWARDS is an agent that restarted, not a pipeline that stopped: these are the
+		// agent's own since-boot totals and a chaos kill zeroes them. Re-baseline rather than flag, or every
+		// kill-core-agent reads as a logs outage, which is what the first host leg reported 17 times.
+		if (p.last !== null && now < p.last) p.quiet = 0;
+		else p.quiet = p.last !== null && now === p.last ? p.quiet + 1 : 0;
 		p.last = now;
-		if (p.quiet === STALL_ROWS) {
+		if (p.quiet === p.rows) {
 			stalls.flagged++;
 			stalls.byPipeline[column] = (stalls.byPipeline[column] ?? 0) + 1;
 			log(
-				`STALL: ${p.label} has not moved for ${STALL_ROWS} minutes with no chaos in flight ` +
+				`STALL: ${p.label} has not moved for ${p.rows} minutes with no chaos in flight ` +
 					`(${column} held at ${now}). The pipeline is down and this is not a chaos window.`
 			);
 		}
