@@ -90,30 +90,35 @@ const harperCli = (...args) => run("harper", args, { maxBuffer: 8 << 20 });
  */
 let hostEnv = null;
 async function captureHostEnv() {
-	const [pid] = await hostHarperPids();
-	if (!pid) return null;
-	try {
-		// `ps -E` prints the environment after the command; macOS has no /proc to read it from.
-		const out = await run(
-			"ps",
-			["-Ewww", "-o", "command=", "-p", String(pid)],
-			{
-				maxBuffer: 8 << 20,
+	// Every candidate, not the first: `ps | grep harper` matches this harness, an editor, a leftover test
+	// fixture, anything carrying the word. The Harper that matters is the one whose environment actually
+	// holds the agents' variables, so that is the discriminator. Taking the first pid captured nothing and
+	// left leg 3 replaying an empty environment.
+	for (const pid of await hostHarperPids()) {
+		try {
+			// `ps -E` prints the environment after the command; macOS has no /proc to read it from.
+			const out = await run(
+				"ps",
+				["-Ewww", "-o", "command=", "-p", String(pid)],
+				{
+					maxBuffer: 8 << 20,
+				}
+			);
+			const captured = {};
+			for (const token of out.stdout.split(/\s+/)) {
+				const eq = token.indexOf("=");
+				if (eq <= 0) continue;
+				const name = token.slice(0, eq);
+				// Only what configures the agents. Replaying PATH or HOME would fight the restarting shell.
+				if (/^(DD_|HDB_|TC_|LOGGING_|OPERATIONSAPI_)/.test(name))
+					captured[name] = token.slice(eq + 1);
 			}
-		);
-		const captured = {};
-		for (const token of out.stdout.split(/\s+/)) {
-			const eq = token.indexOf("=");
-			if (eq <= 0) continue;
-			const name = token.slice(0, eq);
-			// Only what configures the agents. Replaying PATH or HOME would fight the shell that restarts it.
-			if (/^(DD_|HDB_|TC_|LOGGING_|OPERATIONSAPI_)/.test(name))
-				captured[name] = token.slice(eq + 1);
+			if (Object.keys(captured).length) return captured;
+		} catch {
+			// unreadable, or gone between the listing and the read; try the next candidate
 		}
-		return Object.keys(captured).length ? captured : null;
-	} catch {
-		return null;
 	}
+	return null;
 }
 
 /** Every pid of the host leg's Harper, the main process first. Empty when it is not running. */
