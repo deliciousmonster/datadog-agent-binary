@@ -77,6 +77,45 @@ const docker = (...args) => run("docker", args, { maxBuffer: 8 << 20 });
 /** The Harper CLI drives a host leg the way `docker` drives a container one. */
 const harperCli = (...args) => run("harper", args, { maxBuffer: 8 << 20 });
 
+/**
+ * The environment the host leg's Harper is running with, captured before anything restarts it.
+ *
+ * A docker leg replays its container's whole run configuration on a recreate. A host leg had no equivalent:
+ * `harper start` inherited whatever the soak process happened to carry, so every variable the operator
+ * exported and the soak was not launched with vanished at the first restart. Leg 4 lost DD_LOGS_ENABLED that
+ * way on its first chaos action and sent no logs for the rest of the run, while leg 3 kept its logs only
+ * because its restarts were failing for an unrelated reason.
+ *
+ * Values are never logged. The names are, so a missing one is visible without printing a key.
+ */
+let hostEnv = null;
+async function captureHostEnv() {
+	const [pid] = await hostHarperPids();
+	if (!pid) return null;
+	try {
+		// `ps -E` prints the environment after the command; macOS has no /proc to read it from.
+		const out = await run(
+			"ps",
+			["-Ewww", "-o", "command=", "-p", String(pid)],
+			{
+				maxBuffer: 8 << 20,
+			}
+		);
+		const captured = {};
+		for (const token of out.stdout.split(/\s+/)) {
+			const eq = token.indexOf("=");
+			if (eq <= 0) continue;
+			const name = token.slice(0, eq);
+			// Only what configures the agents. Replaying PATH or HOME would fight the shell that restarts it.
+			if (/^(DD_|HDB_|TC_|LOGGING_|OPERATIONSAPI_)/.test(name))
+				captured[name] = token.slice(eq + 1);
+		}
+		return Object.keys(captured).length ? captured : null;
+	} catch {
+		return null;
+	}
+}
+
 /** Every pid of the host leg's Harper, the main process first. Empty when it is not running. */
 async function hostHarperPids() {
 	try {
@@ -250,6 +289,10 @@ async function rss(pids) {
 const restartNode = async () => {
 	if (!HOST_MODE) return docker("restart", CONTAINER);
 	await harperCli("stop").catch(() => {});
+	// Replayed, not inherited: see captureHostEnv. Anything the soak sets itself still wins, which is how
+	// wrong-api-key-10min swaps the key.
+	if (hostEnv)
+		for (const [k, v] of Object.entries(hostEnv)) process.env[k] ??= v;
 	await harperCli("start");
 };
 
@@ -1023,10 +1066,16 @@ async function main() {
 	);
 	await assertContainerOwnsPort();
 	if (HOST_MODE) {
+		hostEnv = await captureHostEnv();
 		log(
 			`soak: host mode. The node is this machine's Harper, driven through its own CLI; resource figures ` +
 				`come from the Harper process tree rather than a container and are not comparable with a ` +
 				`docker leg's.`
+		);
+		log(
+			hostEnv
+				? `soak: captured the running Harper's agent environment (${Object.keys(hostEnv).sort().join(", ")}); restarts replay it`
+				: `soak: could not read the running Harper's environment, so a restart will inherit this process's instead and may drop what the operator exported`
 		);
 	} else {
 		containerSpec = await captureContainerSpec();
