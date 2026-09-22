@@ -347,17 +347,26 @@ const chaos = {
  * while the run is still going.
  */
 const STALL_ROWS = 3;
+/** How long a pipeline may sit at zero after its agent restarted before that counts as stalled. */
+const WARMING_ROWS = 15;
 const pipelines = {
 	// Payload counts, not line counts: the logs agent batches, so a quiet three minutes is ordinary and only
 	// a much longer silence means anything. Ten minutes under continuous load sending no log payload is not.
-	logsSent: { label: "logs", last: null, quiet: 0, rows: 10 },
+	logsSent: { label: "logs", last: null, quiet: 0, warming: 0, rows: 10 },
 	fwdOK: {
 		label: "metrics and everything else the core agent ships",
 		last: null,
 		quiet: 0,
+		warming: 0,
 		rows: STALL_ROWS,
 	},
-	series: { label: "metric series", last: null, quiet: 0, rows: STALL_ROWS },
+	series: {
+		label: "metric series",
+		last: null,
+		quiet: 0,
+		warming: 0,
+		rows: STALL_ROWS,
+	},
 };
 const stalls = { flagged: 0, verdictRows: 0, byPipeline: {} };
 const pidOf = (s, kind) => s?.processes?.find((p) => p.kind === kind)?.pid;
@@ -829,8 +838,25 @@ function assertPipelinesMoving(values) {
 		// A counter that went BACKWARDS is an agent that restarted, not a pipeline that stopped: these are the
 		// agent's own since-boot totals and a chaos kill zeroes them. Re-baseline rather than flag, or every
 		// kill-core-agent reads as a logs outage, which is what the first host leg reported 17 times.
-		if (p.last !== null && now < p.last) p.quiet = 0;
-		else p.quiet = p.last !== null && now === p.last ? p.quiet + 1 : 0;
+		//
+		// Re-baselining alone is not enough. A restarted agent sits at zero for minutes before its first
+		// flush, and by then the chaos window has passed, so the row looks quiet and the counter looks stuck:
+		// leg 5 reported 11 stalls that way, all of them an agent coming back. After a reset the pipeline
+		// gets WARMING_ROWS to produce something before it can be called stalled, which still catches one
+		// that never comes back.
+		if (p.last !== null && now < p.last) {
+			p.quiet = 0;
+			p.warming = WARMING_ROWS;
+		} else if (p.warming > 0 && now > 0) {
+			// It has sent something since the reset, so normal detection resumes.
+			p.warming = 0;
+			p.quiet = 0;
+		} else if (p.warming > 0) {
+			p.warming -= 1;
+			p.quiet = 0;
+		} else {
+			p.quiet = p.last !== null && now === p.last ? p.quiet + 1 : 0;
+		}
 		p.last = now;
 		if (p.quiet === p.rows) {
 			stalls.flagged++;
