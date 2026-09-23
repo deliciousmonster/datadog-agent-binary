@@ -486,10 +486,20 @@ const ACTIONS = {
 	async "wrong-api-key-10min"() {
 		await recreate("0".repeat(32));
 		chaos.busyUntil = Date.now() + (KEY_MIN + 3) * 60_000;
-		const restore = () =>
-			recreate(realApiKey()).catch((error) =>
+		const restore = () => {
+			// Restoring the key is a SECOND full restart, and the window stamped when this action began
+			// does not cover it: that budget runs out three minutes after the restore starts, and on a host
+			// leg a restart is a harper stop/start that needs far longer than three minutes to settle, not
+			// a container swap. Every request the restarting node refused after that read as a failure with
+			// no chaos in flight, which is how leg 3 reported 800 of them across ten rows and failed a run
+			// that was behaving correctly. Re-stamp from here so both the chaos column's clock and the
+			// scheduler measure against the restart actually in progress.
+			chaos.at = Date.now();
+			chaos.busyUntil = Date.now() + (HOST_MODE ? 12 : 3) * 60_000;
+			return recreate(realApiKey()).catch((error) =>
 				chaosLog(`restore failed: ${/** @type {Error} */ (error).message}`)
 			);
+		};
 		chaos.pending.push(restore);
 		setTimeout(restore, KEY_MIN * 60_000);
 		return {
