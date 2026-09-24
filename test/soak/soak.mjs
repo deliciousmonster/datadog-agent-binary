@@ -292,13 +292,33 @@ async function rss(pids) {
  * start wants anyway.
  */
 const restartNode = async () => {
-	if (!HOST_MODE) return docker("restart", CONTAINER);
+	if (!HOST_MODE) {
+		await docker("restart", CONTAINER);
+		return claimRestartWindow();
+	}
 	await harperCli("stop").catch(() => {});
 	// Replayed, not inherited: see captureHostEnv. Anything the soak sets itself still wins, which is how
 	// wrong-api-key-10min swaps the key.
 	if (hostEnv)
 		for (const [k, v] of Object.entries(hostEnv)) process.env[k] ??= v;
 	await harperCli("start");
+	return claimRestartWindow();
+};
+
+/**
+ * Claim a settling window for the restart that just finished.
+ *
+ * This belongs to the restart rather than to any one action, because every caller performs the same
+ * expensive thing and two of them claimed nothing at all: `restart` and `restart-seeded-pid-1` set no
+ * busyUntil, leaving only the three-minute quiet rule and the evaluator's twelve-minute one to cover a
+ * host-leg stop/start. `harperCli("start")` returns when the CLI hands back, not when Harper is serving
+ * and its agents have verified, so the node goes on refusing requests well past both. Leg 3 recorded 375
+ * such failures twelve to sixteen minutes after a `restart`, having already been fixed once for the same
+ * mistake in wrong-api-key-10min's restore; fixing it per-action was the wrong altitude.
+ */
+const claimRestartWindow = () => {
+	chaos.at = Date.now();
+	chaos.busyUntil = Date.now() + (HOST_MODE ? 15 : 3) * 60_000;
 };
 
 /**
@@ -486,20 +506,12 @@ const ACTIONS = {
 	async "wrong-api-key-10min"() {
 		await recreate("0".repeat(32));
 		chaos.busyUntil = Date.now() + (KEY_MIN + 3) * 60_000;
-		const restore = () => {
-			// Restoring the key is a SECOND full restart, and the window stamped when this action began
-			// does not cover it: that budget runs out three minutes after the restore starts, and on a host
-			// leg a restart is a harper stop/start that needs far longer than three minutes to settle, not
-			// a container swap. Every request the restarting node refused after that read as a failure with
-			// no chaos in flight, which is how leg 3 reported 800 of them across ten rows and failed a run
-			// that was behaving correctly. Re-stamp from here so both the chaos column's clock and the
-			// scheduler measure against the restart actually in progress.
-			chaos.at = Date.now();
-			chaos.busyUntil = Date.now() + (HOST_MODE ? 12 : 3) * 60_000;
-			return recreate(realApiKey()).catch((error) =>
+		// Restoring the key is a SECOND full restart, ten minutes after the window stamped above. It needs
+		// no bookkeeping here: recreate() restarts the node, and the restart claims its own window.
+		const restore = () =>
+			recreate(realApiKey()).catch((error) =>
 				chaosLog(`restore failed: ${/** @type {Error} */ (error).message}`)
 			);
-		};
 		chaos.pending.push(restore);
 		setTimeout(restore, KEY_MIN * 60_000);
 		return {
