@@ -26,8 +26,27 @@ const RULES = {
 	memoryGrowth: "resident memory grew across the run",
 };
 
-/** How much RSS growth between the first and last tenth of a run is a leak rather than noise. */
-const MEMORY_GROWTH_LIMIT = 1.25;
+/**
+ * How fast RSS may climb, once warmed, before it is a leak rather than noise: a fraction of the leg's own
+ * median RSS per hour. At 2% a leg near 1 GiB may drift 20 MiB/hour and one near 2.4 GiB about 50, which
+ * clears every healthy run measured (-3.35 to +4.3 MiB/hour) and still catches a climb that would add a
+ * quarter of the working set over a twelve-hour rung.
+ */
+const MEMORY_GROWTH_PER_HOUR = 0.02;
+/**
+ * How much of a run is warm-up, excluded before the trend is measured: the greater of a quarter of the
+ * run and this many hours. A fraction alone does not work on a short rung, where a quarter of an hour is
+ * still climbing — leg 5's healthy 1h run read +78.9 MiB/hour that way. Leg 3, the slowest to settle of
+ * any leg measured, was at its plateau by 2.2 hours.
+ */
+const WARMUP_FRACTION = 0.25;
+const WARMUP_MIN_HOURS = 2.5;
+/**
+ * How much warmed data a trend needs before it means anything. Below this the check reports that it did
+ * not measure rather than guessing, which is the honest answer for the 10m and 1h rungs: those exist to
+ * catch gross breakage, and no leak worth the name is visible in an hour.
+ */
+const MEMORY_MIN_WARMED_HOURS = 1.5;
 /** A row is "quiet" when its chaos column says nothing is in flight or the last action is well past. */
 const QUIET_AFTER_MIN = 12;
 
@@ -133,23 +152,53 @@ export function checkLeg(dir, options = {}) {
 			`${RULES.wrongSupervision}: ${supDeviations} row(s) not '${options.expectSup}'`
 		);
 
-	// Memory: compare the first tenth against the last tenth, so a restart's cold tail cannot fake a drop.
-	const slice = Math.max(1, Math.floor(rows.length / 10));
-	const mean = (rs) => {
-		const v = rs
-			.map((r) => toGiB(r[iMem]))
-			.filter((n) => typeof n === "number" && n > 0);
-		return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
-	};
-	const first = mean(rows.slice(0, slice)),
-		last = mean(rows.slice(-slice));
-	if (first && last) {
-		stats.memFirstGiB = Number(first.toFixed(3));
-		stats.memLastGiB = Number(last.toFixed(3));
-		if (last / first > MEMORY_GROWTH_LIMIT)
-			failures.push(
-				`${RULES.memoryGrowth}: ${first.toFixed(2)} -> ${last.toFixed(2)} GiB`
-			);
+	// Memory, judged on the trend after the node has warmed rather than on first-tenth against last-tenth.
+	//
+	// The ratio this replaces could not tell a cold start from growth, because the first tenth of a run is
+	// always the coldest part of it. Leg 3 restarted from an unusually cold page cache, climbed to the
+	// 1.05 GiB it had settled at on every previous attempt, and then sat there: flat to within a megabyte
+	// over its last two segments, a last-hour slope of +4.3 MiB/h. The ratio read 1.54 and called it a
+	// leak, and would have failed a healthy leg at the twelve-hour mark and reset the whole climb.
+	//
+	// A least-squares slope over the warmed portion is what actually separated the two cases every time it
+	// was applied by hand this week: -3.35 MiB/h on leg 1's eighteen hours, +4.3 on leg 3's plateau, and a
+	// sustained +210 while leg 3 was still climbing. The threshold scales with the leg's own median RSS
+	// because a host leg sits near 1 GiB and a container leg near 2.4, so a fixed MiB/hour would be a
+	// different bar for each.
+	const memPts = [];
+	for (const r of rows) {
+		const m = toGiB(r[iMem]);
+		const h = Number(String(r[iUp] ?? "").replace("h", ""));
+		if (typeof m === "number" && m > 0 && Number.isFinite(h))
+			memPts.push([h, m]);
+	}
+	if (memPts.length >= 10) {
+		// Drop the warm-up, by wall clock as well as by proportion.
+		const runHours = memPts.at(-1)[0];
+		const cutoff = Math.max(runHours * WARMUP_FRACTION, WARMUP_MIN_HOURS);
+		const warmed = memPts.filter(([h]) => h >= cutoff);
+		const warmedHours = warmed.length ? warmed.at(-1)[0] - warmed[0][0] : 0;
+		if (warmed.length < 10 || warmedHours < MEMORY_MIN_WARMED_HOURS) {
+			stats.memTrend = `not measured: ${warmedHours.toFixed(2)}h warmed, needs ${MEMORY_MIN_WARMED_HOURS}h`;
+		} else {
+			const sorted = warmed.map(([, m]) => m).sort((a, b) => a - b);
+			const median = sorted[Math.floor(sorted.length / 2)];
+			const mh = warmed.reduce((a, [h]) => a + h, 0) / warmed.length;
+			const mm = warmed.reduce((a, [, m]) => a + m, 0) / warmed.length;
+			const den = warmed.reduce((a, [h]) => a + (h - mh) ** 2, 0);
+			// A window too short to span any time cannot have a trend; say nothing rather than divide by zero.
+			const slope =
+				den > 0
+					? warmed.reduce((a, [h, m]) => a + (h - mh) * (m - mm), 0) / den
+					: 0;
+			stats.memMedianGiB = Number(median.toFixed(3));
+			stats.memSlopeMiBPerHour = Number((slope * 1024).toFixed(1));
+			if (slope > median * MEMORY_GROWTH_PER_HOUR)
+				failures.push(
+					`${RULES.memoryGrowth}: +${(slope * 1024).toFixed(1)} MiB/hour sustained across ` +
+						`${warmedHours.toFixed(1)}h of warmed running, against a median of ${median.toFixed(2)} GiB`
+				);
+		}
 	}
 
 	// The run has to have lasted: a row a minute, so a 1h rung owes roughly 60.
