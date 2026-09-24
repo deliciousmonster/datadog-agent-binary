@@ -9,7 +9,7 @@ import {
 	readFileSync,
 	writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, loadavg } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -291,6 +291,22 @@ async function rss(pids) {
  * leg stops and starts instead. The stop is allowed to fail, because a node already down is the state the
  * start wants anyway.
  */
+/**
+ * The box's one-minute load average, recorded on every row.
+ *
+ * Twice now a leg has been ruined by unrelated work on this shared machine — once the test gate, once
+ * somebody's rustc build at 900% CPU — and both times the only way to tell was catching `ps` live while
+ * it happened. The data said "requests failed", which reads as a defect. A starved node cannot be
+ * distinguished from a broken one after the fact unless the starvation is written down at the time.
+ */
+const loadAverage = () => {
+	try {
+		return loadavg()[0];
+	} catch {
+		return null;
+	}
+};
+
 const restartNode = async () => {
 	if (!HOST_MODE) {
 		await docker("restart", CONTAINER);
@@ -771,6 +787,7 @@ const COLUMNS = [
 	["fail", 5],
 	["p95ms", 6],
 	["sup", 6],
+	["load", 5],
 	["verified", 8],
 	// Five agents joined by "/" is 9 at one digit each, and a chaos run reaches two digits on some of them.
 	["restarts", 11],
@@ -978,6 +995,7 @@ async function statusRow() {
 		coreMB,
 		"req/s": (sent / 60).toFixed(1),
 		fail: failed,
+		load: (loadAverage() ?? 0).toFixed(1),
 		p95ms: p95,
 		sup: s?.supervision ?? "-",
 		verified: s

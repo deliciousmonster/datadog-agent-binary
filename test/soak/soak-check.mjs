@@ -47,6 +47,11 @@ const WARMUP_MIN_HOURS = 2.5;
  * catch gross breakage, and no leak worth the name is visible in an hour.
  */
 const MEMORY_MIN_WARMED_HOURS = 1.5;
+/**
+ * One-minute load above which a failure is more likely the box being starved than the node breaking. This
+ * host has four performance cores; a sustained figure far above that means something else is compiling.
+ */
+const LOAD_SUSPECT = 8;
 /** A row is "quiet" when its chaos column says nothing is in flight or the last action is well past. */
 const QUIET_AFTER_MIN = 12;
 
@@ -121,6 +126,9 @@ export function checkLeg(dir, options = {}) {
 	const steady = Object.entries(tally).sort((a, b) => b[1] - a[1])[0]?.[0];
 	stats.steady = steady;
 
+	const iLoad = col("load");
+	/** One-minute load on each row that was counted as a failure outside chaos. */
+	const loadAt = [];
 	let failRows = 0,
 		failReqs = 0,
 		verDeviations = 0,
@@ -130,6 +138,8 @@ export function checkLeg(dir, options = {}) {
 		if (quiet && Number(r[iFail]) > 0) {
 			failRows++;
 			failReqs += Number(r[iFail]);
+			const l = iLoad >= 0 ? Number(r[iLoad]) : NaN;
+			if (Number.isFinite(l)) loadAt.push(l);
 		}
 		if (quiet && r[iVer] && r[iVer] !== "-" && steady && r[iVer] !== steady)
 			verDeviations++;
@@ -143,10 +153,20 @@ export function checkLeg(dir, options = {}) {
 	}
 	stats.failRowsOutsideChaos = failRows;
 	stats.failReqsOutsideChaos = failReqs;
-	if (failRows)
+	if (failRows) {
+		// Name the load the box was under when they happened. This machine is shared, and twice a leg has
+		// been ruined by unrelated work on it — the test gate once, somebody's rustc build at 900% CPU the
+		// next time — where the data said only "requests failed", which reads as a defect. The verdict
+		// stays a failure, because excusing a row on load would be a way to hide a real one; what changes
+		// is that the reason is in the output instead of needing `ps` caught live while it happened.
+		const loaded = loadAt.length
+			? ` (one-minute load on those rows: ${Math.min(...loadAt).toFixed(1)} to ${Math.max(...loadAt).toFixed(1)}` +
+				`${Math.max(...loadAt) >= LOAD_SUSPECT ? "; the box was busy enough that this is more likely starvation than a defect" : ""})`
+			: "";
 		failures.push(
-			`${RULES.failuresOutsideChaos}: ${failReqs} across ${failRows} row(s)`
+			`${RULES.failuresOutsideChaos}: ${failReqs} across ${failRows} row(s)${loaded}`
 		);
+	}
 	if (verDeviations)
 		failures.push(
 			`${RULES.verificationOutsideChaos}: ${verDeviations} row(s) away from ${steady}`
