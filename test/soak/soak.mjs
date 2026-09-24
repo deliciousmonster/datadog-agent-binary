@@ -316,10 +316,25 @@ const restartNode = async () => {
  * such failures twelve to sixteen minutes after a `restart`, having already been fixed once for the same
  * mistake in wrong-api-key-10min's restore; fixing it per-action was the wrong altitude.
  */
-const claimRestartWindow = () => {
+/**
+ * Claim a window during which the node is deliberately disrupted, so nothing it refuses is charged to it.
+ *
+ * EXTENDS, never shortens. Four separate failures this week came from two sides keeping their own idea of
+ * when the node was busy, and one of them was a plain assignment undoing a longer window somebody else had
+ * already claimed: wrong-api-key-10min set thirteen minutes on top of the fifteen restartNode had just
+ * taken. Every claim goes through here so the longest one wins, and fireChaos applies a floor so an action
+ * that forgets to claim is no longer a way to get this wrong.
+ *
+ * @param {number} minutes
+ */
+const claimWindow = (minutes) => {
 	chaos.at = Date.now();
-	chaos.busyUntil = Date.now() + (HOST_MODE ? 15 : 3) * 60_000;
+	chaos.busyUntil = Math.max(chaos.busyUntil, Date.now() + minutes * 60_000);
 };
+
+/** A restart is the most disruptive thing here, and on a host leg `harper start` returns long before the
+ * node is serving and verified. */
+const claimRestartWindow = () => claimWindow(HOST_MODE ? 15 : 3);
 
 /**
  * Hold the node still. `docker pause` freezes a container's processes with SIGSTOP under the hood, so a host
@@ -366,6 +381,12 @@ const chaos = {
  * reading them until afterwards. A pipeline that stops outside a chaos window is now counted and logged
  * while the run is still going.
  */
+/**
+ * The least time any chaos action is assumed to disturb the node for, claimed before the action runs.
+ * A host leg restarts by stopping and starting Harper and settles far more slowly than a container swap.
+ */
+const MIN_DISRUPTION_MIN_HOST = 12;
+const MIN_DISRUPTION_MIN_DOCKER = 3;
 const STALL_ROWS = 3;
 /** How long a pipeline may sit at zero after its agent restarted before that counts as stalled. */
 const WARMING_ROWS = 15;
@@ -474,7 +495,7 @@ const ACTIONS = {
 		const pid = await livePid("trace");
 		if (!pid) return notApplicable("no trace-agent pid in the status to stop");
 		await sh(`kill -STOP ${pid}`);
-		chaos.busyUntil = Date.now() + 90_000;
+		claimWindow(1.5);
 		chaos.pending.push(() => sh(`kill -CONT ${pid}`).catch(() => {}));
 		setTimeout(() => sh(`kill -CONT ${pid}`).catch(() => {}), 60_000);
 		return {
@@ -485,7 +506,7 @@ const ACTIONS = {
 	},
 	async "pause-30s"() {
 		await pauseNode();
-		chaos.busyUntil = Date.now() + 60_000;
+		claimWindow(1);
 		chaos.pending.push(() => resumeNode().catch(() => {}));
 		setTimeout(() => resumeNode().catch(() => {}), 30_000);
 		return {
@@ -495,7 +516,7 @@ const ACTIONS = {
 	},
 	async "burst-10x-5min"() {
 		load.multiplier = 10;
-		chaos.busyUntil = Date.now() + 6 * 60_000;
+		claimWindow(6);
 		chaos.pending.push(() => (load.multiplier = 1));
 		setTimeout(() => (load.multiplier = 1), 5 * 60_000);
 		return {
@@ -505,7 +526,7 @@ const ACTIONS = {
 	},
 	async "wrong-api-key-10min"() {
 		await recreate("0".repeat(32));
-		chaos.busyUntil = Date.now() + (KEY_MIN + 3) * 60_000;
+		claimWindow(KEY_MIN + 3);
 		// Restoring the key is a SECOND full restart, ten minutes after the window stamped above. It needs
 		// no bookkeeping here: recreate() restarts the node, and the restart claims its own window.
 		const restore = () =>
@@ -680,7 +701,10 @@ async function fireChaos() {
 	const name = pool[Math.floor(Math.random() * pool.length)];
 	chaos.count++;
 	chaos.last = name;
-	chaos.at = Date.now();
+	// The floor. kill-trace-agent, kill-core-agent and kill-reaper claimed nothing at all, which is the
+	// same shape as the two failures already fixed: an action that disrupts the node without saying so.
+	// Claiming here means forgetting is no longer possible, and an action that needs longer extends it.
+	claimWindow(HOST_MODE ? MIN_DISRUPTION_MIN_HOST : MIN_DISRUPTION_MIN_DOCKER);
 	try {
 		const { expect, check, before, skip } = await ACTIONS[name]();
 		// Nothing was perturbed, so there is nothing to read back in two minutes. Counted and logged rather
