@@ -98,3 +98,22 @@ test("a run too short to have warmed reports that it did not measure, and does n
 	assert.match(result.stats.memTrend ?? "", /not measured/);
 	assert.equal(result.stats.memSlopeMiBPerHour, undefined);
 });
+
+// rowIsQuiet decides which rows a failure can be blamed on the node for, and it got this wrong three
+// times in one week by re-deriving the answer from elapsed minutes. The harness now says so directly.
+import { rowIsQuiet } from "../soak/soak-check.mjs";
+
+test("a row the harness marked busy is never quiet, however long ago the action started", () => {
+	// Fifteen minutes past, which the minute rule alone would call quiet at its twelve-minute bar
+	assert.equal(rowIsQuiet("wrong-api-key-10min 15m ago busy"), false);
+	assert.equal(rowIsQuiet("restart 13m ago busy"), false);
+	assert.equal(rowIsQuiet("restart 0m ago busy"), false);
+});
+
+test("without a marker the minute count still decides, so older runs read the same as before", () => {
+	assert.equal(rowIsQuiet("restart 13m ago"), true);
+	assert.equal(rowIsQuiet("restart 11m ago"), false);
+	assert.equal(rowIsQuiet("none"), true);
+	assert.equal(rowIsQuiet("-"), true);
+	assert.equal(rowIsQuiet(""), true);
+});

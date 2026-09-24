@@ -63,7 +63,11 @@ const toGiB = (v) => {
 export function rowIsQuiet(chaosCell) {
 	const cell = String(chaosCell ?? "").trim();
 	if (!cell || cell === "none" || cell === "-") return true;
-	const ago = /(\d+)m ago$/.exec(cell);
+	// The harness marks the rows it knows it was holding the node down for. That is authoritative: it is
+	// the side that set the window, and every alternative here is a re-derivation that can disagree with
+	// it. The minute count below stays only as a fallback for runs recorded before the marker existed.
+	if (/\bbusy\b/.test(cell)) return false;
+	const ago = /(\d+)m ago\b/.exec(cell);
 	return ago ? Number(ago[1]) >= QUIET_AFTER_MIN : false;
 }
 

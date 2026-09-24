@@ -976,8 +976,15 @@ async function statusRow() {
 		series: typeof series === "number" ? series : "-",
 		logsSent: logs.LogsSent ?? "-",
 		logsErr: logs.DestinationErrors ?? "-",
+		// The "busy" marker is the harness stating what it knows rather than leaving a reader to infer it from
+		// elapsed minutes. soak-check.mjs derived quietness from the minute count against a fixed twelve while
+		// restartNode claims fifteen on a host leg, so rows at twelve to fifteen minutes past a restart fell in
+		// the gap: busy to the harness, quiet to the evaluator, and counted as failures against a node that was
+		// deliberately being restarted. Aligning the two numbers would only have let them drift apart again.
 		chaos: chaos.at
-			? `${chaos.last} ${Math.round((Date.now() - chaos.at) / 60_000)}m ago`
+			? `${chaos.last} ${Math.round((Date.now() - chaos.at) / 60_000)}m ago${
+					chaos.busyUntil > Date.now() ? " busy" : ""
+				}`
 			: "none",
 	};
 	if (rows++ % 20 === 0) console.log(header());
